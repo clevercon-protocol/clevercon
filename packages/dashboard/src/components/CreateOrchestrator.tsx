@@ -43,9 +43,10 @@ export function CreateOrchestrator() {
         throw new Error(err.error || `Server error ${createRes.status}`);
       }
 
-      const { orchestrator_pubkey, name: orchName, registration_xdr } = await createRes.json();
+      const { orchestrator_pubkey, orchestrator_secret, name: orchName, registration_xdr } = await createRes.json();
 
       // 2. If the contract is deployed, ask the user to sign the registration XDR
+      let registeredOnChain = false;
       if (registration_xdr) {
         setStep('signing');
         const signed = await signTransaction(registration_xdr, 'Test SDF Network ; September 2015');
@@ -59,7 +60,22 @@ export function CreateOrchestrator() {
           const err = await confirmRes.json();
           throw new Error(err.error || 'On-chain registration failed');
         }
+        registeredOnChain = true;
       }
+
+      // Persist the orchestrator record locally so we can restore it after server restarts/redeploys
+      localStorage.setItem(
+        `clevercon_orchestrator_${publicKey}`,
+        JSON.stringify({
+          user_address: publicKey,
+          orchestrator_pubkey,
+          orchestrator_secret,
+          orchestrator_name: orchName,
+          system_prompt: systemPrompt.trim() || null,
+          registered_on_chain: registeredOnChain,
+          created_at: new Date().toISOString(),
+        }),
+      );
 
       setResult({ pubkey: orchestrator_pubkey, name: orchName });
       setStep('success');

@@ -454,6 +454,7 @@ app.post('/api/orchestrators', async (req, res) => {
 
     res.json({
       orchestrator_pubkey: orchKeypair.publicKey(),
+      orchestrator_secret: orchKeypair.secret(), // returned once so client can persist it
       name: name.trim(),
       registration_xdr, // null if contract not configured
     });
@@ -461,6 +462,47 @@ app.post('/api/orchestrators', async (req, res) => {
     console.error('[Orchestrator] Create orchestrator error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Restore a previously-created orchestrator after a server restart / redeploy.
+// The client stores the full record in localStorage and re-seeds the server when it forgets.
+app.post('/api/orchestrators/restore', (req, res) => {
+  const { user_address, orchestrator_pubkey, orchestrator_secret, orchestrator_name, system_prompt, registered_on_chain, created_at } = req.body as {
+    user_address?: string;
+    orchestrator_pubkey?: string;
+    orchestrator_secret?: string;
+    orchestrator_name?: string;
+    system_prompt?: string;
+    registered_on_chain?: boolean;
+    created_at?: string;
+  };
+
+  if (!user_address || !orchestrator_pubkey || !orchestrator_secret || !orchestrator_name) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  // Validate the secret actually matches the pubkey
+  try {
+    const kp = Keypair.fromSecret(orchestrator_secret);
+    if (kp.publicKey() !== orchestrator_pubkey) {
+      return res.status(400).json({ error: 'Secret does not match pubkey' });
+    }
+  } catch {
+    return res.status(400).json({ error: 'Invalid secret key' });
+  }
+
+  orchestratorStore.upsert({
+    user_address,
+    orchestrator_name,
+    orchestrator_pubkey,
+    orchestrator_secret,
+    system_prompt: system_prompt || undefined,
+    registered_on_chain: registered_on_chain ?? false,
+    created_at: created_at ?? new Date().toISOString(),
+  });
+
+  console.log(`[Orchestrator] Restored '${orchestrator_name}' for user ${user_address.slice(0, 8)}… (registered_on_chain=${registered_on_chain})`);
+  res.json({ ok: true });
 });
 
 // Submit a signed register_orchestrator XDR (user signed in Freighter)

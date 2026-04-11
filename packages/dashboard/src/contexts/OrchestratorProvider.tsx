@@ -34,12 +34,44 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
       const res = await fetch(`/api/orchestrators/${encodeURIComponent(publicKey)}`);
       if (!res.ok) throw new Error('Failed to fetch');
       const data = await res.json();
-      setOrchestrator(data.exists ? {
+
+      if (!data.exists) {
+        // Server lost the record (redeploy). Try to restore from localStorage.
+        const stored = localStorage.getItem(`clevercon_orchestrator_${publicKey}`);
+        if (stored) {
+          try {
+            const record = JSON.parse(stored);
+            const restoreRes = await fetch('/api/orchestrators/restore', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(record),
+            });
+            if (restoreRes.ok) {
+              // Re-fetch now that server knows about it
+              const res2 = await fetch(`/api/orchestrators/${encodeURIComponent(publicKey)}`);
+              const data2 = await res2.json();
+              if (data2.exists) {
+                setOrchestrator({
+                  name: data2.name,
+                  pubkey: data2.pubkey,
+                  registered_on_chain: data2.registered_on_chain,
+                  system_prompt: data2.system_prompt,
+                });
+                return;
+              }
+            }
+          } catch { /* fall through to null */ }
+        }
+        setOrchestrator(null);
+        return;
+      }
+
+      setOrchestrator({
         name: data.name,
         pubkey: data.pubkey,
         registered_on_chain: data.registered_on_chain,
         system_prompt: data.system_prompt,
-      } : null);
+      });
     } catch {
       setOrchestrator(null);
     } finally {
