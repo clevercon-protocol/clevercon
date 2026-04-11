@@ -68,15 +68,15 @@ function normaliseDeps(depends_on: number | number[] | null): number[] {
 }
 
 async function checkHealth(agent: AgentRecord): Promise<boolean> {
-  // Render free tier cold-starts: service returns 503 immediately, then wakes up.
-  // Retry up to 4 times with increasing delays to give sleeping services time to start.
-  const delays = [0, 8000, 15000, 20000]; // ms before each attempt
+  // Render free tier cold-starts: service returns 503 immediately, then takes ~50-60s to wake.
+  // Poll every 10s for up to ~90s total so we catch the service after it finishes starting.
+  const delays = [0, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000]; // 9 attempts, ~80s total wait
   for (let attempt = 0; attempt < delays.length; attempt++) {
     if (delays[attempt] > 0) await new Promise(r => setTimeout(r, delays[attempt]));
     try {
-      const response = await fetch(agent.health_check, { signal: AbortSignal.timeout(35000) });
+      const response = await fetch(agent.health_check, { signal: AbortSignal.timeout(15000) });
       if (response.ok) return true;
-      // 503 = sleeping, keep retrying; any other 4xx = genuinely down, stop early
+      // 503/502 = still sleeping/starting, keep retrying; any 4xx = genuinely down
       if (response.status !== 503 && response.status !== 502) return false;
     } catch {
       // Network error / timeout — keep retrying
