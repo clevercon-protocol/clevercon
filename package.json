@@ -1,0 +1,40 @@
+{
+  "name": "clevercon",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "packages/agents/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm:dev:*\"",
+    "dev:registry": "cd packages/registry && npx tsx src/server.ts",
+    "dev:oracle": "cd packages/agents/stellar-oracle && npx tsx src/server.ts",
+    "dev:webintel": "cd packages/agents/web-intel && npx tsx src/server.ts",
+    "dev:webintel2": "cd packages/agents/web-intel-v2 && npx tsx src/server.ts",
+    "dev:analysis": "cd packages/agents/analysis && npx tsx src/server.ts",
+    "dev:reporter": "cd packages/agents/reporter && npx tsx src/server.ts",
+    "dev:orchestrator": "cd packages/orchestrator && npx tsx src/server.ts",
+    "build:dashboard": "cd packages/dashboard && npx vite build",
+    "build:orchestrator": "node_modules/.bin/esbuild packages/orchestrator/src/server.ts --bundle --platform=node --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --outfile=packages/orchestrator/dist/server.js",
+    "build:registry": "node_modules/.bin/esbuild packages/registry/src/server.ts --bundle --platform=node --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --outfile=packages/registry/dist/server.js",
+    "build:oracle": "node_modules/.bin/esbuild packages/agents/stellar-oracle/src/server.ts --bundle --platform=node --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --outfile=packages/agents/stellar-oracle/dist/server.js",
+    "build:webintel": "node_modules/.bin/esbuild packages/agents/web-intel/src/server.ts --bundle --platform=node --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --outfile=packages/agents/web-intel/dist/server.js",
+    "build:webintel2": "node_modules/.bin/esbuild packages/agents/web-intel-v2/src/server.ts --bundle --platform=node --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --outfile=packages/agents/web-intel-v2/dist/server.js",
+    "build:analysis": "node_modules/.bin/esbuild packages/agents/analysis/src/server.ts --bundle --platform=node --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --outfile=packages/agents/analysis/dist/server.js",
+    "build:reporter": "node_modules/.bin/esbuild packages/agents/reporter/src/server.ts --bundle --platform=node --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --outfile=packages/agents/reporter/dist/server.js",
+    "bootstrap": "npx tsx scripts/bootstrap.ts",
+    "setup-wallets": "npx tsx scripts/setup-wallets.ts"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.0",
+    "concurrently": "^8.2.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vite": "^5.4.0"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "^14.6.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  }
+}

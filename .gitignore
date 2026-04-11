@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+wallets.json
+
+# Build output
+dist/
+
+# Runtime data (ephemeral JSON stores — not committed)
+data/
+
+# Logs & process IDs
+logs/
+
+# Rust build artifacts
+contracts/*/target/
+
+# Source maps
+*.js.map
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/

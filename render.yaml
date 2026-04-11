@@ -1,0 +1,153 @@
+# CleverCon — Render deployment blueprint
+# https://render.com/docs/blueprint-spec
+#
+# Deploy all 7 services from one GitHub repo.
+# After first deploy, fill in the REGISTRY_URL and *_SELF_URL env vars
+# with the actual .onrender.com URLs assigned to each service.
+
+services:
+
+  # ── Registry ────────────────────────────────────────────────────────────────
+  - type: web
+    name: clevercon-registry
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build:registry
+    startCommand: node packages/registry/dist/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+  # ── Orchestrator (also serves the dashboard SPA) ────────────────────────────
+  - type: web
+    name: clevercon-orchestrator
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build:dashboard && npm run build:orchestrator
+    startCommand: node packages/orchestrator/dist/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REGISTRY_URL
+        value: https://clevercon-registry.onrender.com   # ← update after registry is live
+      - key: AGENT_VAULT_CONTRACT_ID
+        sync: false   # set in Render dashboard
+      - key: ORCHESTRATOR_SECRET_KEY
+        sync: false   # set in Render dashboard
+      - key: ANTHROPIC_API_KEY
+        sync: false   # set in Render dashboard
+      - key: STELLAR_NETWORK
+        value: stellar:testnet
+      - key: HORIZON_URL
+        value: https://horizon-testnet.stellar.org
+
+  # ── Stellar Oracle ───────────────────────────────────────────────────────────
+  - type: web
+    name: clevercon-stellar-oracle
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build:oracle
+    startCommand: node packages/agents/stellar-oracle/dist/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REGISTRY_URL
+        value: https://clevercon-registry.onrender.com   # ← update after registry is live
+      - key: STELLAR_ORACLE_SELF_URL
+        value: https://clevercon-stellar-oracle.onrender.com   # ← update after this service is live
+      - key: STELLAR_ORACLE_SECRET_KEY
+        sync: false
+      - key: STELLAR_NETWORK
+        value: stellar:testnet
+      - key: X402_FACILITATOR_URL
+        value: https://www.x402.org/facilitator
+
+  # ── Web Intelligence v1 ──────────────────────────────────────────────────────
+  - type: web
+    name: clevercon-web-intel
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build:webintel
+    startCommand: node packages/agents/web-intel/dist/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REGISTRY_URL
+        value: https://clevercon-registry.onrender.com
+      - key: WEB_INTEL_SELF_URL
+        value: https://clevercon-web-intel.onrender.com
+      - key: WEB_INTEL_SECRET_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: STELLAR_NETWORK
+        value: stellar:testnet
+      - key: X402_FACILITATOR_URL
+        value: https://www.x402.org/facilitator
+
+  # ── Web Intelligence v2 ──────────────────────────────────────────────────────
+  - type: web
+    name: clevercon-web-intel-v2
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build:webintel2
+    startCommand: node packages/agents/web-intel-v2/dist/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REGISTRY_URL
+        value: https://clevercon-registry.onrender.com
+      - key: WEB_INTEL_V2_SELF_URL
+        value: https://clevercon-web-intel-v2.onrender.com
+      - key: WEB_INTEL_V2_SECRET_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: STELLAR_NETWORK
+        value: stellar:testnet
+      - key: X402_FACILITATOR_URL
+        value: https://www.x402.org/facilitator
+
+  # ── Analysis Agent ───────────────────────────────────────────────────────────
+  - type: web
+    name: clevercon-analysis
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build:analysis
+    startCommand: node packages/agents/analysis/dist/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REGISTRY_URL
+        value: https://clevercon-registry.onrender.com
+      - key: ANALYSIS_AGENT_SELF_URL
+        value: https://clevercon-analysis.onrender.com
+      - key: ANALYSIS_AGENT_SECRET_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: STELLAR_NETWORK
+        value: stellar:testnet
+
+  # ── Reporter Agent ───────────────────────────────────────────────────────────
+  - type: web
+    name: clevercon-reporter
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build:reporter
+    startCommand: node packages/agents/reporter/dist/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REGISTRY_URL
+        value: https://clevercon-registry.onrender.com
+      - key: REPORT_AGENT_SELF_URL
+        value: https://clevercon-reporter.onrender.com
+      - key: REPORT_AGENT_SECRET_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: STELLAR_NETWORK
+        value: stellar:testnet
+      - key: X402_FACILITATOR_URL
+        value: https://www.x402.org/facilitator
