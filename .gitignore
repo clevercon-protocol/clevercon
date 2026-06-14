@@ -27,3 +27,6 @@ Thumbs.db
 # Editor
 .vscode/settings.json
 .idea/
+
+# Internal working files
+.local/
