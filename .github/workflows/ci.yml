@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  typescript:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+  contracts:
+    name: Rust contracts (${{ matrix.contract }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # budget-guardian is unused legacy code (see docs/architecture.md) and
+        # its pinned soroban-sdk dev-dependencies currently fail to build with
+        # the `testutils` feature, so it's excluded from CI for now.
+        contract: [agent-vault]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/${{ matrix.contract }}
+
+      - name: Check formatting
+        working-directory: contracts/${{ matrix.contract }}
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: contracts/${{ matrix.contract }}
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: contracts/${{ matrix.contract }}
+        run: cargo test
