@@ -1,4 +1,8 @@
 #![no_std]
+// `Events::publish` is deprecated in favor of the `#[contractevent]` macro
+// (soroban-sdk 25+). Migrating would change this already-deployed contract's
+// event schema, so it's deferred to a future hardening pass — see ROADMAP.md.
+#![allow(deprecated)]
 //! AgentVault — Soroban smart contract (v2)
 //!
 //! Trustless treasury for AgentForge. Holds USDC for multiple users,
@@ -12,18 +16,27 @@
 //! The orchestrator is a relay: it briefly holds USDC for each step,
 //! pays the agent via standard x402, and returns to ~0 USDC balance.
 
-use soroban_sdk::{contract, contractimpl, contracttype, log, symbol_short, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, log, symbol_short, token, Address, Env, String,
+};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
+/// Storage keys for all persistent and instance data in this contract.
 #[contracttype]
 pub enum DataKey {
+    /// Admin address, set once during `init`.
     Admin,
-    UsdcSac,                        // USDC Stellar Asset Contract address
-    User(Address),                  // user address → UserAccount
-    Task(u64),                      // task_id → TaskInfo
+    /// USDC Stellar Asset Contract address, set once during `init`.
+    UsdcSac,
+    /// Maps a user address to their [`UserAccount`].
+    User(Address),
+    /// Maps a task_id to its [`TaskInfo`].
+    Task(u64),
+    /// Monotonically increasing counter used to allocate new task_ids.
     TaskCounter,
-    OrchestratorOwner(Address),     // orchestrator address → user address (reverse lookup)
+    /// Reverse lookup: maps an orchestrator address to the user address that registered it.
+    OrchestratorOwner(Address),
 }
 
 // ── Data structs ──────────────────────────────────────────────────────────────
@@ -32,13 +45,21 @@ pub enum DataKey {
 #[contracttype]
 #[derive(Clone)]
 pub struct UserAccount {
-    pub balance: i128,              // total USDC held (available + locked), in stroops
-    pub locked: i128,               // portion reserved for active tasks
-    pub total_deposited: i128,      // lifetime deposits, for analytics
-    pub total_spent: i128,          // lifetime task spending, for analytics
-    pub active_tasks_count: u32,    // must be 0 for new task or withdrawal
+    /// Total USDC held (available + locked), in stroops.
+    pub balance: i128,
+    /// Portion of `balance` reserved for active tasks.
+    pub locked: i128,
+    /// Lifetime deposits, for analytics.
+    pub total_deposited: i128,
+    /// Lifetime task spending, for analytics.
+    pub total_spent: i128,
+    /// Number of active tasks. Must be 0 to create a new task or withdraw.
+    pub active_tasks_count: u32,
+    /// The orchestrator registered for this user, if any.
     pub orchestrator: Option<Address>,
+    /// Human-readable name of the registered orchestrator.
     pub orchestrator_name: String,
+    /// Ledger timestamp when this account was first created.
     pub created_at: u64,
 }
 
@@ -46,11 +67,17 @@ pub struct UserAccount {
 #[contracttype]
 #[derive(Clone)]
 pub struct TaskInfo {
+    /// The user who owns this task and whose balance is locked.
     pub user: Address,
+    /// The orchestrator authorized to release payments for this task.
     pub orchestrator: Address,
-    pub plan_cost: i128,            // total budget locked for this task, in stroops
-    pub spent: i128,                // amount released so far
+    /// Total budget locked for this task, in stroops.
+    pub plan_cost: i128,
+    /// Amount released to the orchestrator so far, in stroops.
+    pub spent: i128,
+    /// Whether this task has been finalized (completed, cancelled, or force-completed).
     pub completed: bool,
+    /// Ledger timestamp when this task was created.
     pub created_at: u64,
 }
 
@@ -61,6 +88,8 @@ const STALE_TASK_THRESHOLD_SECONDS: u64 = 1800; // 30 minutes
 
 // ── Contract ──────────────────────────────────────────────────────────────────
 
+/// The CleverVault contract — a trustless treasury that holds USDC on behalf of
+/// users and releases per-step payments to their registered orchestrators.
 #[contract]
 pub struct AgentVault;
 
@@ -77,7 +106,12 @@ impl AgentVault {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::UsdcSac, &usdc_sac);
         env.storage().instance().set(&DataKey::TaskCounter, &0u64);
-        log!(&env, "AgentVault initialized admin={} usdc_sac={}", admin, usdc_sac);
+        log!(
+            &env,
+            "AgentVault initialized admin={} usdc_sac={}",
+            admin,
+            usdc_sac
+        );
     }
 
     // ── Deposits & Withdrawals ────────────────────────────────────────────────
@@ -91,15 +125,24 @@ impl AgentVault {
         let usdc_sac: Address = env.storage().instance().get(&DataKey::UsdcSac).unwrap();
         let usdc = token::Client::new(&env, &usdc_sac);
         // Transfer USDC from user → contract. User must have approved this.
-        usdc.transfer(&user, &env.current_contract_address(), &amount);
+        usdc.transfer(&user, env.current_contract_address(), &amount);
 
         let mut account = Self::get_or_create_account(&env, &user);
         account.balance += amount;
         account.total_deposited += amount;
-        env.storage().persistent().set(&DataKey::User(user.clone()), &account);
+        env.storage()
+            .persistent()
+            .set(&DataKey::User(user.clone()), &account);
 
-        env.events().publish((symbol_short!("deposit"), user.clone()), amount);
-        log!(&env, "deposit user={} amount={} new_balance={}", user, amount, account.balance);
+        env.events()
+            .publish((symbol_short!("deposit"), user.clone()), amount);
+        log!(
+            &env,
+            "deposit user={} amount={} new_balance={}",
+            user,
+            amount,
+            account.balance
+        );
     }
 
     /// Withdraw USDC from vault back to user's external wallet.
@@ -108,7 +151,9 @@ impl AgentVault {
         user.require_auth();
         assert!(amount > 0, "Withdrawal must be positive");
 
-        let mut account: UserAccount = env.storage().persistent()
+        let mut account: UserAccount = env
+            .storage()
+            .persistent()
             .get(&DataKey::User(user.clone()))
             .expect("No account");
 
@@ -123,22 +168,26 @@ impl AgentVault {
         usdc.transfer(&env.current_contract_address(), &user, &amount);
 
         account.balance -= amount;
-        env.storage().persistent().set(&DataKey::User(user.clone()), &account);
+        env.storage()
+            .persistent()
+            .set(&DataKey::User(user.clone()), &account);
 
-        env.events().publish((symbol_short!("withdraw"), user.clone()), amount);
-        log!(&env, "withdraw user={} amount={} remaining={}", user, amount, account.balance);
+        env.events()
+            .publish((symbol_short!("withdraw"), user.clone()), amount);
+        log!(
+            &env,
+            "withdraw user={} amount={} remaining={}",
+            user,
+            amount,
+            account.balance
+        );
     }
 
     // ── Orchestrator registration ─────────────────────────────────────────────
 
     /// Register a personal orchestrator for this user. ONE-TIME per user.
     /// The user signs this transaction — the orchestrator address is stored on-chain.
-    pub fn register_orchestrator(
-        env: Env,
-        user: Address,
-        orchestrator: Address,
-        name: String,
-    ) {
+    pub fn register_orchestrator(env: Env, user: Address, orchestrator: Address, name: String) {
         user.require_auth();
 
         let mut account = Self::get_or_create_account(&env, &user);
@@ -150,36 +199,45 @@ impl AgentVault {
 
         account.orchestrator = Some(orchestrator.clone());
         account.orchestrator_name = name.clone();
-        env.storage().persistent().set(&DataKey::User(user.clone()), &account);
+        env.storage()
+            .persistent()
+            .set(&DataKey::User(user.clone()), &account);
 
         // Reverse lookup: orchestrator address → user address
-        env.storage().persistent().set(
-            &DataKey::OrchestratorOwner(orchestrator.clone()),
-            &user,
-        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::OrchestratorOwner(orchestrator.clone()), &user);
 
-        env.events().publish((symbol_short!("regOrch"), user.clone()), orchestrator.clone());
-        log!(&env, "register_orchestrator user={} orchestrator={}", user, orchestrator);
+        env.events().publish(
+            (symbol_short!("regOrch"), user.clone()),
+            orchestrator.clone(),
+        );
+        log!(
+            &env,
+            "register_orchestrator user={} orchestrator={}",
+            user,
+            orchestrator
+        );
     }
 
     // ── Task lifecycle ────────────────────────────────────────────────────────
 
     /// Orchestrator creates a task, locking plan_cost from user's available balance.
     /// Returns the new task_id. Only one active task per user at a time.
-    pub fn create_task(
-        env: Env,
-        orchestrator: Address,
-        plan_cost: i128,
-    ) -> u64 {
+    pub fn create_task(env: Env, orchestrator: Address, plan_cost: i128) -> u64 {
         orchestrator.require_auth();
         assert!(plan_cost > 0, "Plan cost must be positive");
 
         // Resolve orchestrator → user
-        let user: Address = env.storage().persistent()
+        let user: Address = env
+            .storage()
+            .persistent()
             .get(&DataKey::OrchestratorOwner(orchestrator.clone()))
             .expect("Orchestrator not registered");
 
-        let mut account: UserAccount = env.storage().persistent()
+        let mut account: UserAccount = env
+            .storage()
+            .persistent()
             .get(&DataKey::User(user.clone()))
             .expect("User account not found");
 
@@ -193,9 +251,13 @@ impl AgentVault {
 
         account.locked += plan_cost;
         account.active_tasks_count += 1;
-        env.storage().persistent().set(&DataKey::User(user.clone()), &account);
+        env.storage()
+            .persistent()
+            .set(&DataKey::User(user.clone()), &account);
 
-        let mut counter: u64 = env.storage().instance()
+        let mut counter: u64 = env
+            .storage()
+            .instance()
             .get(&DataKey::TaskCounter)
             .unwrap_or(0);
         counter += 1;
@@ -208,14 +270,24 @@ impl AgentVault {
             completed: false,
             created_at: env.ledger().timestamp(),
         };
-        env.storage().persistent().set(&DataKey::Task(counter), &task);
-        env.storage().instance().set(&DataKey::TaskCounter, &counter);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Task(counter), &task);
+        env.storage()
+            .instance()
+            .set(&DataKey::TaskCounter, &counter);
 
         env.events().publish(
             (symbol_short!("taskNew"), user.clone(), orchestrator.clone()),
             (counter, plan_cost),
         );
-        log!(&env, "create_task id={} orchestrator={} plan_cost={}", counter, orchestrator, plan_cost);
+        log!(
+            &env,
+            "create_task id={} orchestrator={} plan_cost={}",
+            counter,
+            orchestrator,
+            plan_cost
+        );
 
         counter
     }
@@ -223,21 +295,21 @@ impl AgentVault {
     /// Release funds for one step: contract transfers `amount` USDC to the ORCHESTRATOR.
     /// The orchestrator then pays the agent via standard x402 (unchanged from Phase 9).
     /// Returns true on success.
-    pub fn release_payment(
-        env: Env,
-        orchestrator: Address,
-        task_id: u64,
-        amount: i128,
-    ) -> bool {
+    pub fn release_payment(env: Env, orchestrator: Address, task_id: u64, amount: i128) -> bool {
         orchestrator.require_auth();
         assert!(amount > 0, "Amount must be positive");
 
-        let mut task: TaskInfo = env.storage().persistent()
+        let mut task: TaskInfo = env
+            .storage()
+            .persistent()
             .get(&DataKey::Task(task_id))
             .expect("Task not found");
 
         assert!(!task.completed, "Task already completed");
-        assert!(task.orchestrator == orchestrator, "Not authorized for this task");
+        assert!(
+            task.orchestrator == orchestrator,
+            "Not authorized for this task"
+        );
         assert!(task.spent + amount <= task.plan_cost, "Exceeds plan cost");
 
         // Transfer USDC: contract → orchestrator wallet (NOT directly to agent)
@@ -246,13 +318,25 @@ impl AgentVault {
         usdc.transfer(&env.current_contract_address(), &orchestrator, &amount);
 
         task.spent += amount;
-        env.storage().persistent().set(&DataKey::Task(task_id), &task);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Task(task_id), &task);
 
         env.events().publish(
-            (symbol_short!("release"), task.user.clone(), orchestrator.clone()),
+            (
+                symbol_short!("release"),
+                task.user.clone(),
+                orchestrator.clone(),
+            ),
             (task_id, amount),
         );
-        log!(&env, "release_payment task={} amount={} total_spent={}", task_id, amount, task.spent);
+        log!(
+            &env,
+            "release_payment task={} amount={} total_spent={}",
+            task_id,
+            amount,
+            task.spent
+        );
 
         true
     }
@@ -269,7 +353,9 @@ impl AgentVault {
     /// Full refund of unspent locked amount.
     pub fn cancel_task(env: Env, user: Address, task_id: u64) {
         user.require_auth();
-        let task: TaskInfo = env.storage().persistent()
+        let task: TaskInfo = env
+            .storage()
+            .persistent()
             .get(&DataKey::Task(task_id))
             .expect("Task not found");
         assert!(task.user == user, "Not your task");
@@ -279,7 +365,9 @@ impl AgentVault {
     /// Safety escape hatch: anyone can finalize a task stuck for >30 minutes.
     /// Does not transfer any funds — only restores user's balance accounting.
     pub fn force_complete_stale_task(env: Env, task_id: u64) {
-        let task: TaskInfo = env.storage().persistent()
+        let task: TaskInfo = env
+            .storage()
+            .persistent()
             .get(&DataKey::Task(task_id))
             .expect("Task not found");
         assert!(!task.completed, "Task already completed");
@@ -296,8 +384,16 @@ impl AgentVault {
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
+    /// Shared finalization logic for `complete_task`, `cancel_task`, and
+    /// `force_complete_stale_task`. Unlocks `plan_cost` from the user's balance,
+    /// deducts only the amount actually spent, and marks the task as completed.
+    ///
+    /// If `expected_orchestrator` is `Some`, the caller must match the task's
+    /// registered orchestrator (used by `complete_task`).
     fn finalize_task(env: &Env, task_id: u64, expected_orchestrator: Option<&Address>) {
-        let mut task: TaskInfo = env.storage().persistent()
+        let mut task: TaskInfo = env
+            .storage()
+            .persistent()
             .get(&DataKey::Task(task_id))
             .expect("Task not found");
         assert!(!task.completed, "Already completed");
@@ -306,7 +402,9 @@ impl AgentVault {
             assert!(task.orchestrator == *orch, "Not authorized");
         }
 
-        let mut account: UserAccount = env.storage().persistent()
+        let mut account: UserAccount = env
+            .storage()
+            .persistent()
             .get(&DataKey::User(task.user.clone()))
             .expect("User not found");
 
@@ -316,21 +414,34 @@ impl AgentVault {
         account.balance -= task.spent;
         account.total_spent += task.spent;
         account.active_tasks_count -= 1;
-        env.storage().persistent().set(&DataKey::User(task.user.clone()), &account);
+        env.storage()
+            .persistent()
+            .set(&DataKey::User(task.user.clone()), &account);
 
         task.completed = true;
-        env.storage().persistent().set(&DataKey::Task(task_id), &task);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Task(task_id), &task);
 
         let refund = task.plan_cost - task.spent;
         env.events().publish(
             (symbol_short!("taskDone"), task.user.clone()),
             (task_id, task.spent, refund),
         );
-        log!(&env, "finalize_task id={} spent={} refund={}", task_id, task.spent, refund);
+        log!(
+            &env,
+            "finalize_task id={} spent={} refund={}",
+            task_id,
+            task.spent,
+            refund
+        );
     }
 
+    /// Loads the user's account, or returns a fresh zeroed [`UserAccount`] if
+    /// this is their first interaction with the contract.
     fn get_or_create_account(env: &Env, user: &Address) -> UserAccount {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get::<_, UserAccount>(&DataKey::User(user.clone()))
             .unwrap_or(UserAccount {
                 balance: 0,
@@ -348,7 +459,8 @@ impl AgentVault {
 
     /// Total USDC balance for user (available + locked), in stroops.
     pub fn get_balance(env: Env, user: Address) -> i128 {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get::<_, UserAccount>(&DataKey::User(user))
             .map(|a| a.balance)
             .unwrap_or(0)
@@ -356,7 +468,8 @@ impl AgentVault {
 
     /// Available (non-locked) USDC for user, in stroops.
     pub fn get_available(env: Env, user: Address) -> i128 {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get::<_, UserAccount>(&DataKey::User(user))
             .map(|a| a.balance - a.locked)
             .unwrap_or(0)
@@ -374,11 +487,16 @@ impl AgentVault {
 
     /// Reverse lookup: given an orchestrator address, return the user it belongs to.
     pub fn get_orchestrator_owner(env: Env, orchestrator: Address) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::OrchestratorOwner(orchestrator))
+        env.storage()
+            .persistent()
+            .get(&DataKey::OrchestratorOwner(orchestrator))
     }
 
     /// Total number of tasks ever created across all users.
     pub fn task_count(env: Env) -> u64 {
-        env.storage().instance().get(&DataKey::TaskCounter).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DataKey::TaskCounter)
+            .unwrap_or(0)
     }
 }

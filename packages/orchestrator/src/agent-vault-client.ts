@@ -20,13 +20,12 @@ import {
   xdr,
 } from '@stellar/stellar-sdk';
 
-const CONTRACT_ID  = process.env.AGENT_VAULT_CONTRACT_ID ?? '';
-const RPC_URL      = process.env.STELLAR_RPC_URL || 'https://soroban-testnet.stellar.org';
+const CONTRACT_ID = process.env.AGENT_VAULT_CONTRACT_ID ?? '';
+const RPC_URL = process.env.STELLAR_RPC_URL || 'https://soroban-testnet.stellar.org';
 const NETWORK_PASSPHRASE = Networks.TESTNET;
-const STROOPS_PER_USDC   = 10_000_000;
+const STROOPS_PER_USDC = 10_000_000;
 
-export const VAULT_ACTIVE =
-  CONTRACT_ID.length > 10 && !CONTRACT_ID.startsWith('C...');
+export const VAULT_ACTIVE = CONTRACT_ID.length > 10 && !CONTRACT_ID.startsWith('C...');
 
 if (!VAULT_ACTIVE) {
   console.warn('[AgentVault] AGENT_VAULT_CONTRACT_ID not set — vault features disabled');
@@ -55,7 +54,7 @@ async function buildUnsignedXdr(
   method: string,
   args: xdr.ScVal[],
 ): Promise<string> {
-  const server  = rpc();
+  const server = rpc();
   const account = await server.getAccount(sourceAddress);
   const contract = new Contract(CONTRACT_ID);
 
@@ -80,8 +79,8 @@ async function buildUnsignedXdr(
  * Returns tx hash after confirmation.
  */
 async function signAndSubmit(keypair: Keypair, method: string, args: xdr.ScVal[]): Promise<string> {
-  const server   = rpc();
-  const account  = await server.getAccount(keypair.publicKey());
+  const server = rpc();
+  const account = await server.getAccount(keypair.publicKey());
   const contract = new Contract(CONTRACT_ID);
 
   let tx = new TransactionBuilder(account, {
@@ -110,7 +109,7 @@ async function signAndSubmit(keypair: Keypair, method: string, args: xdr.ScVal[]
 
 async function pollForConfirmation(server: SorobanRpc.Server, hash: string): Promise<string> {
   for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1000));
     const result = await server.getTransaction(hash);
     if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
       return hash;
@@ -156,7 +155,14 @@ export async function buildRegisterOrchestratorXdr(
 
 // ── U4: Deposit / withdraw XDR builders ──────────────────────────────────────
 
-export async function buildDepositXdr(userAddress: string, amountUsdc: number): Promise<string | null> {
+/**
+ * Build an unsigned `deposit` XDR for the user to sign in Freighter.
+ * Transfers `amountUsdc` from the user's wallet into their vault balance.
+ */
+export async function buildDepositXdr(
+  userAddress: string,
+  amountUsdc: number,
+): Promise<string | null> {
   if (!VAULT_ACTIVE) return null;
   return buildUnsignedXdr(userAddress, 'deposit', [
     new Address(userAddress).toScVal(),
@@ -164,7 +170,14 @@ export async function buildDepositXdr(userAddress: string, amountUsdc: number): 
   ]);
 }
 
-export async function buildWithdrawXdr(userAddress: string, amountUsdc: number): Promise<string | null> {
+/**
+ * Build an unsigned `withdraw` XDR for the user to sign in Freighter.
+ * Fails on-chain if `amountUsdc` exceeds the user's available (unlocked) balance.
+ */
+export async function buildWithdrawXdr(
+  userAddress: string,
+  amountUsdc: number,
+): Promise<string | null> {
   if (!VAULT_ACTIVE) return null;
   return buildUnsignedXdr(userAddress, 'withdraw', [
     new Address(userAddress).toScVal(),
@@ -174,7 +187,16 @@ export async function buildWithdrawXdr(userAddress: string, amountUsdc: number):
 
 // ── U5: Task lifecycle (signed by orchestrator keypair) ────────────────────────
 
-export async function createTask(orchestratorKeypair: Keypair, planCostUsdc: number): Promise<bigint | null> {
+/**
+ * Create a new on-chain task, locking `planCostUsdc` from the user's
+ * available balance (the user is resolved on-chain via the orchestrator's
+ * registered address). Returns the new `task_id`, or `null` if the vault is
+ * inactive or the call fails.
+ */
+export async function createTask(
+  orchestratorKeypair: Keypair,
+  planCostUsdc: number,
+): Promise<bigint | null> {
   if (!VAULT_ACTIVE) return null;
   try {
     const server = rpc();
@@ -185,10 +207,13 @@ export async function createTask(orchestratorKeypair: Keypair, planCostUsdc: num
       fee: BASE_FEE,
       networkPassphrase: NETWORK_PASSPHRASE,
     })
-      .addOperation(contract.call('create_task',
-        new Address(orchestratorKeypair.publicKey()).toScVal(),
-        nativeToScVal(usdcToStroops(planCostUsdc), { type: 'i128' }),
-      ))
+      .addOperation(
+        contract.call(
+          'create_task',
+          new Address(orchestratorKeypair.publicKey()).toScVal(),
+          nativeToScVal(usdcToStroops(planCostUsdc), { type: 'i128' }),
+        ),
+      )
       .setTimeout(60)
       .build();
 
@@ -237,6 +262,10 @@ export async function releasePayment(
   }
 }
 
+/**
+ * Mark a vault task as complete, unlocking its remaining budget back to the
+ * user's available balance. No-op if the vault is inactive or `taskId` is falsy.
+ */
 export async function completeTask(orchestratorKeypair: Keypair, taskId: bigint): Promise<void> {
   if (!VAULT_ACTIVE || !taskId) return;
   try {
@@ -298,7 +327,11 @@ async function callView(method: string, args: xdr.ScVal[]): Promise<any> {
   // For view calls we need an existing account — use the contract itself or skip
   // Use the orchestrator's address if available; fall back to simulating with no source
   const tx = new TransactionBuilder(
-    { accountId: () => dummy.publicKey(), sequenceNumber: () => '0', incrementSequenceNumber: () => {} } as any,
+    {
+      accountId: () => dummy.publicKey(),
+      sequenceNumber: () => '0',
+      incrementSequenceNumber: () => {},
+    } as any,
     { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE },
   )
     .addOperation(contract.call(method, ...args))
@@ -311,38 +344,60 @@ async function callView(method: string, args: xdr.ScVal[]): Promise<any> {
   return scValToNative(simulated.result.retval);
 }
 
+/** Total vault balance for `userAddress` (available + locked), in stroops. Returns `0n` if the vault is inactive or the call fails. */
 export async function getBalance(userAddress: string): Promise<bigint> {
   if (!VAULT_ACTIVE) return 0n;
   try {
     const result = await callView('get_balance', [new Address(userAddress).toScVal()]);
     return result !== null ? BigInt(result) : 0n;
-  } catch { return 0n; }
+  } catch {
+    return 0n;
+  }
 }
 
+/** Available (unlocked) vault balance for `userAddress`, in stroops. Returns `0n` if the vault is inactive or the call fails. */
 export async function getAvailable(userAddress: string): Promise<bigint> {
   if (!VAULT_ACTIVE) return 0n;
   try {
     const result = await callView('get_available', [new Address(userAddress).toScVal()]);
     return result !== null ? BigInt(result) : 0n;
-  } catch { return 0n; }
+  } catch {
+    return 0n;
+  }
 }
 
+/** A user's vault account, with all amounts converted from stroops to USDC. */
 export interface VaultAccount {
-  balance: number;         // USDC
-  available: number;       // USDC (balance - locked)
-  locked: number;          // USDC
+  balance: number; // USDC
+  available: number; // USDC (balance - locked)
+  locked: number; // USDC
   total_deposited: number; // USDC
-  total_spent: number;     // USDC
+  total_spent: number; // USDC
   active_tasks_count: number;
 }
 
+/**
+ * Fetch a user's full vault account.
+ *
+ * Returns a zeroed {@link VaultAccount} if the user has no on-chain account
+ * yet (the contract's `Option::None` case), or `null` if the vault is
+ * inactive. RPC errors propagate so callers can distinguish "no account" from
+ * "couldn't reach the network".
+ */
 export async function getAccount(userAddress: string): Promise<VaultAccount | null> {
   if (!VAULT_ACTIVE) return null;
   // Let exceptions propagate — caller distinguishes RPC errors from "no account"
   const raw = await callView('get_account', [new Address(userAddress).toScVal()]);
   // Option::None from the contract → account doesn't exist yet → zero balance
   if (raw === null || raw === undefined) {
-    return { balance: 0, available: 0, locked: 0, total_deposited: 0, total_spent: 0, active_tasks_count: 0 };
+    return {
+      balance: 0,
+      available: 0,
+      locked: 0,
+      total_deposited: 0,
+      total_spent: 0,
+      active_tasks_count: 0,
+    };
   }
   const toUsdc = (v: bigint | number) => Number(v) / STROOPS_PER_USDC;
   return {

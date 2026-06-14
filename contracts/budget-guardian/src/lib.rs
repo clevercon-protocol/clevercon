@@ -15,7 +15,7 @@ pub enum DataKey {
 #[derive(Clone)]
 pub struct Task {
     pub owner: Address,
-    pub budget: i128,   // in stroops (1 USDC = 10_000_000 stroops)
+    pub budget: i128, // in stroops (1 USDC = 10_000_000 stroops)
     pub spent: i128,
     pub num_payments: u32,
     pub completed: bool,
@@ -136,7 +136,13 @@ impl BudgetGuardian {
         env.storage()
             .persistent()
             .set(&DataKey::Task(task_id), &task);
-        log!(&env, "Task {} completed: spent={} of {}", task_id, task.spent, task.budget);
+        log!(
+            &env,
+            "Task {} completed: spent={} of {}",
+            task_id,
+            task.spent,
+            task.budget
+        );
     }
 
     /// Read a full task record.
