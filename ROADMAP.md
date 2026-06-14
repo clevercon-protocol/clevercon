@@ -106,20 +106,6 @@ stored in plaintext on disk.
   limiting) across the registry, orchestrator, and agents.
 - Mainnet USDC and multi-asset support per the design from Phase 1.
 
-## Funding
-
-CleverCon participates in [GrantFox](https://grantfox.xyz), a Stellar grants
-platform that funds bounty-based open-source contributions. Issues that carry
-a bounty are labeled `bounty` with the funding amount noted in the issue body.
-Bounty sizes generally follow:
-
-| Difficulty | Typical bounty |
-|---|---|
-| Good first issue | $20 – $50 |
-| Medium | $75 – $150 |
-| Hard | $200 – $500 |
-| Strategic (Phase 1–3 components above) | $400 – $1000 |
-
 See the [issue tracker](https://github.com/clevercon-protocol/clevercon/issues)
 for current bounties, and [CONTRIBUTING.md](CONTRIBUTING.md) for how to get
 started.
