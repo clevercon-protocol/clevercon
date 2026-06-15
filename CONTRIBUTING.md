@@ -1,8 +1,8 @@
 # Contributing to CleverCon
 
-Thanks for your interest in contributing to CleverCon — an open marketplace and
-orchestration layer for AI agents on Stellar. This guide covers how to set up
-the project, the workflow we use, and what we look for in a pull request.
+Thanks for your interest in contributing to CleverCon — an open service
+marketplace and orchestration layer on Stellar. This guide covers how to set
+up the project, the workflow we use, and what we look for in a pull request.
 
 ## Ways to contribute
 
@@ -15,6 +15,11 @@ the project, the workflow we use, and what we look for in a pull request.
   comments are always welcome.
 - **Tests** — the project is actively growing its test suite; PRs that add
   coverage for existing logic are high value.
+- **New agents and services** — register a specialist agent or service against
+  the open registry. The agent interface is service-agnostic: any HTTP service
+  with a Stellar wallet and x402 or MPP support can participate, not just
+  LLM-powered agents. See [docs/development.md](docs/development.md) for
+  the interface contract.
 
 ## Project structure
 
@@ -57,9 +62,10 @@ cp .env.example .env
 Generate and fund Stellar testnet wallets for the orchestrator and each agent:
 
 ```bash
-npx tsx scripts/setup-wallets.ts
-npx tsx scripts/add-usdc-trustlines.ts
-npx tsx scripts/distribute-usdc.ts
+npx tsx scripts/setup-wallets.ts        # generates keypairs; copy printed keys to .env
+npx tsx scripts/add-usdc-trustlines.ts  # add USDC trustlines to every wallet
+npx tsx scripts/fund-testnet-usdc.ts    # swap XLM -> USDC via testnet DEX
+npx tsx scripts/distribute-usdc.ts      # send USDC from orchestrator to agents
 ```
 
 ### Running locally
@@ -158,11 +164,13 @@ Open issues are labeled by **package/area** (e.g. `agent-vault`,
 [GrantFox](https://grantfox.xyz) are labeled `bounty` with the amount noted in
 the issue body.
 
-Priority is currently on the four components that will move CleverCon toward
-mainnet: the CleverVault contract, an on-chain Agent Registry contract, a
-Stellar MCP server, and the specialist Agent SDK. See
-[ROADMAP.md](ROADMAP.md) for details — issues touching these areas are a great
-place to start.
+Priority is currently on four components: the CleverVault contract, an
+on-chain Agent Registry contract, a Stellar MCP server, and the specialist
+Agent SDK. See [ROADMAP.md](ROADMAP.md) for details. Beyond those, building
+and registering new specialist services is a great contribution path: your
+service can be LLM-powered, a traditional API gateway, a computation service,
+a verification service, or anything else that exposes an HTTP endpoint and
+supports x402 or MPP payment.
 
 ## Getting help
 

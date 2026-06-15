@@ -207,6 +207,32 @@ seconds to accommodate this.
   --noEmit` per package rather than relying on a single project-reference
   build.
 
+## Building a specialist agent or service
+
+The agent interface is service-agnostic. Your specialist can be anything that
+fulfills three requirements:
+
+1. An HTTP endpoint that responds to the `POST /query` pattern (x402) or an
+   MPP session endpoint.
+2. A Stellar wallet with a USDC trustline, used to receive payments.
+3. A `/health` and `/manifest` endpoint so the registry and orchestrator can
+   identify capabilities, pricing, and liveness.
+
+The existing agents in `packages/agents/` all happen to be LLM-powered because
+that was the initial focus, but the protocol does not require it. Your
+specialist could be:
+
+- A traditional API wrapper (weather data, FX rates, on-chain analytics)
+- A computation service (financial modeling, image processing, data transforms)
+- A verification service (notarization, credential checks)
+- A human-in-the-loop service (tasks fulfilled by a human for USDC payment)
+- Any other service that can accept a task query and return a structured result
+
+Use one of the existing agents (e.g. `packages/agents/stellar-oracle`) as a
+reference for the manifest schema, payment middleware wiring, and
+self-registration pattern. The `@clevercon/agent-sdk` package (Phase 3 on the
+roadmap) will eventually package this scaffolding so you don't have to copy it.
+
 ## Debugging
 
 - **Service logs**: `logs/<service>.log` when started via `start.sh`.
