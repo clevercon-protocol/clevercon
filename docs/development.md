@@ -27,15 +27,36 @@ clevercon/
    root — this installs all workspace packages.
 2. Copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`. Most other
    variables are filled in by the scripts below.
-3. Generate Stellar testnet wallets for the orchestrator and each agent:
+3. Generate Stellar testnet wallets:
 
    ```bash
    npx tsx scripts/setup-wallets.ts
+   ```
+
+   This creates `wallets.json` (gitignored) and **prints the secret keys to
+   stdout**. Copy the printed `*_SECRET_KEY=S...` lines into your `.env` file
+   before continuing — the services refuse to start without them.
+
+4. Add USDC trustlines to every wallet:
+
+   ```bash
    npx tsx scripts/add-usdc-trustlines.ts
+   ```
+
+5. Fund the **orchestrator** with testnet USDC. Open
+   [https://faucet.circle.com](https://faucet.circle.com), select
+   **Stellar Testnet**, and paste the orchestrator's public key (shown in the
+   `setup-wallets.ts` output). Click the faucet button **2-3 times** (each
+   gives 10 USDC; the orchestrator needs ~15 USDC to distribute to agents and
+   cover task payments).
+
+6. Distribute USDC from the orchestrator to each agent wallet:
+
+   ```bash
    npx tsx scripts/distribute-usdc.ts
    ```
 
-4. (Optional) Deploy CleverVault to your own testnet contract:
+7. (Optional) Deploy CleverVault to your own testnet contract:
 
    ```bash
    cd contracts/agent-vault && ./deploy.sh

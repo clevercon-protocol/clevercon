@@ -95,9 +95,11 @@ cp .env.example .env
 ### 3. Set up wallets (first time only)
 
 ```bash
-npx tsx scripts/setup-wallets.ts         # generate keypairs, write to .env
-npx tsx scripts/add-usdc-trustlines.ts   # add USDC trustlines
-npx tsx scripts/distribute-usdc.ts       # fund agent wallets with testnet USDC
+npx tsx scripts/setup-wallets.ts         # generates keypairs, prints *_SECRET_KEY lines
+# ↑ copy the printed *_SECRET_KEY=S... lines into your .env before continuing
+npx tsx scripts/add-usdc-trustlines.ts   # add USDC trustlines to every wallet
+# ↑ fund orchestrator with testnet USDC at https://faucet.circle.com (2-3 clicks)
+npx tsx scripts/distribute-usdc.ts       # distribute USDC to agent wallets
 ```
 
 ### 4. Start all services
