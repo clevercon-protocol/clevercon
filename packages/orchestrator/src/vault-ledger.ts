@@ -5,6 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { writeJsonSafe } from '@clevercon/common';
 
 const __dirname = path.dirname(path.resolve(process.argv[1]));
 const DATA_DIR = path.join(__dirname, '..', '..', '..', 'data');
@@ -31,7 +32,7 @@ function load(): Ledger {
   if (cache) return cache;
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    if (!fs.existsSync(LEDGER_PATH)) fs.writeFileSync(LEDGER_PATH, '[]', 'utf8');
+    if (!fs.existsSync(LEDGER_PATH)) writeJsonSafe(LEDGER_PATH, []);
     cache = JSON.parse(fs.readFileSync(LEDGER_PATH, 'utf8')) as Ledger;
   } catch {
     cache = [];
@@ -42,7 +43,7 @@ function load(): Ledger {
 function save(ledger: Ledger): void {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const trimmed = ledger.slice(-2000);
-  fs.writeFileSync(LEDGER_PATH, JSON.stringify(trimmed, null, 2), 'utf8');
+  writeJsonSafe(LEDGER_PATH, trimmed);
   cache = trimmed;
 }
 

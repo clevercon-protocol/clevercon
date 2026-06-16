@@ -1,18 +1,18 @@
 /**
  * JSON-file-backed persistence for the agent registry.
  *
- * All agents are stored as a single array in `data/registry.json`. Each
- * exported function reads or rewrites the whole file — there is no write
- * locking, so concurrent writers can race (see SECURITY.md "Known limitations").
+ * All agents are stored as a single array in `data/registry.json`. Writes are
+ * serialized through an in-process queue and committed with atomic renames.
  */
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type { AgentRecord } from '@clevercon/common';
+import { createJsonWriteQueue, type AgentRecord } from '@clevercon/common';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', '..', '..', 'data');
 const REGISTRY_FILE = path.join(DATA_DIR, 'registry.json');
+const writeAgentsQueued = createJsonWriteQueue<AgentRecord[]>(REGISTRY_FILE);
 
 function ensureDataDir(): void {
   if (!fs.existsSync(DATA_DIR)) {
@@ -37,7 +37,7 @@ export function loadAgents(): AgentRecord[] {
 /** Overwrite `data/registry.json` with the given list of agents. */
 export function saveAgents(agents: AgentRecord[]): void {
   ensureDataDir();
-  fs.writeFileSync(REGISTRY_FILE, JSON.stringify(agents, null, 2));
+  writeAgentsQueued(agents);
 }
 
 /** Find a single agent by its `agent_id`, or `undefined` if not registered. */

@@ -8,6 +8,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { writeJsonSafe } from '@clevercon/common';
 
 const __dirname = path.dirname(path.resolve(process.argv[1]));
 // process.argv[1] = .../packages/orchestrator/src/server.ts → go up 3 levels to workspace root
@@ -34,7 +35,7 @@ function load(): Store {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     if (!fs.existsSync(STORE_PATH)) {
-      fs.writeFileSync(STORE_PATH, '{}', 'utf8');
+      writeJsonSafe(STORE_PATH, {});
     }
     cache = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8')) as Store;
   } catch {
@@ -45,7 +46,7 @@ function load(): Store {
 
 function save(store: Store): void {
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), 'utf8');
+  writeJsonSafe(STORE_PATH, store);
   cache = store;
 }
 
