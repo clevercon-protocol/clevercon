@@ -1,8 +1,4 @@
 #![no_std]
-// `Events::publish` is deprecated in favor of the `#[contractevent]` macro
-// (soroban-sdk 25+). Migrating would change this already-deployed contract's
-// event schema, so it's deferred to a future hardening pass — see ROADMAP.md.
-#![allow(deprecated)]
 //! AgentVault — Soroban smart contract (v2)
 //!
 //! Trustless treasury for AgentForge. Holds USDC for multiple users,
@@ -17,8 +13,63 @@
 //! pays the agent via standard x402, and returns to ~0 USDC balance.
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, log, symbol_short, token, Address, Env, String,
+    contract, contractevent, contractimpl, contracttype, log, token, Address, Env, String,
 };
+
+// ── Events ────────────────────────────────────────────────────────────────────
+
+#[contractevent]
+pub struct DepositEvent {
+    #[topic]
+    pub user: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
+pub struct WithdrawEvent {
+    #[topic]
+    pub user: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
+pub struct RegOrchEvent {
+    #[topic]
+    pub user: Address,
+    pub orchestrator: Address,
+}
+
+#[contractevent]
+pub struct TaskNewEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub orchestrator: Address,
+    #[topic]
+    pub task_id: u64,
+    pub plan_cost: i128,
+}
+
+#[contractevent]
+pub struct ReleaseEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub orchestrator: Address,
+    #[topic]
+    pub task_id: u64,
+    pub amount: i128,
+}
+
+#[contractevent]
+pub struct TaskDoneEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub task_id: u64,
+    pub spent: i128,
+    pub refund: i128,
+}
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -134,8 +185,11 @@ impl AgentVault {
             .persistent()
             .set(&DataKey::User(user.clone()), &account);
 
-        env.events()
-            .publish((symbol_short!("deposit"), user.clone()), amount);
+        DepositEvent {
+            user: user.clone(),
+            amount,
+        }
+        .publish(&env);
         log!(
             &env,
             "deposit user={} amount={} new_balance={}",
@@ -172,8 +226,11 @@ impl AgentVault {
             .persistent()
             .set(&DataKey::User(user.clone()), &account);
 
-        env.events()
-            .publish((symbol_short!("withdraw"), user.clone()), amount);
+        WithdrawEvent {
+            user: user.clone(),
+            amount,
+        }
+        .publish(&env);
         log!(
             &env,
             "withdraw user={} amount={} remaining={}",
@@ -208,10 +265,11 @@ impl AgentVault {
             .persistent()
             .set(&DataKey::OrchestratorOwner(orchestrator.clone()), &user);
 
-        env.events().publish(
-            (symbol_short!("regOrch"), user.clone()),
-            orchestrator.clone(),
-        );
+        RegOrchEvent {
+            user: user.clone(),
+            orchestrator: orchestrator.clone(),
+        }
+        .publish(&env);
         log!(
             &env,
             "register_orchestrator user={} orchestrator={}",
@@ -277,10 +335,13 @@ impl AgentVault {
             .instance()
             .set(&DataKey::TaskCounter, &counter);
 
-        env.events().publish(
-            (symbol_short!("taskNew"), user.clone(), orchestrator.clone()),
-            (counter, plan_cost),
-        );
+        TaskNewEvent {
+            user: user.clone(),
+            orchestrator: orchestrator.clone(),
+            task_id: counter,
+            plan_cost,
+        }
+        .publish(&env);
         log!(
             &env,
             "create_task id={} orchestrator={} plan_cost={}",
@@ -322,14 +383,13 @@ impl AgentVault {
             .persistent()
             .set(&DataKey::Task(task_id), &task);
 
-        env.events().publish(
-            (
-                symbol_short!("release"),
-                task.user.clone(),
-                orchestrator.clone(),
-            ),
-            (task_id, amount),
-        );
+        ReleaseEvent {
+            user: task.user.clone(),
+            orchestrator: orchestrator.clone(),
+            task_id,
+            amount,
+        }
+        .publish(&env);
         log!(
             &env,
             "release_payment task={} amount={} total_spent={}",
@@ -424,10 +484,13 @@ impl AgentVault {
             .set(&DataKey::Task(task_id), &task);
 
         let refund = task.plan_cost - task.spent;
-        env.events().publish(
-            (symbol_short!("taskDone"), task.user.clone()),
-            (task_id, task.spent, refund),
-        );
+        TaskDoneEvent {
+            user: task.user.clone(),
+            task_id,
+            spent: task.spent,
+            refund,
+        }
+        .publish(env);
         log!(
             &env,
             "finalize_task id={} spent={} refund={}",
