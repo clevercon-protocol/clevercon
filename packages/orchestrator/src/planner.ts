@@ -18,8 +18,8 @@ All agent payments use USDC stablecoins on Stellar testnet.
  * When `LLM_PROVIDER=mock`, skips the Anthropic API and returns a deterministic
  * single-step stub plan built from the first registered agent — letting the
  * orchestrator run locally without an API key. Otherwise prompts the configured
- * Anthropic model (`LLM_MODEL`, default `claude-sonnet-4-5`) and parses its JSON
- * response.
+ * Anthropic model (`LLM_PLANNER_MODEL` ?? `LLM_MODEL`, default `claude-sonnet-4-5`)
+ * and parses its JSON response.
  */
 export async function createPlan(
   task: string,
@@ -111,7 +111,7 @@ Return a JSON object with this exact shape:
 }`;
 
   const response = await anthropic.messages.create({
-    model: process.env.LLM_MODEL ?? 'claude-sonnet-4-5',
+    model: process.env.LLM_PLANNER_MODEL ?? process.env.LLM_MODEL ?? 'claude-sonnet-4-5',
     max_tokens: 1000,
     messages: [{ role: 'user', content: prompt }],
   });

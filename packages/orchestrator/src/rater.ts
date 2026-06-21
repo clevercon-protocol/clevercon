@@ -17,7 +17,7 @@ export async function rateResponse(action: string, output: string): Promise<numb
 
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: process.env.LLM_RATER_MODEL ?? process.env.LLM_MODEL ?? 'claude-haiku-4-5-20251001',
       max_tokens: 10,
       messages: [
         {

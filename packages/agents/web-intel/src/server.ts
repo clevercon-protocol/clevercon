@@ -138,7 +138,8 @@ app.post('/query', async (req, res) => {
 
       const claudeRes = await anthropic.messages
         .create({
-          model: 'claude-haiku-4-5-20251001',
+          model:
+            process.env.LLM_WEBINTEL_MODEL ?? process.env.LLM_MODEL ?? 'claude-haiku-4-5-20251001',
           max_tokens: 400,
           messages: [
             {

@@ -13,7 +13,7 @@ function getClient(): Anthropic {
 
 export async function analyzeWithClaude(data: string, instruction: string): Promise<string> {
   const response = await getClient().messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: process.env.LLM_ANALYSIS_MODEL ?? process.env.LLM_MODEL ?? 'claude-haiku-4-5-20251001',
     max_tokens: 800,
     messages: [
       {
