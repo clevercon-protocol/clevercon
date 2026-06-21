@@ -2,7 +2,19 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+/**
+ * Rate the quality of an agent's response on a 1–5 scale.
+ *
+ * When `LLM_PROVIDER=mock`, skips the Anthropic API and returns a fixed `4`.
+ * Otherwise asks the Anthropic model to score the response, falling back to a
+ * neutral `3` on any parsing error or API failure.
+ */
 export async function rateResponse(action: string, output: string): Promise<number> {
+  // Mock provider: skip the Anthropic API and return a fixed "good" rating.
+  if (process.env.LLM_PROVIDER === 'mock') {
+    return 4;
+  }
+
   try {
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',

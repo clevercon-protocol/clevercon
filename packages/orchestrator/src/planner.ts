@@ -12,11 +12,49 @@ network stats, real-time crypto prices, blockchain/crypto/tech/AI news feeds, we
 All agent payments use USDC stablecoins on Stellar testnet.
 `;
 
+/**
+ * Decompose a task into an {@link ExecutionPlan} using the available agents.
+ *
+ * When `LLM_PROVIDER=mock`, skips the Anthropic API and returns a deterministic
+ * single-step stub plan built from the first registered agent — letting the
+ * orchestrator run locally without an API key. Otherwise prompts the configured
+ * Anthropic model (`LLM_MODEL`, default `claude-sonnet-4-5`) and parses its JSON
+ * response.
+ */
 export async function createPlan(
   task: string,
   availableAgents: AgentRecord[],
   budget: number,
 ): Promise<ExecutionPlan> {
+  // Mock provider: skip the Anthropic API and return a deterministic single-step
+  // plan so the orchestrator can run locally without an API key.
+  if (process.env.LLM_PROVIDER === 'mock') {
+    const first = availableAgents[0];
+    if (!first) throw new Error('Mock planner: no agents available in registry');
+    const cost = first.pricing.price_per_call;
+    // Keep the stub within budget so it passes validatePlan's cost check.
+    if (cost > budget) {
+      throw new Error(
+        `Mock planner: first agent cost ($${cost.toFixed(4)}) exceeds budget ($${budget.toFixed(4)})`,
+      );
+    }
+    return {
+      steps: [
+        {
+          step_id: 1,
+          agent_id: first.agent_id,
+          agent_name: first.name,
+          action: 'Return current XLM price',
+          depends_on: null,
+          estimated_cost: cost,
+          payment_method: first.pricing.model,
+        },
+      ],
+      total_estimated_cost: cost,
+      reasoning: 'Mock plan (LLM_PROVIDER=mock): single-step stub using the first registered agent.',
+    };
+  }
+
   // Score and rank all agents so Claude can respect marketplace selection order.
   // Agents with the same capabilities are ranked: rank 1 = best marketplace score.
   const scored = scoreAgents(availableAgents, [], budget / Math.max(1, availableAgents.length));
@@ -72,7 +110,7 @@ Return a JSON object with this exact shape:
 }`;
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-5',
+    model: process.env.LLM_MODEL ?? 'claude-sonnet-4-5',
     max_tokens: 1000,
     messages: [{ role: 'user', content: prompt }],
   });

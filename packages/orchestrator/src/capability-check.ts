@@ -10,10 +10,23 @@ export interface FeasibilityResult {
   missing: string[];
 }
 
+/**
+ * Determine whether the registered agents can collectively cover a task.
+ *
+ * When `LLM_PROVIDER=mock`, skips the Anthropic API and reports the task as
+ * always feasible with no missing capabilities. Otherwise asks the configured
+ * Anthropic model which capability tags the task needs and fuzzy-matches them
+ * against the capabilities offered by `availableAgents`.
+ */
 export async function checkFeasibility(
   task: string,
   availableAgents: AgentRecord[],
 ): Promise<FeasibilityResult> {
+  // Mock provider: skip the Anthropic API and assume the task is always feasible.
+  if (process.env.LLM_PROVIDER === 'mock') {
+    return { feasible: true, needed: [], available: [], missing: [] };
+  }
+
   // All capabilities across registered agents
   const allCapabilities = new Set(availableAgents.flatMap((a) => a.capabilities));
 
