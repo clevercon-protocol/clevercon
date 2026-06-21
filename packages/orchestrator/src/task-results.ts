@@ -5,7 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import type { TaskResult } from '@clevercon/common';
+import { writeJsonSafe, type TaskResult } from '@clevercon/common';
 
 const __dirname = path.dirname(path.resolve(process.argv[1]));
 const DATA_DIR = path.join(__dirname, '..', '..', '..', 'data');
@@ -31,7 +31,7 @@ function load(): Store {
   if (cache) return cache;
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    if (!fs.existsSync(RESULTS_PATH)) fs.writeFileSync(RESULTS_PATH, '[]', 'utf8');
+    if (!fs.existsSync(RESULTS_PATH)) writeJsonSafe(RESULTS_PATH, []);
     cache = JSON.parse(fs.readFileSync(RESULTS_PATH, 'utf8')) as Store;
   } catch {
     cache = [];
@@ -42,7 +42,7 @@ function load(): Store {
 function save(store: Store): void {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const trimmed = store.slice(-500); // cap at 500 entries
-  fs.writeFileSync(RESULTS_PATH, JSON.stringify(trimmed, null, 2), 'utf8');
+  writeJsonSafe(RESULTS_PATH, trimmed);
   cache = trimmed;
 }
 
