@@ -47,16 +47,20 @@ export function loadAgents(): AgentRecord[] {
 /** Overwrite `data/registry.json` with the given list of agents. */
 export function saveAgents(agents: AgentRecord[]): void {
   cache = agents;
-  writeQueue = writeQueue.then(() => {
-    writeJsonSafe(REGISTRY_FILE, agents);
-    consecutiveWriteFailures = 0;
-  }).catch((err) => {
-    consecutiveWriteFailures++;
-    logger.error('Registry save failed', err instanceof Error ? err.message : String(err));
-    if (consecutiveWriteFailures >= 3) {
-      logger.warn(`Registry: ${consecutiveWriteFailures} consecutive write failures — in-memory cache may diverge from disk`);
-    }
-  });
+  writeQueue = writeQueue
+    .then(() => {
+      writeJsonSafe(REGISTRY_FILE, agents);
+      consecutiveWriteFailures = 0;
+    })
+    .catch((err) => {
+      consecutiveWriteFailures++;
+      logger.error('Registry save failed', err instanceof Error ? err.message : String(err));
+      if (consecutiveWriteFailures >= 3) {
+        logger.warn(
+          `Registry: ${consecutiveWriteFailures} consecutive write failures — in-memory cache may diverge from disk`,
+        );
+      }
+    });
 }
 
 /** Find a single agent by its `agent_id`, or `undefined` if not registered. */
