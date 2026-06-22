@@ -487,7 +487,11 @@ impl AgentVault {
 
     /// Panics if the contract is paused.
     fn require_not_paused(env: &Env) {
-        let paused = env.storage().instance().get(&DataKey::Paused).unwrap_or(false);
+        let paused = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
         Self::extend_instance_ttl(env);
         if paused {
             panic!("Contract is paused");
