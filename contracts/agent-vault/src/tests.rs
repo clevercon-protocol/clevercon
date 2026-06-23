@@ -995,4 +995,146 @@ fn test_multi_asset_deposit_withdraw_task_flow() {
     // Withdraw remaining XLM
     test_env.client.withdraw(&user, &xlm_sac, &600);
     assert_eq!(xlm_client.balance(&user), 1800); // 2000 initial - 800 deposit + 600 withdraw
+// ── 10. Pause / Unpause Tests ───────────────────────────────────────────────
+
+#[test]
+fn test_is_paused_default_false() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    assert!(!test_env.client.is_paused());
+}
+
+#[test]
+fn test_pause_sets_flag() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    test_env.client.pause(&test_env.admin);
+    assert!(test_env.client.is_paused());
+}
+
+#[test]
+fn test_unpause_clears_flag() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    test_env.client.pause(&test_env.admin);
+    assert!(test_env.client.is_paused());
+    test_env.client.unpause(&test_env.admin);
+    assert!(!test_env.client.is_paused());
+}
+
+#[test]
+#[should_panic(expected = "Contract is paused")]
+fn test_deposit_reverts_when_paused() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = Address::generate(&test_env.env);
+    test_env.token_admin_client.mint(&user, &1000);
+
+    test_env.client.pause(&test_env.admin);
+    test_env.client.deposit(&user, &100);
+}
+
+#[test]
+#[should_panic(expected = "Contract is paused")]
+fn test_create_task_reverts_when_paused() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "Orchestrator");
+
+    test_env.token_admin_client.mint(&user, &1000);
+    test_env.client.deposit(&user, &500);
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator, &name);
+
+    test_env.client.pause(&test_env.admin);
+    test_env.client.create_task(&orchestrator, &300);
+}
+
+#[test]
+#[should_panic(expected = "Contract is paused")]
+fn test_release_payment_reverts_when_paused() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "Orchestrator");
+
+    test_env.token_admin_client.mint(&user, &1000);
+    test_env.client.deposit(&user, &500);
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator, &name);
+    let task_id = test_env.client.create_task(&orchestrator, &300);
+
+    test_env.client.pause(&test_env.admin);
+    test_env
+        .client
+        .release_payment(&orchestrator, &task_id, &100);
+}
+
+#[test]
+fn test_withdraw_and_cancel_work_while_paused() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "Orchestrator");
+
+    test_env.token_admin_client.mint(&user, &1000);
+    test_env.client.deposit(&user, &500);
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator, &name);
+    let task_id = test_env.client.create_task(&orchestrator, &300);
+
+    test_env.client.pause(&test_env.admin);
+
+    // Cancel task should work while paused
+    test_env.client.cancel_task(&user, &task_id);
+    let task = test_env.client.get_task(&task_id).unwrap();
+    assert!(task.completed);
+
+    // Withdraw should work while paused
+    test_env.client.withdraw(&user, &500);
+    assert_eq!(test_env.token_client.balance(&user), 1000);
+    let account = test_env.client.get_account(&user).unwrap();
+    assert_eq!(account.balance, 0);
+}
+
+#[test]
+fn test_unpause_restores_deposit() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = Address::generate(&test_env.env);
+    test_env.token_admin_client.mint(&user, &1000);
+
+    test_env.client.pause(&test_env.admin);
+    test_env.client.unpause(&test_env.admin);
+
+    // Deposit should succeed after unpausing
+    test_env.client.deposit(&user, &100);
+    assert_eq!(test_env.token_client.balance(&user), 900);
+}
+
+#[test]
+#[should_panic(expected = "admin must match stored admin")]
+fn test_unauthorized_pause_fails() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let non_admin = Address::generate(&test_env.env);
+
+    test_env.client.pause(&non_admin);
+}
+
+#[test]
+#[should_panic(expected = "admin must match stored admin")]
+fn test_unauthorized_unpause_fails() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let non_admin = Address::generate(&test_env.env);
+
+    test_env.client.unpause(&non_admin);
 }

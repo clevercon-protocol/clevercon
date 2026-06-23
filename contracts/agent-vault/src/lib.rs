@@ -603,7 +603,25 @@ impl AgentVault {
 
     // Internal helpers
 
-    /// Shared finalization logic.
+    /// Panics if the contract is paused.
+    fn require_not_paused(env: &Env) {
+        let paused = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        Self::extend_instance_ttl(env);
+        if paused {
+            panic!("Contract is paused");
+        }
+    }
+
+    /// Shared finalization logic for `complete_task`, `cancel_task`, and
+    /// `force_complete_stale_task`. Unlocks `plan_cost` from the user's balance,
+    /// deducts only the amount actually spent, and marks the task as completed.
+    ///
+    /// If `expected_orchestrator` is `Some`, the caller must match the task's
+    /// registered orchestrator (used by `complete_task`).
     fn finalize_task(env: &Env, task_id: u64, expected_orchestrator: Option<&Address>) {
         let task_key = DataKey::Task(task_id);
         let mut task: TaskInfo = env
@@ -829,6 +847,47 @@ impl AgentVault {
             .unwrap_or(0);
         Self::extend_instance_ttl(&env);
         result
+    }
+
+    // ── Pause / Unpause ─────────────────────────────────────────────────
+
+    /// Pauses the contract, blocking deposit, create_task, and release_payment.
+    pub fn pause(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        assert!(admin == stored_admin, "admin must match stored admin");
+
+        env.storage().instance().set(&DataKey::Paused, &true);
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Unpauses the contract, restoring normal operation.
+    pub fn unpause(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        assert!(admin == stored_admin, "admin must match stored admin");
+
+        env.storage().instance().set(&DataKey::Paused, &false);
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Returns true if the contract is paused.
+    pub fn is_paused(env: Env) -> bool {
+        let paused = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        Self::extend_instance_ttl(&env);
+        paused
     }
 }
 
