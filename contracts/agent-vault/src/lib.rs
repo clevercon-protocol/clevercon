@@ -88,6 +88,8 @@ pub enum DataKey {
     TaskCounter,
     /// Reverse lookup: maps an orchestrator address to the user address that registered it.
     OrchestratorOwner(Address),
+    /// Flag indicating whether the contract is paused.
+    Paused,
 }
 
 // ── Data structs ────────────────────────────────────────────────────────
@@ -191,6 +193,7 @@ impl AgentVault {
     /// Deposit USDC from user's external wallet into their vault balance.
     /// Creates the user account on first deposit.
     pub fn deposit(env: Env, user: Address, amount: i128) {
+        Self::require_not_paused(&env);
         user.require_auth();
         assert!(amount > 0, "Deposit must be positive");
 
@@ -307,6 +310,7 @@ impl AgentVault {
     /// Orchestrator creates a task, locking plan_cost from user's available balance.
     /// Returns the new task_id. Only one active task per user at a time.
     pub fn create_task(env: Env, orchestrator: Address, plan_cost: i128) -> u64 {
+        Self::require_not_paused(&env);
         orchestrator.require_auth();
         assert!(plan_cost > 0, "Plan cost must be positive");
 
@@ -387,6 +391,7 @@ impl AgentVault {
     /// The orchestrator then pays the agent via standard x402 (unchanged from Phase 9).
     /// Returns true on success.
     pub fn release_payment(env: Env, orchestrator: Address, task_id: u64, amount: i128) -> bool {
+        Self::require_not_paused(&env);
         orchestrator.require_auth();
         assert!(amount > 0, "Amount must be positive");
 
@@ -479,6 +484,19 @@ impl AgentVault {
     }
 
     // ── Internal helpers ────────────────────────────────────────────────
+
+    /// Panics if the contract is paused.
+    fn require_not_paused(env: &Env) {
+        let paused = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        Self::extend_instance_ttl(env);
+        if paused {
+            panic!("Contract is paused");
+        }
+    }
 
     /// Shared finalization logic for `complete_task`, `cancel_task`, and
     /// `force_complete_stale_task`. Unlocks `plan_cost` from the user's balance,
@@ -658,6 +676,47 @@ impl AgentVault {
             .unwrap_or(0);
         Self::extend_instance_ttl(&env);
         result
+    }
+
+    // ── Pause / Unpause ─────────────────────────────────────────────────
+
+    /// Pauses the contract, blocking deposit, create_task, and release_payment.
+    pub fn pause(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        assert!(admin == stored_admin, "admin must match stored admin");
+
+        env.storage().instance().set(&DataKey::Paused, &true);
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Unpauses the contract, restoring normal operation.
+    pub fn unpause(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        assert!(admin == stored_admin, "admin must match stored admin");
+
+        env.storage().instance().set(&DataKey::Paused, &false);
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Returns true if the contract is paused.
+    pub fn is_paused(env: Env) -> bool {
+        let paused = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        Self::extend_instance_ttl(&env);
+        paused
     }
 }
 
