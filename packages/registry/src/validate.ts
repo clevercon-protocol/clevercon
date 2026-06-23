@@ -54,19 +54,13 @@ export function validateRegistration(body: Record<string, unknown>): string[] {
   }
 
   // pricing: must be a plain object
-  if (
-    body.pricing === null ||
-    typeof body.pricing !== 'object' ||
-    Array.isArray(body.pricing)
-  ) {
+  if (body.pricing === null || typeof body.pricing !== 'object' || Array.isArray(body.pricing)) {
     invalid.push('pricing.model', 'pricing.price_per_call', 'pricing.currency');
   } else {
     const pricing = body.pricing as Record<string, unknown>;
 
     if (
-      !ALLOWED_PRICING_MODELS.includes(
-        pricing.model as (typeof ALLOWED_PRICING_MODELS)[number],
-      )
+      !ALLOWED_PRICING_MODELS.includes(pricing.model as (typeof ALLOWED_PRICING_MODELS)[number])
     ) {
       invalid.push('pricing.model');
     }

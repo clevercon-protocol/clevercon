@@ -30,7 +30,9 @@ app.post('/register', (req, res) => {
   ];
   const missing = required.filter((f) => !(f in body));
   if (missing.length > 0) {
-    return res.status(400).json({ error: `Missing fields: ${missing.join(', ')}`, fields: missing });
+    return res
+      .status(400)
+      .json({ error: `Missing fields: ${missing.join(', ')}`, fields: missing });
   }
 
   // Validate field values
