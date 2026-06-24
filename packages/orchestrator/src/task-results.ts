@@ -1,11 +1,14 @@
 /**
  * Task Results store — persists completed task results per user for the History tab.
  * Saves the input prompt + full TaskResult so History can show real output and receipts.
+ *
+ * Uses atomic rename writes to prevent corruption on process crash.
  */
 
 import fs from 'fs';
 import path from 'path';
 import type { TaskResult } from '@clevercon/common';
+import { writeJsonSafe } from '@clevercon/common';
 
 const __dirname = path.dirname(path.resolve(process.argv[1]));
 const DATA_DIR = path.join(__dirname, '..', '..', '..', 'data');
@@ -40,9 +43,8 @@ function load(): Store {
 }
 
 function save(store: Store): void {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
   const trimmed = store.slice(-500); // cap at 500 entries
-  fs.writeFileSync(RESULTS_PATH, JSON.stringify(trimmed, null, 2), 'utf8');
+  writeJsonSafe(RESULTS_PATH, trimmed);
   cache = trimmed;
 }
 

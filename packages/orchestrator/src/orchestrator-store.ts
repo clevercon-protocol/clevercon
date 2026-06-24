@@ -4,10 +4,13 @@
  * Each user gets exactly one orchestrator keypair, generated on first creation.
  * The secret key is stored in plaintext for the hackathon.
  * In production this should be encrypted at rest.
+ *
+ * Uses atomic rename writes to prevent corruption on process crash.
  */
 
 import fs from 'fs';
 import path from 'path';
+import { writeJsonSafe } from '@clevercon/common';
 
 const __dirname = path.dirname(path.resolve(process.argv[1]));
 // process.argv[1] = .../packages/orchestrator/src/server.ts → go up 3 levels to workspace root
@@ -44,8 +47,7 @@ function load(): Store {
 }
 
 function save(store: Store): void {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), 'utf8');
+  writeJsonSafe(STORE_PATH, store);
   cache = store;
 }
 

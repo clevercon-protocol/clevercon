@@ -1,27 +1,32 @@
 #![no_std]
 //! AgentVault — Soroban smart contract (v2)
 //!
-//! Trustless treasury for AgentForge. Holds USDC for multiple users,
-//! manages per-user balances, registers personal orchestrators, and
-//! releases per-step payments to orchestrators during task execution.
+//! Trustless treasury for AgentForge. Holds multiple whitelisted assets (USDC, XLM, etc.)
+//! for users, manages per-user, per-asset balances, registers personal orchestrators,
+//! and releases per-step payments to orchestrators in the requested asset during task execution.
 //!
-//! Funds flow: User wallet → deposit() → contract
-//!             contract → release_payment() → orchestrator wallet
-//!             orchestrator → x402 → agent wallet
-//!
-//! The orchestrator is a relay: it briefly holds USDC for each step,
-//! pays the agent via standard x402, and returns to ~0 USDC balance.
+//! ### Multi-Asset Storage Layout Design
+//! In this multi-asset version, storage keys and structs are structured as follows:
+//! 1. `DataKey::UserAsset(User, Asset)`: Maps a user address and a specific token's SAC address
+//!    to `UserAssetAccount` which tracks asset-specific balances: balance, locked, total_deposited,
+//!    total_spent, and created_at.
+//! 2. `DataKey::UserConfig(User)`: Maps a user address to user-wide settings (`UserConfig`):
+//!    orchestrator, orchestrator_name, and active_tasks_count.
+//! 3. `DataKey::Task(task_id)`: Maps a task_id to `TaskInfo` which now includes the `asset: Address` field.
+//! 4. `DataKey::AssetSupported(Asset)`: Maps an asset SAC address to `true`, indicating it is a supported whitelisted asset.
 
 use soroban_sdk::{
     contract, contractevent, contractimpl, contracttype, log, token, Address, Env, String,
 };
 
-// ── Events ────────────────────────────────────────────────────────────────────
+// Events
 
 #[contractevent]
 pub struct DepositEvent {
     #[topic]
     pub user: Address,
+    #[topic]
+    pub asset: Address,
     pub amount: i128,
 }
 
@@ -29,6 +34,8 @@ pub struct DepositEvent {
 pub struct WithdrawEvent {
     #[topic]
     pub user: Address,
+    #[topic]
+    pub asset: Address,
     pub amount: i128,
 }
 
@@ -55,6 +62,7 @@ pub struct TaskNewEvent {
     pub orchestrator: Address,
     #[topic]
     pub task_id: u64,
+    pub asset: Address,
     pub plan_cost: i128,
 }
 
@@ -66,6 +74,7 @@ pub struct ReleaseEvent {
     pub orchestrator: Address,
     #[topic]
     pub task_id: u64,
+    pub asset: Address,
     pub amount: i128,
 }
 
@@ -75,11 +84,12 @@ pub struct TaskDoneEvent {
     pub user: Address,
     #[topic]
     pub task_id: u64,
+    pub asset: Address,
     pub spent: i128,
     pub refund: i128,
 }
 
-// ── Storage keys ──────────────────────────────────────────────────────────────
+// Storage keys
 
 /// Storage keys for all persistent and instance data in this contract.
 #[contracttype]
@@ -88,37 +98,73 @@ pub enum DataKey {
     Admin,
     /// USDC Stellar Asset Contract address, set once during `init`.
     UsdcSac,
-    /// Maps a user address to their [`UserAccount`].
-    User(Address),
+    /// Maps a user address and an asset address to their [`UserAssetAccount`].
+    UserAsset(Address, Address),
+    /// Maps a user address to their global user-wide [`UserConfig`].
+    UserConfig(Address),
     /// Maps a task_id to its [`TaskInfo`].
     Task(u64),
     /// Monotonically increasing counter used to allocate new task_ids.
     TaskCounter,
     /// Reverse lookup: maps an orchestrator address to the user address that registered it.
     OrchestratorOwner(Address),
+    /// Maps an asset address to a boolean indicating support status.
+    AssetSupported(Address),
+    /// Returns true if the contract is paused.
+    Paused,
 }
 
-// ── Data structs ──────────────────────────────────────────────────────────────
+// Data structs
 
-/// Per-user account state. Created on first deposit or register_orchestrator.
+/// Asset-specific balances and history for a user.
 #[contracttype]
 #[derive(Clone)]
-pub struct UserAccount {
-    /// Total USDC held (available + locked), in stroops.
+pub struct UserAssetAccount {
+    /// Total balance held (available + locked), in stroops.
     pub balance: i128,
-    /// Portion of `balance` reserved for active tasks.
+    /// Portion of `balance` reserved for active tasks in this asset.
     pub locked: i128,
     /// Lifetime deposits, for analytics.
     pub total_deposited: i128,
     /// Lifetime task spending, for analytics.
     pub total_spent: i128,
+    /// Ledger timestamp when this asset account was first created.
+    pub created_at: u64,
+}
+
+/// Global, asset-agnostic user settings.
+#[contracttype]
+#[derive(Clone)]
+pub struct UserConfig {
+    /// The orchestrator registered for this user, if any.
+    pub orchestrator: Option<Address>,
+    /// Human-readable name of the registered orchestrator.
+    pub orchestrator_name: String,
     /// Number of active tasks. Must be 0 to create a new task or withdraw.
+    pub active_tasks_count: u32,
+    /// Ledger timestamp when this configuration was first created.
+    pub created_at: u64,
+}
+
+/// Consolidated user account structure for external view queries.
+#[contracttype]
+#[derive(Clone)]
+pub struct UserAccount {
+    /// Total balance held (available + locked), in stroops.
+    pub balance: i128,
+    /// Portion of `balance` reserved for active tasks.
+    pub locked: i128,
+    /// Lifetime deposits.
+    pub total_deposited: i128,
+    /// Lifetime task spending.
+    pub total_spent: i128,
+    /// Number of active tasks.
     pub active_tasks_count: u32,
     /// The orchestrator registered for this user, if any.
     pub orchestrator: Option<Address>,
     /// Human-readable name of the registered orchestrator.
     pub orchestrator_name: String,
-    /// Ledger timestamp when this account was first created.
+    /// Ledger timestamp when this account record was created.
     pub created_at: u64,
 }
 
@@ -130,6 +176,8 @@ pub struct TaskInfo {
     pub user: Address,
     /// The orchestrator authorized to release payments for this task.
     pub orchestrator: Address,
+    /// The asset SAC address used for this task.
+    pub asset: Address,
     /// Total budget locked for this task, in stroops.
     pub plan_cost: i128,
     /// Amount released to the orchestrator so far, in stroops.
@@ -140,23 +188,29 @@ pub struct TaskInfo {
     pub created_at: u64,
 }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// Constants
 
 /// Tasks older than this that haven't completed can be force-finalized by anyone.
 const STALE_TASK_THRESHOLD_SECONDS: u64 = 1800; // 30 minutes
 
-// ── Contract ──────────────────────────────────────────────────────────────────
+const PERSISTENT_TTL_THRESHOLD: u32 = 17_280; // ~1 day
+const PERSISTENT_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
 
-/// The CleverVault contract — a trustless treasury that holds USDC on behalf of
-/// users and releases per-step payments to their registered orchestrators.
+const INSTANCE_TTL_THRESHOLD: u32 = 17_280; // ~1 day
+const INSTANCE_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
+
+// Contract
+
+/// The CleverVault contract — a trustless treasury that holds multiple whitelisted
+/// assets on behalf of users and releases per-step payments to their registered orchestrators.
 #[contract]
 pub struct AgentVault;
 
 #[contractimpl]
 impl AgentVault {
-    // ── Initialisation ────────────────────────────────────────────────────────
+    // Initialisation
 
-    /// One-time init — sets admin and USDC SAC address. Panics if called twice.
+    /// One-time init — sets admin and USDC SAC address, and automatically whitelists USDC.
     pub fn init(env: Env, admin: Address, usdc_sac: Address) {
         admin.require_auth();
         if env.storage().instance().has(&DataKey::Admin) {
@@ -165,6 +219,13 @@ impl AgentVault {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::UsdcSac, &usdc_sac);
         env.storage().instance().set(&DataKey::TaskCounter, &0u64);
+
+        // Automatically whitelist usdc_sac
+        let asset_key = DataKey::AssetSupported(usdc_sac.clone());
+        env.storage().persistent().set(&asset_key, &true);
+        Self::extend_persistent_ttl(&env, &asset_key);
+
+        Self::extend_instance_ttl(&env);
         log!(
             &env,
             "AgentVault initialized admin={} usdc_sac={}",
@@ -173,105 +234,175 @@ impl AgentVault {
         );
     }
 
-    // ── Deposits & Withdrawals ────────────────────────────────────────────────
+    // Asset Management
 
-    /// Deposit USDC from user's external wallet into their vault balance.
-    /// Creates the user account on first deposit.
-    pub fn deposit(env: Env, user: Address, amount: i128) {
+    /// Admin whitelists an accepted asset SAC token.
+    pub fn add_asset(env: Env, admin: Address, asset: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        assert_eq!(admin, stored_admin, "Only admin can call this");
+
+        let asset_key = DataKey::AssetSupported(asset.clone());
+        env.storage().persistent().set(&asset_key, &true);
+        Self::extend_persistent_ttl(&env, &asset_key);
+
+        log!(&env, "Asset added to whitelist: {}", asset);
+    }
+
+    /// Admin removes an asset from the whitelist.
+    pub fn remove_asset(env: Env, admin: Address, asset: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        assert_eq!(admin, stored_admin, "Only admin can call this");
+
+        let asset_key = DataKey::AssetSupported(asset.clone());
+        if env.storage().persistent().has(&asset_key) {
+            env.storage().persistent().remove(&asset_key);
+        }
+
+        log!(&env, "Asset removed from whitelist: {}", asset);
+    }
+
+    /// Public view function to check if an asset is supported.
+    pub fn is_supported_asset(env: Env, asset: Address) -> bool {
+        let asset_key = DataKey::AssetSupported(asset);
+        let result = env.storage().persistent().has(&asset_key);
+        if result {
+            Self::extend_persistent_ttl(&env, &asset_key);
+        }
+        result
+    }
+
+    // Deposits & Withdrawals
+
+    /// Deposit supported tokens from user's external wallet into their vault balance.
+    pub fn deposit(env: Env, user: Address, asset: Address, amount: i128) {
         user.require_auth();
+        Self::require_not_paused(&env);
         assert!(amount > 0, "Deposit must be positive");
+        assert!(
+            Self::is_supported_asset(env.clone(), asset.clone()),
+            "Asset not supported"
+        );
 
-        let usdc_sac: Address = env.storage().instance().get(&DataKey::UsdcSac).unwrap();
-        let usdc = token::Client::new(&env, &usdc_sac);
-        // Transfer USDC from user → contract. User must have approved this.
-        usdc.transfer(&user, env.current_contract_address(), &amount);
+        Self::extend_instance_ttl(&env);
+        let token_client = token::Client::new(&env, &asset);
+        // Transfer asset from user → contract. User must have approved this.
+        token_client.transfer(&user, env.current_contract_address(), &amount);
 
-        let mut account = Self::get_or_create_account(&env, &user);
-        account.balance += amount;
-        account.total_deposited += amount;
-        env.storage()
-            .persistent()
-            .set(&DataKey::User(user.clone()), &account);
+        // Ensure user config exists
+        let config = Self::get_or_create_config(&env, &user);
+        let config_key = DataKey::UserConfig(user.clone());
+        env.storage().persistent().set(&config_key, &config);
+        Self::extend_persistent_ttl(&env, &config_key);
+
+        let mut asset_account = Self::get_or_create_asset_account(&env, &user, &asset);
+        asset_account.balance += amount;
+        asset_account.total_deposited += amount;
+        let asset_key = DataKey::UserAsset(user.clone(), asset.clone());
+        env.storage().persistent().set(&asset_key, &asset_account);
+        Self::extend_persistent_ttl(&env, &asset_key);
 
         DepositEvent {
             user: user.clone(),
+            asset: asset.clone(),
             amount,
         }
         .publish(&env);
         log!(
             &env,
-            "deposit user={} amount={} new_balance={}",
+            "deposit user={} asset={} amount={} new_balance={}",
             user,
+            asset,
             amount,
-            account.balance
+            asset_account.balance
         );
     }
 
-    /// Withdraw USDC from vault back to user's external wallet.
+    /// Withdraw tokens from vault back to user's external wallet.
     /// BLOCKED while any task is active (active_tasks_count > 0).
-    pub fn withdraw(env: Env, user: Address, amount: i128) {
+    pub fn withdraw(env: Env, user: Address, asset: Address, amount: i128) {
         user.require_auth();
         assert!(amount > 0, "Withdrawal must be positive");
 
-        let mut account: UserAccount = env
+        let config_key = DataKey::UserConfig(user.clone());
+        let config: UserConfig = env
             .storage()
             .persistent()
-            .get(&DataKey::User(user.clone()))
-            .expect("No account");
+            .get(&config_key)
+            .expect("No config found");
+        Self::extend_persistent_ttl(&env, &config_key);
 
         assert!(
-            account.active_tasks_count == 0,
+            config.active_tasks_count == 0,
             "Cannot withdraw while tasks are active"
         );
-        assert!(account.balance >= amount, "Insufficient balance");
 
-        let usdc_sac: Address = env.storage().instance().get(&DataKey::UsdcSac).unwrap();
-        let usdc = token::Client::new(&env, &usdc_sac);
-        usdc.transfer(&env.current_contract_address(), &user, &amount);
-
-        account.balance -= amount;
-        env.storage()
+        let asset_key = DataKey::UserAsset(user.clone(), asset.clone());
+        let mut asset_account: UserAssetAccount = env
+            .storage()
             .persistent()
-            .set(&DataKey::User(user.clone()), &account);
+            .get(&asset_key)
+            .expect("No asset account");
+        Self::extend_persistent_ttl(&env, &asset_key);
+
+        assert!(asset_account.balance >= amount, "Insufficient balance");
+
+        Self::extend_instance_ttl(&env);
+        let token_client = token::Client::new(&env, &asset);
+        token_client.transfer(&env.current_contract_address(), &user, &amount);
+
+        asset_account.balance -= amount;
+        env.storage().persistent().set(&asset_key, &asset_account);
+        Self::extend_persistent_ttl(&env, &asset_key);
 
         WithdrawEvent {
             user: user.clone(),
+            asset: asset.clone(),
             amount,
         }
         .publish(&env);
         log!(
             &env,
-            "withdraw user={} amount={} remaining={}",
+            "withdraw user={} asset={} amount={} remaining={}",
             user,
+            asset,
             amount,
-            account.balance
+            asset_account.balance
         );
     }
 
-    // ── Orchestrator registration ─────────────────────────────────────────────
+    // Orchestrator registration
 
     /// Register a personal orchestrator for this user. ONE-TIME per user.
-    /// The user signs this transaction — the orchestrator address is stored on-chain.
     pub fn register_orchestrator(env: Env, user: Address, orchestrator: Address, name: String) {
         user.require_auth();
 
-        let mut account = Self::get_or_create_account(&env, &user);
+        let mut config = Self::get_or_create_config(&env, &user);
 
         assert!(
-            account.orchestrator.is_none(),
+            config.orchestrator.is_none(),
             "Orchestrator already registered for this user"
         );
 
-        account.orchestrator = Some(orchestrator.clone());
-        account.orchestrator_name = name.clone();
-        env.storage()
-            .persistent()
-            .set(&DataKey::User(user.clone()), &account);
+        config.orchestrator = Some(orchestrator.clone());
+        config.orchestrator_name = name.clone();
+        let config_key = DataKey::UserConfig(user.clone());
+        env.storage().persistent().set(&config_key, &config);
+        Self::extend_persistent_ttl(&env, &config_key);
 
         // Reverse lookup: orchestrator address → user address
-        env.storage()
-            .persistent()
-            .set(&DataKey::OrchestratorOwner(orchestrator.clone()), &user);
+        let owner_key = DataKey::OrchestratorOwner(orchestrator.clone());
+        env.storage().persistent().set(&owner_key, &user);
+        Self::extend_persistent_ttl(&env, &owner_key);
 
         RegOrchEvent {
             user: user.clone(),
@@ -286,174 +417,155 @@ impl AgentVault {
         );
     }
 
-    /// Update a user's registered orchestrator to a new address.
-    /// Requires user authentication and no active tasks.
-    pub fn update_orchestrator(env: Env, user: Address, new_orchestrator: Address, name: String) {
-        user.require_auth();
+    // Task lifecycle
 
-        let mut account: UserAccount = env
-            .storage()
-            .persistent()
-            .get(&DataKey::User(user.clone()))
-            .expect("No account");
-
-        let old_orchestrator = account.orchestrator.expect(
-            "No orchestrator registered. Use register_orchestrator instead.",
-        );
-
-        assert!(
-            account.active_tasks_count == 0,
-            "Cannot update orchestrator while tasks are active"
-        );
-
-        // Remove old reverse lookup
-        env.storage()
-            .persistent()
-            .remove(&DataKey::OrchestratorOwner(old_orchestrator.clone()));
-
-        // Update orchestrator in account
-        account.orchestrator = Some(new_orchestrator.clone());
-        account.orchestrator_name = name.clone();
-        env.storage()
-            .persistent()
-            .set(&DataKey::User(user.clone()), &account);
-
-        // Set new reverse lookup
-        env.storage()
-            .persistent()
-            .set(&DataKey::OrchestratorOwner(new_orchestrator.clone()), &user);
-
-        UpdateOrchEvent {
-            user: user.clone(),
-            old_orchestrator,
-            new_orchestrator: new_orchestrator.clone(),
-        }
-        .publish(&env);
-        log!(
-            &env,
-            "update_orchestrator user={} old_orch={} new_orch={}",
-            user,
-            old_orchestrator,
-            new_orchestrator
-        );
-    }
-
-    // ── Task lifecycle ────────────────────────────────────────────────────────
-
-    /// Orchestrator creates a task, locking plan_cost from user's available balance.
+    /// Orchestrator creates a task, locking plan_cost from user's available balance in the specified asset.
     /// Returns the new task_id. Only one active task per user at a time.
-    pub fn create_task(env: Env, orchestrator: Address, plan_cost: i128) -> u64 {
+    pub fn create_task(env: Env, orchestrator: Address, asset: Address, plan_cost: i128) -> u64 {
         orchestrator.require_auth();
+        Self::require_not_paused(&env);
         assert!(plan_cost > 0, "Plan cost must be positive");
+        assert!(
+            Self::is_supported_asset(env.clone(), asset.clone()),
+            "Asset not supported"
+        );
 
         // Resolve orchestrator → user
+        let owner_key = DataKey::OrchestratorOwner(orchestrator.clone());
         let user: Address = env
             .storage()
             .persistent()
-            .get(&DataKey::OrchestratorOwner(orchestrator.clone()))
+            .get(&owner_key)
             .expect("Orchestrator not registered");
+        Self::extend_persistent_ttl(&env, &owner_key);
 
-        let mut account: UserAccount = env
+        let config_key = DataKey::UserConfig(user.clone());
+        let mut config: UserConfig = env
             .storage()
             .persistent()
-            .get(&DataKey::User(user.clone()))
-            .expect("User account not found");
+            .get(&config_key)
+            .expect("User config not found");
+        Self::extend_persistent_ttl(&env, &config_key);
 
         assert!(
-            account.active_tasks_count == 0,
+            config.active_tasks_count == 0,
             "User already has an active task"
         );
 
-        let available = account.balance - account.locked;
+        let asset_key = DataKey::UserAsset(user.clone(), asset.clone());
+        let mut asset_account: UserAssetAccount = env
+            .storage()
+            .persistent()
+            .get(&asset_key)
+            .expect("User asset account not found");
+        Self::extend_persistent_ttl(&env, &asset_key);
+
+        let available = asset_account.balance - asset_account.locked;
         assert!(available >= plan_cost, "Insufficient available balance");
 
-        account.locked += plan_cost;
-        account.active_tasks_count += 1;
-        env.storage()
-            .persistent()
-            .set(&DataKey::User(user.clone()), &account);
+        asset_account.locked += plan_cost;
+        config.active_tasks_count += 1;
+        env.storage().persistent().set(&config_key, &config);
+        Self::extend_persistent_ttl(&env, &config_key);
+        env.storage().persistent().set(&asset_key, &asset_account);
+        Self::extend_persistent_ttl(&env, &asset_key);
 
         let mut counter: u64 = env
             .storage()
             .instance()
             .get(&DataKey::TaskCounter)
             .unwrap_or(0);
+        Self::extend_instance_ttl(&env);
         counter += 1;
 
         let task = TaskInfo {
             user: user.clone(),
             orchestrator: orchestrator.clone(),
+            asset: asset.clone(),
             plan_cost,
             spent: 0,
             completed: false,
             created_at: env.ledger().timestamp(),
         };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Task(counter), &task);
+        let task_key = DataKey::Task(counter);
+        env.storage().persistent().set(&task_key, &task);
+        Self::extend_persistent_ttl(&env, &task_key);
+
         env.storage()
             .instance()
             .set(&DataKey::TaskCounter, &counter);
+        Self::extend_instance_ttl(&env);
 
         TaskNewEvent {
             user: user.clone(),
             orchestrator: orchestrator.clone(),
             task_id: counter,
+            asset: asset.clone(),
             plan_cost,
         }
         .publish(&env);
         log!(
             &env,
-            "create_task id={} orchestrator={} plan_cost={}",
+            "create_task id={} orchestrator={} asset={} plan_cost={}",
             counter,
             orchestrator,
+            asset,
             plan_cost
         );
 
         counter
     }
 
-    /// Release funds for one step: contract transfers `amount` USDC to the ORCHESTRATOR.
-    /// The orchestrator then pays the agent via standard x402 (unchanged from Phase 9).
+    /// Release funds for one step: contract transfers `amount` tokens to the ORCHESTRATOR.
     /// Returns true on success.
-    pub fn release_payment(env: Env, orchestrator: Address, task_id: u64, amount: i128) -> bool {
+    pub fn release_payment(
+        env: Env,
+        orchestrator: Address,
+        task_id: u64,
+        asset: Address,
+        amount: i128,
+    ) -> bool {
         orchestrator.require_auth();
+        Self::require_not_paused(&env);
         assert!(amount > 0, "Amount must be positive");
 
+        let task_key = DataKey::Task(task_id);
         let mut task: TaskInfo = env
             .storage()
             .persistent()
-            .get(&DataKey::Task(task_id))
+            .get(&task_key)
             .expect("Task not found");
+        Self::extend_persistent_ttl(&env, &task_key);
 
         assert!(!task.completed, "Task already completed");
         assert!(
             task.orchestrator == orchestrator,
             "Not authorized for this task"
         );
+        assert!(task.asset == asset, "Asset mismatch for this task");
         assert!(task.spent + amount <= task.plan_cost, "Exceeds plan cost");
 
-        // Transfer USDC: contract → orchestrator wallet (NOT directly to agent)
-        let usdc_sac: Address = env.storage().instance().get(&DataKey::UsdcSac).unwrap();
-        let usdc = token::Client::new(&env, &usdc_sac);
-        usdc.transfer(&env.current_contract_address(), &orchestrator, &amount);
+        Self::extend_instance_ttl(&env);
+        let token_client = token::Client::new(&env, &asset);
+        token_client.transfer(&env.current_contract_address(), &orchestrator, &amount);
 
         task.spent += amount;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Task(task_id), &task);
+        env.storage().persistent().set(&task_key, &task);
+        Self::extend_persistent_ttl(&env, &task_key);
 
         ReleaseEvent {
             user: task.user.clone(),
             orchestrator: orchestrator.clone(),
             task_id,
+            asset: asset.clone(),
             amount,
         }
         .publish(&env);
         log!(
             &env,
-            "release_payment task={} amount={} total_spent={}",
+            "release_payment task={} asset={} amount={} total_spent={}",
             task_id,
+            asset,
             amount,
             task.spent
         );
@@ -462,34 +574,34 @@ impl AgentVault {
     }
 
     /// Orchestrator marks task complete.
-    /// Unlocks plan_cost from user balance, deducts only what was actually spent.
-    /// Any unused locked amount is returned to user's available balance.
     pub fn complete_task(env: Env, orchestrator: Address, task_id: u64) {
         orchestrator.require_auth();
         Self::finalize_task(&env, task_id, Some(&orchestrator));
     }
 
     /// User cancels their own task at any time.
-    /// Full refund of unspent locked amount.
     pub fn cancel_task(env: Env, user: Address, task_id: u64) {
         user.require_auth();
+        let task_key = DataKey::Task(task_id);
         let task: TaskInfo = env
             .storage()
             .persistent()
-            .get(&DataKey::Task(task_id))
+            .get(&task_key)
             .expect("Task not found");
+        Self::extend_persistent_ttl(&env, &task_key);
         assert!(task.user == user, "Not your task");
         Self::finalize_task(&env, task_id, None);
     }
 
     /// Safety escape hatch: anyone can finalize a task stuck for >30 minutes.
-    /// Does not transfer any funds — only restores user's balance accounting.
     pub fn force_complete_stale_task(env: Env, task_id: u64) {
+        let task_key = DataKey::Task(task_id);
         let task: TaskInfo = env
             .storage()
             .persistent()
-            .get(&DataKey::Task(task_id))
+            .get(&task_key)
             .expect("Task not found");
+        Self::extend_persistent_ttl(&env, &task_key);
         assert!(!task.completed, "Task already completed");
 
         let now = env.ledger().timestamp();
@@ -502,7 +614,20 @@ impl AgentVault {
         Self::finalize_task(&env, task_id, None);
     }
 
-    // ── Internal helpers ──────────────────────────────────────────────────────
+    // Internal helpers
+
+    /// Panics if the contract is paused.
+    fn require_not_paused(env: &Env) {
+        let paused = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        Self::extend_instance_ttl(env);
+        if paused {
+            panic!("Contract is paused");
+        }
+    }
 
     /// Shared finalization logic for `complete_task`, `cancel_task`, and
     /// `force_complete_stale_task`. Unlocks `plan_cost` from the user's balance,
@@ -511,48 +636,60 @@ impl AgentVault {
     /// If `expected_orchestrator` is `Some`, the caller must match the task's
     /// registered orchestrator (used by `complete_task`).
     fn finalize_task(env: &Env, task_id: u64, expected_orchestrator: Option<&Address>) {
+        let task_key = DataKey::Task(task_id);
         let mut task: TaskInfo = env
             .storage()
             .persistent()
-            .get(&DataKey::Task(task_id))
+            .get(&task_key)
             .expect("Task not found");
+        Self::extend_persistent_ttl(env, &task_key);
         assert!(!task.completed, "Already completed");
 
         if let Some(orch) = expected_orchestrator {
             assert!(task.orchestrator == *orch, "Not authorized");
         }
 
-        let mut account: UserAccount = env
+        let config_key = DataKey::UserConfig(task.user.clone());
+        let mut config: UserConfig = env
             .storage()
             .persistent()
-            .get(&DataKey::User(task.user.clone()))
-            .expect("User not found");
+            .get(&config_key)
+            .expect("User config not found");
+        Self::extend_persistent_ttl(env, &config_key);
 
-        // Unlock plan_cost from locked, deduct only actual spend from balance.
-        // Refund = plan_cost - spent is implicitly restored to available balance.
-        account.locked -= task.plan_cost;
-        account.balance -= task.spent;
-        account.total_spent += task.spent;
-        account.active_tasks_count -= 1;
-        env.storage()
+        let asset_key = DataKey::UserAsset(task.user.clone(), task.asset.clone());
+        let mut asset_account: UserAssetAccount = env
+            .storage()
             .persistent()
-            .set(&DataKey::User(task.user.clone()), &account);
+            .get(&asset_key)
+            .expect("User asset account not found");
+        Self::extend_persistent_ttl(env, &asset_key);
+
+        asset_account.locked -= task.plan_cost;
+        asset_account.balance -= task.spent;
+        asset_account.total_spent += task.spent;
+        config.active_tasks_count -= 1;
+
+        env.storage().persistent().set(&config_key, &config);
+        Self::extend_persistent_ttl(env, &config_key);
+        env.storage().persistent().set(&asset_key, &asset_account);
+        Self::extend_persistent_ttl(env, &asset_key);
 
         task.completed = true;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Task(task_id), &task);
+        env.storage().persistent().set(&task_key, &task);
+        Self::extend_persistent_ttl(env, &task_key);
 
         let refund = task.plan_cost - task.spent;
         TaskDoneEvent {
             user: task.user.clone(),
             task_id,
+            asset: task.asset.clone(),
             spent: task.spent,
             refund,
         }
         .publish(env);
         log!(
-            &env,
+            env,
             "finalize_task id={} spent={} refund={}",
             task_id,
             task.spent,
@@ -560,67 +697,210 @@ impl AgentVault {
         );
     }
 
-    /// Loads the user's account, or returns a fresh zeroed [`UserAccount`] if
-    /// this is their first interaction with the contract.
-    fn get_or_create_account(env: &Env, user: &Address) -> UserAccount {
-        env.storage()
+    /// Loads the user's asset account balance, or returns a zeroed struct if not found.
+    fn get_or_create_asset_account(env: &Env, user: &Address, asset: &Address) -> UserAssetAccount {
+        let key = DataKey::UserAsset(user.clone(), asset.clone());
+        let account = env
+            .storage()
             .persistent()
-            .get::<_, UserAccount>(&DataKey::User(user.clone()))
-            .unwrap_or(UserAccount {
+            .get::<_, UserAssetAccount>(&key)
+            .unwrap_or(UserAssetAccount {
                 balance: 0,
                 locked: 0,
                 total_deposited: 0,
                 total_spent: 0,
-                active_tasks_count: 0,
+                created_at: env.ledger().timestamp(),
+            });
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(env, &key);
+        }
+        account
+    }
+
+    /// Loads the user's config, or returns a fresh zeroed [`UserConfig`] if not found.
+    fn get_or_create_config(env: &Env, user: &Address) -> UserConfig {
+        let key = DataKey::UserConfig(user.clone());
+        let config = env
+            .storage()
+            .persistent()
+            .get::<_, UserConfig>(&key)
+            .unwrap_or(UserConfig {
                 orchestrator: None,
                 orchestrator_name: String::from_str(env, ""),
+                active_tasks_count: 0,
                 created_at: env.ledger().timestamp(),
-            })
+            });
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(env, &key);
+        }
+        config
     }
 
-    // ── Read-only views ───────────────────────────────────────────────────────
+    fn extend_persistent_ttl(env: &Env, key: &DataKey) {
+        env.storage().persistent().extend_ttl(
+            key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
+    }
 
-    /// Total USDC balance for user (available + locked), in stroops.
-    pub fn get_balance(env: Env, user: Address) -> i128 {
+    fn extend_instance_ttl(env: &Env) {
         env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+    }
+
+    // Read-only views
+
+    /// Total balance for user and asset (available + locked), in stroops.
+    pub fn get_balance(env: Env, user: Address, asset: Address) -> i128 {
+        let key = DataKey::UserAsset(user, asset);
+        let result = env
+            .storage()
             .persistent()
-            .get::<_, UserAccount>(&DataKey::User(user))
+            .get::<_, UserAssetAccount>(&key)
             .map(|a| a.balance)
-            .unwrap_or(0)
+            .unwrap_or(0);
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(&env, &key);
+        }
+        result
     }
 
-    /// Available (non-locked) USDC for user, in stroops.
-    pub fn get_available(env: Env, user: Address) -> i128 {
-        env.storage()
+    /// Available (non-locked) balance for user and asset, in stroops.
+    pub fn get_available(env: Env, user: Address, asset: Address) -> i128 {
+        let key = DataKey::UserAsset(user, asset);
+        let result = env
+            .storage()
             .persistent()
-            .get::<_, UserAccount>(&DataKey::User(user))
+            .get::<_, UserAssetAccount>(&key)
             .map(|a| a.balance - a.locked)
-            .unwrap_or(0)
+            .unwrap_or(0);
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(&env, &key);
+        }
+        result
     }
 
-    /// Full account record for a user (balance, locked, orchestrator, etc.).
-    pub fn get_account(env: Env, user: Address) -> Option<UserAccount> {
-        env.storage().persistent().get(&DataKey::User(user))
+    /// Full account record for a user and asset (balance, locked, orchestrator, etc.).
+    pub fn get_account(env: Env, user: Address, asset: Address) -> Option<UserAccount> {
+        let asset_key = DataKey::UserAsset(user.clone(), asset);
+        let asset_account: Option<UserAssetAccount> = env.storage().persistent().get(&asset_key);
+        if env.storage().persistent().has(&asset_key) {
+            Self::extend_persistent_ttl(&env, &asset_key);
+        }
+
+        let config_key = DataKey::UserConfig(user.clone());
+        let config: Option<UserConfig> = env.storage().persistent().get(&config_key);
+        if env.storage().persistent().has(&config_key) {
+            Self::extend_persistent_ttl(&env, &config_key);
+        }
+
+        match (asset_account, config) {
+            (Some(a), Some(c)) => Some(UserAccount {
+                balance: a.balance,
+                locked: a.locked,
+                total_deposited: a.total_deposited,
+                total_spent: a.total_spent,
+                active_tasks_count: c.active_tasks_count,
+                orchestrator: c.orchestrator,
+                orchestrator_name: c.orchestrator_name,
+                created_at: a.created_at,
+            }),
+            (Some(a), None) => Some(UserAccount {
+                balance: a.balance,
+                locked: a.locked,
+                total_deposited: a.total_deposited,
+                total_spent: a.total_spent,
+                active_tasks_count: 0,
+                orchestrator: None,
+                orchestrator_name: String::from_str(&env, ""),
+                created_at: a.created_at,
+            }),
+            (None, Some(c)) => Some(UserAccount {
+                balance: 0,
+                locked: 0,
+                total_deposited: 0,
+                total_spent: 0,
+                active_tasks_count: c.active_tasks_count,
+                orchestrator: c.orchestrator,
+                orchestrator_name: c.orchestrator_name,
+                created_at: c.created_at,
+            }),
+            (None, None) => None,
+        }
     }
 
     /// Full task record by task_id.
     pub fn get_task(env: Env, task_id: u64) -> Option<TaskInfo> {
-        env.storage().persistent().get(&DataKey::Task(task_id))
+        let key = DataKey::Task(task_id);
+        let result = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(&env, &key);
+        }
+        result
     }
 
     /// Reverse lookup: given an orchestrator address, return the user it belongs to.
     pub fn get_orchestrator_owner(env: Env, orchestrator: Address) -> Option<Address> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::OrchestratorOwner(orchestrator))
+        let key = DataKey::OrchestratorOwner(orchestrator);
+        let result = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(&env, &key);
+        }
+        result
     }
 
     /// Total number of tasks ever created across all users.
     pub fn task_count(env: Env) -> u64 {
-        env.storage()
+        let result = env
+            .storage()
             .instance()
             .get(&DataKey::TaskCounter)
-            .unwrap_or(0)
+            .unwrap_or(0);
+        Self::extend_instance_ttl(&env);
+        result
+    }
+
+    // ── Pause / Unpause ─────────────────────────────────────────────────
+
+    /// Pauses the contract, blocking deposit, create_task, and release_payment.
+    pub fn pause(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        assert!(admin == stored_admin, "admin must match stored admin");
+
+        env.storage().instance().set(&DataKey::Paused, &true);
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Unpauses the contract, restoring normal operation.
+    pub fn unpause(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        assert!(admin == stored_admin, "admin must match stored admin");
+
+        env.storage().instance().set(&DataKey::Paused, &false);
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Returns true if the contract is paused.
+    pub fn is_paused(env: Env) -> bool {
+        let paused = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        Self::extend_instance_ttl(&env);
+        paused
     }
 }
 

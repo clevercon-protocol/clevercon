@@ -4,6 +4,7 @@ import cors from 'cors';
 import { loadAgents, findAgent, upsertAgent, removeAgent } from './store.js';
 import { updateReputation } from './reputation.js';
 import { matchCapabilities } from './search.js';
+import { validateRegistration } from './validate.js';
 import { logger } from '@clevercon/common';
 import type { AgentManifest, AgentFeedback, AgentRecord } from '@clevercon/common';
 
@@ -17,11 +18,10 @@ app.use(express.json());
 app.post('/register', (req, res) => {
   const body = req.body as Partial<AgentManifest> & { registered_by?: string };
 
-  // Validate required fields
+  // Validate required top-level fields are present
   const required = [
     'agent_id',
     'name',
-    'description',
     'capabilities',
     'pricing',
     'endpoint',
@@ -30,7 +30,18 @@ app.post('/register', (req, res) => {
   ];
   const missing = required.filter((f) => !(f in body));
   if (missing.length > 0) {
-    return res.status(400).json({ error: `Missing fields: ${missing.join(', ')}` });
+    return res
+      .status(400)
+      .json({ error: `Missing fields: ${missing.join(', ')}`, fields: missing });
+  }
+
+  // Validate field values
+  const invalidFields = validateRegistration(body as Record<string, unknown>);
+  if (invalidFields.length > 0) {
+    return res.status(400).json({
+      error: `Invalid field values: ${invalidFields.join(', ')}`,
+      fields: invalidFields,
+    });
   }
 
   const now = new Date().toISOString();
