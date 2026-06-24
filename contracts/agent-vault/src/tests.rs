@@ -250,6 +250,97 @@ fn test_register_orchestrator_twice_panics() {
         .register_orchestrator(&user, &orchestrator2, &name);
 }
 
+// ── 4.5. Update Orchestrator Tests ───────────────────────────────────────────
+
+#[test]
+fn test_update_orchestrator_success() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let orchestrator1 = Address::generate(&test_env.env);
+    let orchestrator2 = Address::generate(&test_env.env);
+    let name1 = soroban_sdk::String::from_str(&test_env.env, "OldOrchestrator");
+    let name2 = soroban_sdk::String::from_str(&test_env.env, "NewOrchestrator");
+
+    // Register initial orchestrator
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator1, &name1);
+
+    // Update to new orchestrator
+    test_env
+        .client
+        .update_orchestrator(&user, &orchestrator2, &name2);
+
+    // Verify new orchestrator is stored
+    let account = test_env.client.get_account(&user).unwrap();
+    assert_eq!(account.orchestrator.unwrap(), orchestrator2);
+    assert_eq!(account.orchestrator_name, name2);
+
+    // Verify old reverse lookup is removed
+    assert_eq!(
+        test_env
+            .client
+            .get_orchestrator_owner(&orchestrator1),
+        None
+    );
+
+    // Verify new reverse lookup is set
+    assert_eq!(
+        test_env
+            .client
+            .get_orchestrator_owner(&orchestrator2)
+            .unwrap(),
+        user
+    );
+}
+
+#[test]
+#[should_panic(expected = "Cannot update orchestrator while tasks are active")]
+fn test_update_orchestrator_blocked_active_task() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let orchestrator1 = Address::generate(&test_env.env);
+    let orchestrator2 = Address::generate(&test_env.env);
+    let name1 = soroban_sdk::String::from_str(&test_env.env, "OldOrchestrator");
+    let name2 = soroban_sdk::String::from_str(&test_env.env, "NewOrchestrator");
+
+    test_env.token_admin_client.mint(&user, &1000);
+    test_env.client.deposit(&user, &600);
+
+    // Register initial orchestrator
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator1, &name1);
+
+    // Create a task to set active_tasks_count = 1
+    test_env.client.create_task(&orchestrator1, &100);
+
+    // Attempt to update orchestrator while task is active
+    test_env
+        .client
+        .update_orchestrator(&user, &orchestrator2, &name2);
+}
+
+#[test]
+#[should_panic(expected = "No orchestrator registered")]
+fn test_update_orchestrator_no_orchestrator_registered() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "MyOrchestrator");
+
+    // Try to update without registering first
+    test_env
+        .client
+        .update_orchestrator(&user, &orchestrator, &name);
+}
+
 // ── 5. Create Task Tests ─────────────────────────────────────────────────────
 
 #[test]

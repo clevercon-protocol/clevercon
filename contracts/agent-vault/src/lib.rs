@@ -40,6 +40,14 @@ pub struct RegOrchEvent {
 }
 
 #[contractevent]
+pub struct UpdateOrchEvent {
+    #[topic]
+    pub user: Address,
+    pub old_orchestrator: Address,
+    pub new_orchestrator: Address,
+}
+
+#[contractevent]
 pub struct TaskNewEvent {
     #[topic]
     pub user: Address,
@@ -275,6 +283,58 @@ impl AgentVault {
             "register_orchestrator user={} orchestrator={}",
             user,
             orchestrator
+        );
+    }
+
+    /// Update a user's registered orchestrator to a new address.
+    /// Requires user authentication and no active tasks.
+    pub fn update_orchestrator(env: Env, user: Address, new_orchestrator: Address, name: String) {
+        user.require_auth();
+
+        let mut account: UserAccount = env
+            .storage()
+            .persistent()
+            .get(&DataKey::User(user.clone()))
+            .expect("No account");
+
+        let old_orchestrator = account.orchestrator.expect(
+            "No orchestrator registered. Use register_orchestrator instead.",
+        );
+
+        assert!(
+            account.active_tasks_count == 0,
+            "Cannot update orchestrator while tasks are active"
+        );
+
+        // Remove old reverse lookup
+        env.storage()
+            .persistent()
+            .remove(&DataKey::OrchestratorOwner(old_orchestrator.clone()));
+
+        // Update orchestrator in account
+        account.orchestrator = Some(new_orchestrator.clone());
+        account.orchestrator_name = name.clone();
+        env.storage()
+            .persistent()
+            .set(&DataKey::User(user.clone()), &account);
+
+        // Set new reverse lookup
+        env.storage()
+            .persistent()
+            .set(&DataKey::OrchestratorOwner(new_orchestrator.clone()), &user);
+
+        UpdateOrchEvent {
+            user: user.clone(),
+            old_orchestrator,
+            new_orchestrator: new_orchestrator.clone(),
+        }
+        .publish(&env);
+        log!(
+            &env,
+            "update_orchestrator user={} old_orch={} new_orch={}",
+            user,
+            old_orchestrator,
+            new_orchestrator
         );
     }
 
