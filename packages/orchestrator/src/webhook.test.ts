@@ -12,14 +12,45 @@ describe('validateWebhookUrl', () => {
     expect(validateWebhookUrl({})).toBe(false);
   });
 
-  it('returns true for valid http/https URLs', () => {
-    expect(validateWebhookUrl('http://localhost:3000')).toBe(true);
+  it('returns true for valid public http/https URLs', () => {
     expect(validateWebhookUrl('https://example.com/webhook')).toBe(true);
+    expect(validateWebhookUrl('http://142.250.190.46/webhook')).toBe(true);
   });
 
   it('returns false for invalid or unsupported protocol URLs', () => {
     expect(validateWebhookUrl('ftp://example.com')).toBe(false);
     expect(validateWebhookUrl('not-a-url')).toBe(false);
+  });
+
+  it('rejects loopback and private IPs in production mode', () => {
+    const originalVitest = process.env.VITEST;
+    const originalNodeEnv = process.env.NODE_ENV;
+    
+    // Temporarily remove test/dev environment bypass flags
+    delete process.env.VITEST;
+    process.env.NODE_ENV = 'production';
+
+    try {
+      expect(validateWebhookUrl('http://localhost:3000')).toBe(false);
+      expect(validateWebhookUrl('http://127.0.0.1:3000')).toBe(false);
+      expect(validateWebhookUrl('http://10.0.0.1')).toBe(false);
+      expect(validateWebhookUrl('http://192.168.1.1')).toBe(false);
+      expect(validateWebhookUrl('http://172.16.0.1')).toBe(false);
+      expect(validateWebhookUrl('http://169.254.169.254')).toBe(false);
+      expect(validateWebhookUrl('http://[::1]')).toBe(false);
+      expect(validateWebhookUrl('http://[fe80::1]')).toBe(false);
+      expect(validateWebhookUrl('http://[fc00::1]')).toBe(false);
+    } finally {
+      process.env.VITEST = originalVitest;
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it('allows loopback and private IPs in dev/test mode', () => {
+    // Under vitest, process.env.VITEST is set
+    expect(validateWebhookUrl('http://localhost:3000')).toBe(true);
+    expect(validateWebhookUrl('http://127.0.0.1:3000')).toBe(true);
+    expect(validateWebhookUrl('http://10.0.0.1')).toBe(true);
   });
 });
 
@@ -36,20 +67,18 @@ describe('sendWebhookWithRetry', () => {
     } as Response);
 
     const payload = { task_id: 'test-123', status: 'completed' };
-    await sendWebhookWithRetry('http://example.com/webhook', payload);
+    await sendWebhookWithRetry('http://example.com/webhook?token=secret123', payload);
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledWith(
-      'http://example.com/webhook',
+      'http://example.com/webhook?token=secret123',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify(payload),
       }),
     );
     expect(consoleLogSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Webhook delivered to http://example.com/webhook with HTTP status 200',
-      ),
+      expect.stringContaining('Webhook delivered to http://example.com with HTTP status 200'),
     );
   });
 
@@ -77,9 +106,7 @@ describe('sendWebhookWithRetry', () => {
       expect.stringContaining('Webhook delivery failed (HTTP status: 500). Retrying once…'),
     );
     expect(consoleLogSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Webhook delivered to http://example.com/webhook with HTTP status 200',
-      ),
+      expect.stringContaining('Webhook delivered to http://example.com with HTTP status 200'),
     );
   });
 
@@ -97,7 +124,28 @@ describe('sendWebhookWithRetry', () => {
       expect.stringContaining('Webhook delivery failed (error: fetch failed). Retrying once…'),
     );
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Webhook delivery failed after retrying: fetch failed'),
+      expect.stringContaining('Webhook delivery failed to http://example.com: fetch failed'),
+    );
+  });
+
+  it('retries once and logs failure on permanent HTTP 500 status (retry exhaustion)', async () => {
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
+      status: 500,
+      text: () => Promise.resolve('error'),
+    } as Response);
+
+    const payload = { task_id: 'test-exhaustion', status: 'completed' };
+    await sendWebhookWithRetry('http://example.com/webhook', payload);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Webhook delivery failed (HTTP status: 500). Retrying once…'),
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Webhook delivery failed to http://example.com: HTTP status 500'),
     );
   });
 });
