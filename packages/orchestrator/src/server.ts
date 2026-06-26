@@ -863,7 +863,40 @@ export function validateWebhookUrl(webhook_url: any): boolean {
   if (typeof webhook_url !== 'string') return false;
   try {
     const parsed = new URL(webhook_url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+
+    const hostname = parsed.hostname.toLowerCase();
+
+    // Allow loopback/private destinations only in development or test environments
+    if (process.env.NODE_ENV === 'development' || process.env.VITEST) {
+      return true;
+    }
+
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]') {
+      return false;
+    }
+
+    // Check RFC1918 private IPv4 addresses (10.x.x.x, 192.168.x.x, 172.16.x.x-172.31.x.x)
+    // Check link-local IP (169.254.x.x)
+    const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+    const match = hostname.match(ipv4Regex);
+    if (match) {
+      const [, p1, p2, p3, p4] = match.map(Number);
+      if (p1 > 255 || p2 > 255 || p3 > 255 || p4 > 255) return false;
+      if (p1 === 127 || p1 === 10 || p1 === 0) return false;
+      if (p1 === 172 && p2 >= 16 && p2 <= 31) return false;
+      if (p1 === 192 && p2 === 168) return false;
+      if (p1 === 169 && p2 === 254) return false;
+    }
+
+    // Check IPv6 loopback, link-local, and unique local addresses
+    if (hostname.startsWith('[') && hostname.endsWith(']')) {
+      const ipv6 = hostname.slice(1, -1);
+      if (ipv6 === '::1' || ipv6 === '0:0:0:0:0:0:0:1') return false;
+      if (ipv6.startsWith('fe80:') || ipv6.startsWith('fc00:') || ipv6.startsWith('fd00:')) return false;
+    }
+
+    return true;
   } catch {
     return false;
   }
@@ -1305,7 +1338,7 @@ async function runTask(
     } else {
       triggerWebhook({
         task_id,
-        status: 'completed',
+        status: result.status === 'partial' ? 'partial' : 'completed',
         result: result.final_output,
         cost_usdc: result.total_cost.toString(),
         duration_ms: result.total_time_ms,
