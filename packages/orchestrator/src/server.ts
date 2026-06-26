@@ -55,16 +55,16 @@ import { saveTaskResult, getTaskResults, deleteTaskResult } from './task-results
 const PORT = parseInt(process.env.ORCHESTRATOR_PORT || process.env.PORT || '3000');
 const REGISTRY_URL = process.env.REGISTRY_URL || 'http://localhost:4000';
 const BUDGET_DEFAULT = parseFloat(process.env.DEFAULT_BUDGET || '1.0');
-const SECRET_KEY = process.env.ORCHESTRATOR_SECRET_KEY!;
+const SECRET_KEY = process.env.ORCHESTRATOR_SECRET_KEY;
 // How long to wait for user to approve a plan before auto-approving (ms)
 const APPROVAL_TIMEOUT_MS = parseInt(process.env.PLAN_APPROVAL_TIMEOUT_MS || '60000');
 
-if (!SECRET_KEY) {
+if (!SECRET_KEY && !process.env.VITEST) {
   console.error('[Orchestrator] ORCHESTRATOR_SECRET_KEY not set');
   process.exit(1);
 }
 
-const keypair = Keypair.fromSecret(SECRET_KEY);
+const keypair = Keypair.fromSecret(SECRET_KEY || Keypair.random().secret());
 const ORCHESTRATOR_ADDRESS = keypair.publicKey();
 
 // ── USDC helpers ───────────────────────────────────────────────────────────────
@@ -857,6 +857,18 @@ app.post('/api/tasks/preview', async (req, res) => {
   });
 });
 
+/** Validate webhook_url parameter */
+export function validateWebhookUrl(webhook_url: any): boolean {
+  if (webhook_url === undefined) return true;
+  if (typeof webhook_url !== 'string') return false;
+  try {
+    const parsed = new URL(webhook_url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 // Submit a task
 app.post('/api/tasks', async (req, res) => {
   const { task, budget, user_address, webhook_url } = req.body as {
@@ -870,15 +882,8 @@ app.post('/api/tasks', async (req, res) => {
     return res.status(400).json({ error: 'task is required' });
   }
 
-  if (webhook_url !== undefined) {
-    if (typeof webhook_url !== 'string') {
-      return res.status(400).json({ error: 'webhook_url must be a string' });
-    }
-    try {
-      new URL(webhook_url);
-    } catch (err) {
-      return res.status(400).json({ error: 'webhook_url must be a valid URL' });
-    }
+  if (!validateWebhookUrl(webhook_url)) {
+    return res.status(400).json({ error: 'webhook_url must be a valid URL' });
   }
 
   const taskBudget = typeof budget === 'number' && budget > 0 ? budget : BUDGET_DEFAULT;
@@ -955,7 +960,7 @@ app.post('/api/tasks/:id/reject', (req, res) => {
 /**
  * Asynchronously sends task result to the webhook URL with retry logic.
  */
-async function sendWebhookWithRetry(webhookUrl: string, payload: unknown): Promise<void> {
+export async function sendWebhookWithRetry(webhookUrl: string, payload: unknown): Promise<void> {
   const send = async (): Promise<{ status?: number; error?: any }> => {
     try {
       const response = await fetch(webhookUrl, {
@@ -984,9 +989,13 @@ async function sendWebhookWithRetry(webhookUrl: string, payload: unknown): Promi
   }
 
   if (result.error) {
-    console.error(`[Orchestrator] Webhook delivery failed after retrying: ${(result.error as Error).message ?? String(result.error)}`);
+    console.error(
+      `[Orchestrator] Webhook delivery failed after retrying: ${(result.error as Error).message ?? String(result.error)}`,
+    );
   } else {
-    console.log(`[Orchestrator] Webhook delivered to ${webhookUrl} with HTTP status ${result.status}`);
+    console.log(
+      `[Orchestrator] Webhook delivered to ${webhookUrl} with HTTP status ${result.status}`,
+    );
   }
 }
 
@@ -1343,13 +1352,15 @@ server.on('upgrade', (request, socket, head) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`[Orchestrator] Running on port ${PORT}`);
-  console.log(`[Orchestrator] Wallet: ${ORCHESTRATOR_ADDRESS}`);
-  console.log(`[Orchestrator] Registry: ${REGISTRY_URL}`);
-  console.log(`[Orchestrator] WebSocket: ws://localhost:${PORT}/ws`);
-  console.log(`[Orchestrator] Plan approval timeout: ${APPROVAL_TIMEOUT_MS / 1000}s`);
+if (!process.env.VITEST) {
+  server.listen(PORT, () => {
+    console.log(`[Orchestrator] Running on port ${PORT}`);
+    console.log(`[Orchestrator] Wallet: ${ORCHESTRATOR_ADDRESS}`);
+    console.log(`[Orchestrator] Registry: ${REGISTRY_URL}`);
+    console.log(`[Orchestrator] WebSocket: ws://localhost:${PORT}/ws`);
+    console.log(`[Orchestrator] Plan approval timeout: ${APPROVAL_TIMEOUT_MS / 1000}s`);
 
-  // Ensure the shared orchestrator wallet is funded and has a USDC trustline
-  setupSharedWallet(keypair).catch(() => {});
-});
+    // Ensure the shared orchestrator wallet is funded and has a USDC trustline
+    setupSharedWallet(keypair).catch(() => {});
+  });
+}
