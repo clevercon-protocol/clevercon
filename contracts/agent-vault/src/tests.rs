@@ -1165,8 +1165,8 @@ fn test_get_user_tasks_single() {
     t.client.init(&t.admin, &t.usdc_sac);
     let user = Address::generate(&t.env);
     let orchestrator = Address::generate(&t.env);
-    t.token_admin_client.mint(&user, &1_000_0000000i128);
-    t.client.deposit(&user, &t.usdc_sac, &1_000_0000000i128);
+    t.token_admin_client.mint(&user, &10_000_000_000_i128);
+    t.client.deposit(&user, &t.usdc_sac, &10_000_000_000_i128);
     t.client.register_orchestrator(
         &user,
         &orchestrator,
@@ -1174,7 +1174,7 @@ fn test_get_user_tasks_single() {
     );
     let id = t
         .client
-        .create_task(&orchestrator, &t.usdc_sac, &100_0000000i128);
+        .create_task(&orchestrator, &t.usdc_sac, &1_000_000_000_i128);
     let tasks = t.client.get_user_tasks(&user);
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks.get(0).unwrap(), id);
@@ -1186,8 +1186,8 @@ fn test_get_user_tasks_multiple_in_order() {
     t.client.init(&t.admin, &t.usdc_sac);
     let user = Address::generate(&t.env);
     let orchestrator = Address::generate(&t.env);
-    t.token_admin_client.mint(&user, &3_000_0000000i128);
-    t.client.deposit(&user, &t.usdc_sac, &3_000_0000000i128);
+    t.token_admin_client.mint(&user, &30_000_000_000_i128);
+    t.client.deposit(&user, &t.usdc_sac, &30_000_000_000_i128);
     t.client.register_orchestrator(
         &user,
         &orchestrator,
@@ -1195,11 +1195,11 @@ fn test_get_user_tasks_multiple_in_order() {
     );
     let id1 = t
         .client
-        .create_task(&orchestrator, &t.usdc_sac, &100_0000000i128);
+        .create_task(&orchestrator, &t.usdc_sac, &1_000_000_000_i128);
     t.client.complete_task(&orchestrator, &id1);
     let id2 = t
         .client
-        .create_task(&orchestrator, &t.usdc_sac, &100_0000000i128);
+        .create_task(&orchestrator, &t.usdc_sac, &1_000_000_000_i128);
     t.client.complete_task(&orchestrator, &id2);
     let tasks = t.client.get_user_tasks(&user);
     assert_eq!(tasks.len(), 2);
@@ -1214,15 +1214,15 @@ fn test_get_user_tasks_separate_users() {
     let user1 = Address::generate(&t.env);
     let user2 = Address::generate(&t.env);
     let orchestrator = Address::generate(&t.env);
-    t.token_admin_client.mint(&user1, &1_000_0000000i128);
-    t.client.deposit(&user1, &t.usdc_sac, &1_000_0000000i128);
+    t.token_admin_client.mint(&user1, &10_000_000_000_i128);
+    t.client.deposit(&user1, &t.usdc_sac, &10_000_000_000_i128);
     t.client.register_orchestrator(
         &user1,
         &orchestrator,
         &soroban_sdk::String::from_str(&t.env, "orch1"),
     );
     t.client
-        .create_task(&orchestrator, &t.usdc_sac, &100_0000000i128);
+        .create_task(&orchestrator, &t.usdc_sac, &1_000_000_000_i128);
     assert_eq!(t.client.get_user_tasks(&user2).len(), 0);
     assert_eq!(t.client.get_user_tasks(&user1).len(), 1);
 }
