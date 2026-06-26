@@ -26,7 +26,9 @@ export async function getXLMUSDCTrades(limit: number = 20) {
 
 export async function getOrderbook() {
   return getCached('price:orderbook', CACHE_TTLS.priceMs, async () => {
-    const orderbook = await server.orderbook(Asset.native(), new Asset(USDC_CODE, USDC_ISSUER)).call();
+    const orderbook = await server
+      .orderbook(Asset.native(), new Asset(USDC_CODE, USDC_ISSUER))
+      .call();
 
     return {
       bids: orderbook.bids.slice(0, 5).map((b) => ({ price: b.price, amount: b.amount })),
