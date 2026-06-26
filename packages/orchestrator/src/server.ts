@@ -859,14 +859,26 @@ app.post('/api/tasks/preview', async (req, res) => {
 
 // Submit a task
 app.post('/api/tasks', async (req, res) => {
-  const { task, budget, user_address } = req.body as {
+  const { task, budget, user_address, webhook_url } = req.body as {
     task?: string;
     budget?: number;
     user_address?: string;
+    webhook_url?: string;
   };
 
   if (!task || typeof task !== 'string' || task.trim().length === 0) {
     return res.status(400).json({ error: 'task is required' });
+  }
+
+  if (webhook_url !== undefined) {
+    if (typeof webhook_url !== 'string') {
+      return res.status(400).json({ error: 'webhook_url must be a string' });
+    }
+    try {
+      new URL(webhook_url);
+    } catch (err) {
+      return res.status(400).json({ error: 'webhook_url must be a valid URL' });
+    }
   }
 
   const taskBudget = typeof budget === 'number' && budget > 0 ? budget : BUDGET_DEFAULT;
@@ -904,7 +916,7 @@ app.post('/api/tasks', async (req, res) => {
   res.status(202).json({ status: 'accepted', task_id, task, budget: taskBudget });
   broadcast('task_accepted', { task_id, task, budget: taskBudget });
 
-  runTask(task_id, task, taskBudget, user_address ?? null).catch((err) => {
+  runTask(task_id, task, taskBudget, user_address ?? null, webhook_url).catch((err) => {
     console.error('[Orchestrator] Task pipeline error:', err.message);
     broadcast('task_error', { task_id, task, error: err.message });
   });
@@ -945,6 +957,7 @@ async function runTask(
   task: string,
   budget: number,
   userAddress: string | null,
+  webhook_url?: string,
 ): Promise<void> {
   // 1. Fetch available agents
   let agents: AgentRecord[];
