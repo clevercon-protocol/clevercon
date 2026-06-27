@@ -128,6 +128,8 @@ pub enum DataKey {
     /// Returns true if the contract is paused.
     Paused,
     UserTasks(Address),
+    /// Configurable threshold for force-completing stale tasks.
+    StaleTaskThreshold,
 }
 
 // Data structs
@@ -235,6 +237,9 @@ impl AgentVault {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::UsdcSac, &usdc_sac);
         env.storage().instance().set(&DataKey::TaskCounter, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::StaleTaskThreshold, &STALE_TASK_THRESHOLD_SECONDS);
 
         // Automatically whitelist usdc_sac
         let asset_key = DataKey::AssetSupported(usdc_sac.clone());
@@ -679,7 +684,8 @@ impl AgentVault {
 
         let now = env.ledger().timestamp();
         let elapsed = now - task.created_at;
-        if elapsed <= STALE_TASK_THRESHOLD_SECONDS {
+        let threshold = Self::get_stale_threshold(env.clone());
+        if elapsed <= threshold {
             return Err(VaultError::TaskNotStale);
         }
 
@@ -1003,6 +1009,44 @@ impl AgentVault {
             .unwrap_or(false);
         Self::extend_instance_ttl(&env);
         paused
+    }
+
+    // ── Stale Task Threshold Management ────────────────────────────────
+
+    /// Admin updates the threshold (in seconds) after which a task is considered stale.
+    pub fn set_stale_threshold(env: Env, admin: Address, seconds: u64) -> Result<(), VaultError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
+
+        if seconds < 60 {
+            // "Threshold must be at least 60 seconds"
+            return Err(VaultError::InvalidAmount);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::StaleTaskThreshold, &seconds);
+        Self::extend_instance_ttl(&env);
+        log!(&env, "Stale task threshold updated to: {} seconds", seconds);
+        Ok(())
+    }
+
+    /// Returns the current stale task threshold in seconds.
+    pub fn get_stale_threshold(env: Env) -> u64 {
+        let threshold = env
+            .storage()
+            .instance()
+            .get(&DataKey::StaleTaskThreshold)
+            .unwrap_or(STALE_TASK_THRESHOLD_SECONDS);
+        Self::extend_instance_ttl(&env);
+        threshold
     }
 }
 
