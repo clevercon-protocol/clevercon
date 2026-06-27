@@ -55,16 +55,16 @@ import { saveTaskResult, getTaskResults, deleteTaskResult } from './task-results
 const PORT = parseInt(process.env.ORCHESTRATOR_PORT || process.env.PORT || '3000');
 const REGISTRY_URL = process.env.REGISTRY_URL || 'http://localhost:4000';
 const BUDGET_DEFAULT = parseFloat(process.env.DEFAULT_BUDGET || '1.0');
-const SECRET_KEY = process.env.ORCHESTRATOR_SECRET_KEY!;
+const SECRET_KEY = process.env.ORCHESTRATOR_SECRET_KEY;
 // How long to wait for user to approve a plan before auto-approving (ms)
 const APPROVAL_TIMEOUT_MS = parseInt(process.env.PLAN_APPROVAL_TIMEOUT_MS || '60000');
 
-if (!SECRET_KEY) {
+if (!SECRET_KEY && !process.env.VITEST) {
   console.error('[Orchestrator] ORCHESTRATOR_SECRET_KEY not set');
   process.exit(1);
 }
 
-const keypair = Keypair.fromSecret(SECRET_KEY);
+const keypair = Keypair.fromSecret(SECRET_KEY || Keypair.random().secret());
 const ORCHESTRATOR_ADDRESS = keypair.publicKey();
 
 // ── USDC helpers ───────────────────────────────────────────────────────────────
@@ -857,16 +857,67 @@ app.post('/api/tasks/preview', async (req, res) => {
   });
 });
 
+/** Validate webhook_url parameter */
+export function validateWebhookUrl(webhook_url: any): boolean {
+  if (webhook_url === undefined) return true;
+  if (typeof webhook_url !== 'string') return false;
+  try {
+    const parsed = new URL(webhook_url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+
+    const hostname = parsed.hostname.toLowerCase();
+
+    // Allow loopback/private destinations only in development or test environments
+    if (process.env.NODE_ENV === 'development' || process.env.VITEST) {
+      return true;
+    }
+
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]') {
+      return false;
+    }
+
+    // Check RFC1918 private IPv4 addresses (10.x.x.x, 192.168.x.x, 172.16.x.x-172.31.x.x)
+    // Check link-local IP (169.254.x.x)
+    const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+    const match = hostname.match(ipv4Regex);
+    if (match) {
+      const [, p1, p2, p3, p4] = match.map(Number);
+      if (p1 > 255 || p2 > 255 || p3 > 255 || p4 > 255) return false;
+      if (p1 === 127 || p1 === 10 || p1 === 0) return false;
+      if (p1 === 172 && p2 >= 16 && p2 <= 31) return false;
+      if (p1 === 192 && p2 === 168) return false;
+      if (p1 === 169 && p2 === 254) return false;
+    }
+
+    // Check IPv6 loopback, link-local, and unique local addresses
+    if (hostname.startsWith('[') && hostname.endsWith(']')) {
+      const ipv6 = hostname.slice(1, -1);
+      if (ipv6 === '::1' || ipv6 === '0:0:0:0:0:0:0:1') return false;
+      if (ipv6.startsWith('fe80:') || ipv6.startsWith('fc00:') || ipv6.startsWith('fd00:'))
+        return false;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Submit a task
 app.post('/api/tasks', async (req, res) => {
-  const { task, budget, user_address } = req.body as {
+  const { task, budget, user_address, webhook_url } = req.body as {
     task?: string;
     budget?: number;
     user_address?: string;
+    webhook_url?: string;
   };
 
   if (!task || typeof task !== 'string' || task.trim().length === 0) {
     return res.status(400).json({ error: 'task is required' });
+  }
+
+  if (!validateWebhookUrl(webhook_url)) {
+    return res.status(400).json({ error: 'webhook_url must be a valid URL' });
   }
 
   const taskBudget = typeof budget === 'number' && budget > 0 ? budget : BUDGET_DEFAULT;
@@ -904,7 +955,7 @@ app.post('/api/tasks', async (req, res) => {
   res.status(202).json({ status: 'accepted', task_id, task, budget: taskBudget });
   broadcast('task_accepted', { task_id, task, budget: taskBudget });
 
-  runTask(task_id, task, taskBudget, user_address ?? null).catch((err) => {
+  runTask(task_id, task, taskBudget, user_address ?? null, webhook_url).catch((err) => {
     console.error('[Orchestrator] Task pipeline error:', err.message);
     broadcast('task_error', { task_id, task, error: err.message });
   });
@@ -940,245 +991,324 @@ app.post('/api/tasks/:id/reject', (req, res) => {
 
 // ── Task pipeline ────────────────────────────────────────────────────────────
 
+/**
+ * Asynchronously sends task result to the webhook URL with retry logic.
+ */
+export async function sendWebhookWithRetry(webhookUrl: string, payload: unknown): Promise<void> {
+  const send = async (): Promise<{ status?: number; error?: any }> => {
+    try {
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10000), // 10 second timeout
+      });
+      await response.text().catch(() => {});
+      return { status: response.status };
+    } catch (err) {
+      return { error: err };
+    }
+  };
+
+  let result = await send();
+  const isNetworkError = result.error !== undefined;
+  const is5xx = result.status !== undefined && result.status >= 500 && result.status < 600;
+
+  if (isNetworkError || is5xx) {
+    const reason = isNetworkError
+      ? `error: ${(result.error as Error).message ?? String(result.error)}`
+      : `HTTP status: ${result.status}`;
+    console.warn(`[Orchestrator] Webhook delivery failed (${reason}). Retrying once…`);
+    result = await send();
+  }
+
+  // Sanitise logging to only output the origin (preventing path/query parameter leaks)
+  let sanitizedUrl = webhookUrl;
+  try {
+    sanitizedUrl = new URL(webhookUrl).origin;
+  } catch {
+    // fallback if URL parsing fails
+  }
+
+  const isSuccess =
+    result.error === undefined &&
+    result.status !== undefined &&
+    result.status >= 200 &&
+    result.status < 300;
+
+  if (isSuccess) {
+    console.log(
+      `[Orchestrator] Webhook delivered to ${sanitizedUrl} with HTTP status ${result.status}`,
+    );
+  } else {
+    const details = result.error
+      ? ((result.error as Error).message ?? String(result.error))
+      : `HTTP status ${result.status}`;
+    console.error(`[Orchestrator] Webhook delivery failed to ${sanitizedUrl}: ${details}`);
+  }
+}
+
 async function runTask(
   task_id: string,
   task: string,
   budget: number,
   userAddress: string | null,
+  webhook_url?: string,
 ): Promise<void> {
-  // 1. Fetch available agents
-  let agents: AgentRecord[];
-  try {
-    agents = await fetchAgents();
-    broadcast('agents_loaded', { task_id, count: agents.length });
-  } catch (err: any) {
-    broadcast('task_error', { task_id, task, error: `Registry unavailable: ${err.message}` });
-    return;
-  }
+  const triggerWebhook = (payload: any) => {
+    if (webhook_url) {
+      sendWebhookWithRetry(webhook_url, payload).catch((err) => {
+        console.error(`[Orchestrator] Webhook error for task ${task_id}:`, err.message);
+      });
+    }
+  };
 
-  if (agents.length === 0) {
-    broadcast('task_error', { task_id, task, error: 'No agents registered' });
-    return;
-  }
-
-  // 1b. Score all agents and broadcast (general scoring — no specific capability filter)
-  const allScored = scoreAgents(agents, [], budget / Math.max(1, agents.length));
-  broadcast('agents_scored', {
-    task_id,
-    agents: allScored.map((s) => ({
-      agent_id: s.agent.agent_id,
-      name: s.agent.name,
-      score: s.score,
-      breakdown: s.breakdown,
-      reputation_score: s.agent.reputation?.score ?? 50,
-      price_per_call: s.agent.pricing.price_per_call,
-    })),
-  });
-
-  // 2. Feasibility check
-  let feasibility;
-  try {
-    feasibility = await checkFeasibility(task, agents);
-    broadcast('feasibility_checked', { task_id, ...feasibility });
-  } catch (err: any) {
-    broadcast('task_error', { task_id, task, error: `Feasibility check failed: ${err.message}` });
-    return;
-  }
-
-  if (!feasibility.feasible) {
-    broadcast('task_infeasible', {
-      task_id,
-      task,
-      missing: feasibility.missing,
-      message: `Cannot complete task — missing capabilities: ${feasibility.missing.join(', ')}`,
-    });
-    return;
-  }
-
-  // 3. Plan
-  let plan;
-  try {
-    plan = await createPlan(task, agents, budget);
-  } catch (err: any) {
-    broadcast('task_error', { task_id, task, error: `Planning failed: ${err.message}` });
-    return;
-  }
-
-  // 4. Validate
-  const validation = validatePlan(plan, agents, budget);
-  if (!validation.valid) {
-    broadcast('task_error', {
-      task_id,
-      task,
-      error: `Invalid plan: ${validation.errors.join('; ')}`,
-    });
-    return;
-  }
-
-  // 5. Compute per-step selection reasoning
-  const stepSelections = plan.steps.map((step) => {
-    const stepAgent = agents.find((a) => a.agent_id === step.agent_id);
-    const neededCaps = stepAgent?.capabilities ?? [];
-    const ranked = scoreAgents(agents, neededCaps, step.estimated_cost);
-
-    const selectedEntry = ranked.find((s) => s.agent.agent_id === step.agent_id);
-    const selectedScore = selectedEntry?.score ?? 0;
-    const selectedRank = ranked.findIndex((s) => s.agent.agent_id === step.agent_id) + 1;
-
-    // Top 2 alternatives (different from selected)
-    const alternatives = ranked
-      .filter((s) => s.agent.agent_id !== step.agent_id)
-      .slice(0, 2)
-      .map((s) => ({
-        agent_id: s.agent.agent_id,
-        name: s.agent.name,
-        score: s.score,
-      }));
-
-    return {
-      step_id: step.step_id,
-      agent_id: step.agent_id,
-      agent_name: step.agent_name,
-      action: step.action,
-      payment_method: step.payment_method,
-      estimated_cost: step.estimated_cost,
-      depends_on: step.depends_on,
-      selected_score: selectedScore,
-      selected_rank: selectedRank,
-      total_candidates: ranked.length,
-      score_breakdown: selectedEntry?.breakdown ?? null,
-      alternatives,
-    };
-  });
-
-  broadcast('plan_created', {
-    task_id,
-    steps: plan.steps.length,
-    total_estimated_cost: plan.total_estimated_cost,
-    reasoning: plan.reasoning,
-    step_selections: stepSelections,
-  });
-
-  broadcast('plan_validated', { task_id, valid: validation.valid, errors: validation.errors });
-
-  // 6. Await user approval (auto-approves after APPROVAL_TIMEOUT_MS)
-  try {
-    await waitForApproval(task_id, {
-      task_id,
-      task,
-      reasoning: plan.reasoning,
-      total_estimated_cost: plan.total_estimated_cost,
-      steps: stepSelections,
-      auto_approve_in_ms: APPROVAL_TIMEOUT_MS,
-    });
-  } catch (err: any) {
-    // User rejected the plan
-    broadcast('task_error', { task_id, task, error: `Plan rejected: ${err.message}` });
-    return;
-  }
-
-  // 7. Load per-user orchestrator keypair (U5) and create vault task
   let orchestratorKeypair: Keypair | null = null;
   let vaultTaskId: bigint | null = null;
   const VAULT_CONTRACT_URL = `https://stellar.expert/explorer/testnet/contract/${process.env.AGENT_VAULT_CONTRACT_ID}`;
 
-  if (userAddress) {
-    const record = orchestratorStore.getByUser(userAddress);
-    if (record) {
-      orchestratorKeypair = Keypair.fromSecret(record.orchestrator_secret);
+  try {
+    // 1. Fetch available agents
+    let agents: AgentRecord[];
+    try {
+      agents = await fetchAgents();
+      broadcast('agents_loaded', { task_id, count: agents.length });
+    } catch (err: any) {
+      const errorMsg = `Registry unavailable: ${err.message}`;
+      broadcast('task_error', { task_id, task, error: errorMsg });
+      throw new Error(errorMsg);
     }
-  }
 
-  // Fall back to shared wallet if no per-user orchestrator
-  if (!orchestratorKeypair) {
-    orchestratorKeypair = keypair;
-  }
-
-  // Create vault task — locks plan_cost (sum of step costs) on-chain
-  // Requires orchestrator to be registered on-chain first (register_orchestrator tx signed by user)
-  const orchRecord = userAddress ? orchestratorStore.getByUser(userAddress) : null;
-  const planCost = plan.total_estimated_cost;
-  if (VAULT_ACTIVE && orchestratorKeypair) {
-    if (!orchRecord?.registered_on_chain) {
-      broadcast('vault_skipped', {
-        task_id,
-        reason:
-          'Orchestrator not registered on-chain — complete on-chain registration in wallet to enable vault',
-      });
-      console.warn(
-        `[Orchestrator] Skipping vault for task ${task_id} — orchestrator not registered on-chain`,
-      );
-    } else {
-      vaultTaskId = await vaultCreateTask(orchestratorKeypair, planCost);
+    if (agents.length === 0) {
+      const errorMsg = 'No agents registered';
+      broadcast('task_error', { task_id, task, error: errorMsg });
+      throw new Error(errorMsg);
     }
-    if (vaultTaskId !== null) {
-      broadcast('budget_locked', {
+
+    // 1b. Score all agents and broadcast (general scoring — no specific capability filter)
+    const allScored = scoreAgents(agents, [], budget / Math.max(1, agents.length));
+    broadcast('agents_scored', {
+      task_id,
+      agents: allScored.map((s) => ({
+        agent_id: s.agent.agent_id,
+        name: s.agent.name,
+        score: s.score,
+        breakdown: s.breakdown,
+        reputation_score: s.agent.reputation?.score ?? 50,
+        price_per_call: s.agent.pricing.price_per_call,
+      })),
+    });
+
+    // 2. Feasibility check
+    let feasibility;
+    try {
+      feasibility = await checkFeasibility(task, agents);
+      broadcast('feasibility_checked', { task_id, ...feasibility });
+    } catch (err: any) {
+      const errorMsg = `Feasibility check failed: ${err.message}`;
+      broadcast('task_error', { task_id, task, error: errorMsg });
+      throw new Error(errorMsg);
+    }
+
+    if (!feasibility.feasible) {
+      const errorMsg = `Cannot complete task — missing capabilities: ${feasibility.missing.join(', ')}`;
+      broadcast('task_infeasible', {
         task_id,
-        contract_task_id: Number(vaultTaskId),
-        budget_usdc: planCost,
-        contract_id: process.env.AGENT_VAULT_CONTRACT_ID,
-        explorer_url: VAULT_CONTRACT_URL,
+        task,
+        missing: feasibility.missing,
+        message: errorMsg,
       });
-      if (userAddress) {
-        activityStore.append({
-          user_address: userAddress,
-          event: 'budget_locked',
-          task_id,
-          task_description: task,
-          amount_usdc: planCost,
-          vault_task_id: Number(vaultTaskId),
-        });
+      throw new Error(errorMsg);
+    }
+
+    // 3. Plan
+    let plan;
+    try {
+      plan = await createPlan(task, agents, budget);
+    } catch (err: any) {
+      const errorMsg = `Planning failed: ${err.message}`;
+      broadcast('task_error', { task_id, task, error: errorMsg });
+      throw new Error(errorMsg);
+    }
+
+    // 4. Validate
+    const validation = validatePlan(plan, agents, budget);
+    if (!validation.valid) {
+      const errorMsg = `Invalid plan: ${validation.errors.join('; ')}`;
+      broadcast('task_error', {
+        task_id,
+        task,
+        error: errorMsg,
+      });
+      throw new Error(errorMsg);
+    }
+
+    // 5. Compute per-step selection reasoning
+    const stepSelections = plan.steps.map((step) => {
+      const stepAgent = agents.find((a) => a.agent_id === step.agent_id);
+      const neededCaps = stepAgent?.capabilities ?? [];
+      const ranked = scoreAgents(agents, neededCaps, step.estimated_cost);
+
+      const selectedEntry = ranked.find((s) => s.agent.agent_id === step.agent_id);
+      const selectedScore = selectedEntry?.score ?? 0;
+      const selectedRank = ranked.findIndex((s) => s.agent.agent_id === step.agent_id) + 1;
+
+      // Top 2 alternatives (different from selected)
+      const alternatives = ranked
+        .filter((s) => s.agent.agent_id !== step.agent_id)
+        .slice(0, 2)
+        .map((s) => ({
+          agent_id: s.agent.agent_id,
+          name: s.agent.name,
+          score: s.score,
+        }));
+
+      return {
+        step_id: step.step_id,
+        agent_id: step.agent_id,
+        agent_name: step.agent_name,
+        action: step.action,
+        payment_method: step.payment_method,
+        estimated_cost: step.estimated_cost,
+        depends_on: step.depends_on,
+        selected_score: selectedScore,
+        selected_rank: selectedRank,
+        total_candidates: ranked.length,
+        score_breakdown: selectedEntry?.breakdown ?? null,
+        alternatives,
+      };
+    });
+
+    broadcast('plan_created', {
+      task_id,
+      steps: plan.steps.length,
+      total_estimated_cost: plan.total_estimated_cost,
+      reasoning: plan.reasoning,
+      step_selections: stepSelections,
+    });
+
+    broadcast('plan_validated', { task_id, valid: validation.valid, errors: validation.errors });
+
+    // 6. Await user approval (auto-approves after APPROVAL_TIMEOUT_MS)
+    try {
+      await waitForApproval(task_id, {
+        task_id,
+        task,
+        reasoning: plan.reasoning,
+        total_estimated_cost: plan.total_estimated_cost,
+        steps: stepSelections,
+        auto_approve_in_ms: APPROVAL_TIMEOUT_MS,
+      });
+    } catch (err: any) {
+      const errorMsg = `Plan rejected: ${err.message}`;
+      broadcast('task_error', { task_id, task, error: errorMsg });
+      throw new Error(errorMsg);
+    }
+
+    // 7. Load per-user orchestrator keypair (U5) and create vault task
+    if (userAddress) {
+      const record = orchestratorStore.getByUser(userAddress);
+      if (record) {
+        orchestratorKeypair = Keypair.fromSecret(record.orchestrator_secret);
       }
     }
-  }
 
-  // Log task started
-  if (userAddress) {
-    activityStore.append({
-      user_address: userAddress,
-      event: 'task_started',
-      task_id,
-      task_description: task,
-    });
-  }
+    // Fall back to shared wallet if no per-user orchestrator
+    if (!orchestratorKeypair) {
+      orchestratorKeypair = keypair;
+    }
 
-  // 8. Execute
-  const executor = new PlanExecutor(agents, orchestratorKeypair, vaultTaskId);
+    // Create vault task — locks plan_cost (sum of step costs) on-chain
+    // Requires orchestrator to be registered on-chain first (register_orchestrator tx signed by user)
+    const orchRecord = userAddress ? orchestratorStore.getByUser(userAddress) : null;
+    const planCost = plan.total_estimated_cost;
+    if (VAULT_ACTIVE && orchestratorKeypair) {
+      if (!orchRecord?.registered_on_chain) {
+        broadcast('vault_skipped', {
+          task_id,
+          reason:
+            'Orchestrator not registered on-chain — complete on-chain registration in wallet to enable vault',
+        });
+        console.warn(
+          `[Orchestrator] Skipping vault for task ${task_id} — orchestrator not registered on-chain`,
+        );
+      } else {
+        vaultTaskId = await vaultCreateTask(orchestratorKeypair, planCost);
+      }
+      if (vaultTaskId !== null) {
+        broadcast('budget_locked', {
+          task_id,
+          contract_task_id: Number(vaultTaskId),
+          budget_usdc: planCost,
+          contract_id: process.env.AGENT_VAULT_CONTRACT_ID,
+          explorer_url: VAULT_CONTRACT_URL,
+        });
+        if (userAddress) {
+          activityStore.append({
+            user_address: userAddress,
+            event: 'budget_locked',
+            task_id,
+            task_description: task,
+            amount_usdc: planCost,
+            vault_task_id: Number(vaultTaskId),
+          });
+        }
+      }
+    }
 
-  executor.on('task_started', (data) => broadcast('task_started', data));
-  executor.on('step_started', (data) => broadcast('step_started', data));
-  executor.on('step_complete', (data) => {
-    broadcast('step_complete', data);
-  });
-  executor.on('step_failed', (data) => broadcast('step_failed', data));
-  executor.on('budget_released', (data) => {
-    broadcast('budget_released', data);
-    // Log real agent payment — budget_released carries the actual amount and tx_hash
-    if (userAddress && data.amount && data.amount > 0) {
+    // Log task started
+    if (userAddress) {
       activityStore.append({
         user_address: userAddress,
-        event: 'payment_released',
+        event: 'task_started',
         task_id,
         task_description: task,
-        amount_usdc: data.amount,
-        agent_name: data.agent_name,
-        tx_hash: data.tx_hash,
-        vault_task_id: vaultTaskId !== null ? Number(vaultTaskId) : undefined,
-      });
-      appendVaultTx({
-        user_address: userAddress,
-        type: 'payment',
-        amount_usdc: data.amount,
-        tx_hash: data.tx_hash,
-        task_id,
-        agent_name: data.agent_name,
       });
     }
-  });
-  executor.on('task_complete', (data) => broadcast('task_complete', data));
 
-  try {
-    const result = await executor.execute(plan, task, REGISTRY_URL, task_id);
+    // 8. Execute
+    const executor = new PlanExecutor(agents, orchestratorKeypair, vaultTaskId);
+
+    executor.on('task_started', (data) => broadcast('task_started', data));
+    executor.on('step_started', (data) => broadcast('step_started', data));
+    executor.on('step_complete', (data) => {
+      broadcast('step_complete', data);
+    });
+    executor.on('step_failed', (data) => broadcast('step_failed', data));
+    executor.on('budget_released', (data) => {
+      broadcast('budget_released', data);
+      // Log real agent payment — budget_released carries the actual amount and tx_hash
+      if (userAddress && data.amount && data.amount > 0) {
+        activityStore.append({
+          user_address: userAddress,
+          event: 'payment_released',
+          task_id,
+          task_description: task,
+          amount_usdc: data.amount,
+          agent_name: data.agent_name,
+          tx_hash: data.tx_hash,
+          vault_task_id: vaultTaskId !== null ? Number(vaultTaskId) : undefined,
+        });
+        appendVaultTx({
+          user_address: userAddress,
+          type: 'payment',
+          amount_usdc: data.amount,
+          tx_hash: data.tx_hash,
+          task_id,
+          agent_name: data.agent_name,
+        });
+      }
+    });
+    executor.on('task_complete', (data) => broadcast('task_complete', data));
+
+    let result;
+    try {
+      result = await executor.execute(plan, task, REGISTRY_URL, task_id);
+    } catch (err: any) {
+      const errorMsg = `Execution failed: ${err.message}`;
+      broadcast('task_error', { task_id, task, error: errorMsg });
+      throw new Error(errorMsg);
+    }
 
     // Finalise vault task — refunds unused locked amount back to user's vault balance
     if (VAULT_ACTIVE && orchestratorKeypair && vaultTaskId !== null) {
@@ -1211,12 +1341,31 @@ async function runTask(
       // Persist full result for History tab
       saveTaskResult(userAddress, task, result);
     }
+
+    // Trigger webhook on complete/failed execution status
+    if (result.status === 'failed') {
+      const failedStep = result.steps.find((s) => !s.success);
+      triggerWebhook({
+        task_id,
+        status: 'failed',
+        error: failedStep?.error ?? 'Task execution failed',
+        completed_at: new Date().toISOString(),
+      });
+    } else {
+      triggerWebhook({
+        task_id,
+        status: result.status === 'partial' ? 'partial' : 'completed',
+        result: result.final_output,
+        cost_usdc: result.total_cost.toString(),
+        duration_ms: result.total_time_ms,
+        completed_at: new Date().toISOString(),
+      });
+    }
   } catch (err: any) {
     // Try to complete the vault task even on error to unlock funds
     if (VAULT_ACTIVE && orchestratorKeypair && vaultTaskId !== null) {
       vaultCompleteTask(orchestratorKeypair, vaultTaskId).catch(() => {});
     }
-    broadcast('task_error', { task_id, task, error: `Execution failed: ${err.message}` });
 
     // Log failure
     if (userAddress) {
@@ -1227,6 +1376,14 @@ async function runTask(
         task_description: task,
       });
     }
+
+    // Trigger webhook on early failure
+    triggerWebhook({
+      task_id,
+      status: 'failed',
+      error: err.message || 'Task failed before execution completed',
+      completed_at: new Date().toISOString(),
+    });
   }
 }
 
@@ -1244,13 +1401,15 @@ server.on('upgrade', (request, socket, head) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`[Orchestrator] Running on port ${PORT}`);
-  console.log(`[Orchestrator] Wallet: ${ORCHESTRATOR_ADDRESS}`);
-  console.log(`[Orchestrator] Registry: ${REGISTRY_URL}`);
-  console.log(`[Orchestrator] WebSocket: ws://localhost:${PORT}/ws`);
-  console.log(`[Orchestrator] Plan approval timeout: ${APPROVAL_TIMEOUT_MS / 1000}s`);
+if (!process.env.VITEST) {
+  server.listen(PORT, () => {
+    console.log(`[Orchestrator] Running on port ${PORT}`);
+    console.log(`[Orchestrator] Wallet: ${ORCHESTRATOR_ADDRESS}`);
+    console.log(`[Orchestrator] Registry: ${REGISTRY_URL}`);
+    console.log(`[Orchestrator] WebSocket: ws://localhost:${PORT}/ws`);
+    console.log(`[Orchestrator] Plan approval timeout: ${APPROVAL_TIMEOUT_MS / 1000}s`);
 
-  // Ensure the shared orchestrator wallet is funded and has a USDC trustline
-  setupSharedWallet(keypair).catch(() => {});
-});
+    // Ensure the shared orchestrator wallet is funded and has a USDC trustline
+    setupSharedWallet(keypair).catch(() => {});
+  });
+}
