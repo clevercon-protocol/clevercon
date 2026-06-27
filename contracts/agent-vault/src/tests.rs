@@ -1242,3 +1242,75 @@ fn test_get_user_tasks_separate_users() {
     assert_eq!(t.client.get_user_tasks(&user2).len(), 0);
     assert_eq!(t.client.get_user_tasks(&user1).len(), 1);
 }
+
+// 11. Stale Task Threshold Tests
+
+#[test]
+fn test_get_stale_threshold_default() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    assert_eq!(t.client.get_stale_threshold(), 1800);
+}
+
+#[test]
+fn test_set_stale_threshold_success() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    t.client.set_stale_threshold(&t.admin, &3600);
+    assert_eq!(t.client.get_stale_threshold(), 3600);
+}
+
+#[test]
+fn test_set_stale_threshold_unauthorized_fails() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let non_admin = Address::generate(&t.env);
+
+    let result = t.client.try_set_stale_threshold(&non_admin, &3600);
+    assert!(result == Err(Ok(VaultError::Unauthorized)));
+}
+
+#[test]
+fn test_set_stale_threshold_enforces_minimum() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    let result = t.client.try_set_stale_threshold(&t.admin, &59);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
+}
+
+#[test]
+fn test_force_complete_respects_updated_threshold() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    let user = Address::generate(&t.env);
+    let orchestrator = Address::generate(&t.env);
+    let name = soroban_sdk::String::from_str(&t.env, "MyOrchestrator");
+
+    t.token_admin_client.mint(&user, &1000);
+    t.client.deposit(&user, &t.usdc_sac, &500);
+    t.client.register_orchestrator(&user, &orchestrator, &name);
+
+    // Set threshold to 1 hour (3600s)
+    t.client.set_stale_threshold(&t.admin, &3600);
+
+    t.env.ledger().set_timestamp(1000);
+    let task_id = t.client.create_task(&orchestrator, &t.usdc_sac, &300);
+
+    // Advance 31 minutes (1860s) - would be stale under old 1800s default
+    t.env.ledger().set_timestamp(1000 + 1860);
+
+    // Attempt to force complete should fail now
+    let result = t.client.try_force_complete_stale_task(&task_id);
+    assert!(result == Err(Ok(VaultError::TaskNotStale)));
+
+    // Advance to 61 minutes (3660s)
+    t.env.ledger().set_timestamp(1000 + 3660);
+
+    // Now it should succeed
+    t.client.force_complete_stale_task(&task_id);
+    let task = t.client.get_task(&task_id).unwrap();
+    assert!(task.completed);
+}
