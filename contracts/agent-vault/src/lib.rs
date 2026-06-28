@@ -274,7 +274,12 @@ impl AgentVault {
     }
 
     /// Admin removes an asset from the whitelist.
-    pub fn remove_asset(env: Env, admin: Address, asset: Address, force: bool) -> Result<(), VaultError> {
+    pub fn remove_asset(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        force: bool,
+    ) -> Result<(), VaultError> {
         admin.require_auth();
         let stored_admin: Address = env
             .storage()

@@ -951,7 +951,9 @@ fn test_multi_asset_whitelist() {
     assert!(test_env.client.is_supported_asset(&xlm_sac));
 
     // Admin removes the asset
-    test_env.client.remove_asset(&test_env.admin, &xlm_sac, &true);
+    test_env
+        .client
+        .remove_asset(&test_env.admin, &xlm_sac, &true);
     assert!(!test_env.client.is_supported_asset(&xlm_sac));
 }
 
@@ -967,9 +969,11 @@ fn test_remove_asset_requires_force() {
         .address();
 
     test_env.client.add_asset(&test_env.admin, &xlm_sac);
-    
+
     // Attempting to remove without force=true should panic
-    test_env.client.remove_asset(&test_env.admin, &xlm_sac, &false);
+    test_env
+        .client
+        .remove_asset(&test_env.admin, &xlm_sac, &false);
 }
 
 #[test]
