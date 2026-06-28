@@ -82,6 +82,18 @@ pub struct TaskDoneEvent {
     pub refund: i128,
 }
 
+#[contractevent]
+pub struct PauseEvent {
+    #[topic]
+    pub admin: Address,
+}
+
+#[contractevent]
+pub struct UnpauseEvent {
+    #[topic]
+    pub admin: Address,
+}
+
 #[contracterror]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum VaultError {
@@ -990,6 +1002,10 @@ impl AgentVault {
 
         env.storage().instance().set(&DataKey::Paused, &true);
         Self::extend_instance_ttl(&env);
+        PauseEvent {
+            admin: admin.clone(),
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -1007,6 +1023,10 @@ impl AgentVault {
 
         env.storage().instance().set(&DataKey::Paused, &false);
         Self::extend_instance_ttl(&env);
+        UnpauseEvent {
+            admin: admin.clone(),
+        }
+        .publish(&env);
         Ok(())
     }
 
