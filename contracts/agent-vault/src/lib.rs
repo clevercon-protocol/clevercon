@@ -520,6 +520,14 @@ impl AgentVault {
             .clone()
             .ok_or(VaultError::OrchestratorNotRegistered)?;
 
+        let new_owner_key = DataKey::OrchestratorOwner(new_orchestrator.clone());
+        if let Some(existing_owner) = env.storage().persistent().get::<_, Address>(&new_owner_key) {
+            Self::extend_persistent_ttl(&env, &new_owner_key);
+            if existing_owner != user {
+                return Err(VaultError::OrchestratorAlreadyRegistered);
+            }
+        }
+
         let old_owner_key = DataKey::OrchestratorOwner(old_orchestrator.clone());
         env.storage().persistent().remove(&old_owner_key);
 
@@ -528,7 +536,6 @@ impl AgentVault {
         env.storage().persistent().set(&config_key, &config);
         Self::extend_persistent_ttl(&env, &config_key);
 
-        let new_owner_key = DataKey::OrchestratorOwner(new_orchestrator.clone());
         env.storage().persistent().set(&new_owner_key, &user);
         Self::extend_persistent_ttl(&env, &new_owner_key);
 

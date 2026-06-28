@@ -356,6 +356,44 @@ fn test_update_orchestrator_blocked_when_task_active() {
 }
 
 #[test]
+fn test_update_orchestrator_rejects_address_owned_by_another_user() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user1 = Address::generate(&test_env.env);
+    let user2 = Address::generate(&test_env.env);
+    let orchestrator1 = Address::generate(&test_env.env);
+    let shared_orchestrator = Address::generate(&test_env.env);
+    let name1 = soroban_sdk::String::from_str(&test_env.env, "User1Orchestrator");
+    let name2 = soroban_sdk::String::from_str(&test_env.env, "User2Orchestrator");
+    let takeover_name = soroban_sdk::String::from_str(&test_env.env, "TakeoverAttempt");
+
+    test_env
+        .client
+        .register_orchestrator(&user1, &orchestrator1, &name1);
+    test_env
+        .client
+        .register_orchestrator(&user2, &shared_orchestrator, &name2);
+
+    let result =
+        test_env
+            .client
+            .try_update_orchestrator(&user1, &shared_orchestrator, &takeover_name);
+    assert!(result == Err(Ok(VaultError::OrchestratorAlreadyRegistered)));
+
+    let user1_config = test_env.client.get_user_config(&user1).unwrap();
+    assert_eq!(user1_config.orchestrator, Some(orchestrator1.clone()));
+    assert_eq!(
+        test_env.client.get_orchestrator_owner(&orchestrator1),
+        Some(user1)
+    );
+    assert_eq!(
+        test_env.client.get_orchestrator_owner(&shared_orchestrator),
+        Some(user2)
+    );
+}
+
+#[test]
 fn test_update_orchestrator_fails_when_none_registered() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
