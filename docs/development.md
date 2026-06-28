@@ -124,6 +124,62 @@ Build a single service with `npm run build:<name>` (e.g. `build:orchestrator`,
 `build:oracle`) — see `package.json` for the full list. Each maps to an
 esbuild invocation that bundles the service into `packages/<pkg>/dist/`.
 
+## Orchestrator API endpoints
+
+### POST /api/tasks/preview
+
+Returns the execution plan for a task without creating a task or touching
+the vault. Useful for showing users what agents will be selected and the
+estimated cost before they commit USDC.
+
+**Request body**
+
+```json
+{ "prompt": "summarise yesterday's Stellar DEX volume", "budget": 1.0 }
+```
+
+`prompt` and `task` are interchangeable. `budget` defaults to `DEFAULT_BUDGET`
+(1.0 USDC) if omitted.
+
+**Success response (200)**
+
+```json
+{
+  "feasible": true,
+  "total_estimated_cost": 0.02,
+  "budget": 1.0,
+  "over_budget": false,
+  "reasoning": "Use stellar-oracle to fetch DEX stats.",
+  "steps": [
+    {
+      "agent_id": "stellar-oracle-v1",
+      "agent_name": "Stellar Oracle",
+      "action": "Fetch yesterday's DEX volume from Stellar Horizon",
+      "estimated_cost": 0.02,
+      "payment_method": "x402",
+      "endpoint": "https://stellar-oracle.example.com"
+    }
+  ]
+}
+```
+
+**Error responses**
+
+| Status | `error` field | Meaning |
+|--------|--------------|---------|
+| 400 | `task is required` | Body missing both `task` and `prompt` |
+| 422 | `feasible: false` | No registered agent covers the required capabilities |
+| 503 | `no_agents` | Registry has no active agents |
+| 503 | `registry_unavailable` | Cannot reach the registry service |
+
+**Example curl**
+
+```bash
+curl -s -X POST http://localhost:3000/api/tasks/preview \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt": "summarise yesterday Stellar DEX volume", "budget": 1.0}' | jq .
+```
+
 ## Testing
 
 Unit tests use [Vitest](https://vitest.dev/) and are colocated with the code
@@ -135,6 +191,8 @@ to verify in isolation:
 - `packages/registry/src/search.test.ts` — capability matching.
 - `packages/orchestrator/src/selector.test.ts` — agent scoring/selection.
 - `packages/orchestrator/src/validator.test.ts` — execution plan validation.
+- `packages/orchestrator/src/server.preview.test.ts` — `/api/tasks/preview`
+  endpoint (happy path, no-agents 503, infeasible 422).
 
 Run the full suite with `npm test`, or scope to a package with
 `npm test -w packages/registry`.
