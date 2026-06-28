@@ -951,8 +951,29 @@ fn test_multi_asset_whitelist() {
     assert!(test_env.client.is_supported_asset(&xlm_sac));
 
     // Admin removes the asset
-    test_env.client.remove_asset(&test_env.admin, &xlm_sac);
+    test_env
+        .client
+        .remove_asset(&test_env.admin, &xlm_sac, &true);
     assert!(!test_env.client.is_supported_asset(&xlm_sac));
+}
+
+#[test]
+#[should_panic(expected = "Pass force=true to confirm removal of a live asset")]
+fn test_remove_asset_requires_force() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let xlm_sac = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone())
+        .address();
+
+    test_env.client.add_asset(&test_env.admin, &xlm_sac);
+
+    // Attempting to remove without force=true should panic
+    test_env
+        .client
+        .remove_asset(&test_env.admin, &xlm_sac, &false);
 }
 
 #[test]

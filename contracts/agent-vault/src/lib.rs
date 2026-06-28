@@ -279,7 +279,12 @@ impl AgentVault {
     }
 
     /// Admin removes an asset from the whitelist.
-    pub fn remove_asset(env: Env, admin: Address, asset: Address) -> Result<(), VaultError> {
+    pub fn remove_asset(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        force: bool,
+    ) -> Result<(), VaultError> {
         admin.require_auth();
         let stored_admin: Address = env
             .storage()
@@ -289,6 +294,8 @@ impl AgentVault {
         if admin != stored_admin {
             return Err(VaultError::Unauthorized);
         }
+
+        assert!(force, "Pass force=true to confirm removal of a live asset");
 
         let asset_key = DataKey::AssetSupported(asset.clone());
         if env.storage().persistent().has(&asset_key) {
