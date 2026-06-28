@@ -558,7 +558,7 @@ impl AgentVault {
     // Task lifecycle
 
     /// Orchestrator creates a task, locking plan_cost from user's available balance in the specified asset.
-    /// Returns the new task_id. Only one active task per user at a time.
+    /// Returns the new task_id.
     pub fn create_task(
         env: Env,
         orchestrator: Address,
@@ -590,10 +590,6 @@ impl AgentVault {
             .get(&config_key)
             .expect("User config not found");
         Self::extend_persistent_ttl(&env, &config_key);
-
-        if config.active_tasks_count != 0 {
-            return Err(VaultError::ActiveTaskExists);
-        }
 
         let asset_key = DataKey::UserAsset(user.clone(), asset.clone());
         let mut asset_account: UserAssetAccount = env

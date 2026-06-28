@@ -456,7 +456,7 @@ fn test_create_task_success() {
 }
 
 #[test]
-fn test_create_task_already_active_fails() {
+fn test_create_task_allows_multiple_concurrent_tasks_when_balance_is_sufficient() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
 
@@ -471,18 +471,31 @@ fn test_create_task_already_active_fails() {
         .client
         .register_orchestrator(&user, &orchestrator, &name);
 
-    test_env
+    let first_task_id = test_env
         .client
         .create_task(&orchestrator, &test_env.usdc_sac, &100);
-    // Second task while the first is active
-    let result = test_env
+    let second_task_id = test_env
         .client
-        .try_create_task(&orchestrator, &test_env.usdc_sac, &100);
-    assert!(result == Err(Ok(VaultError::ActiveTaskExists)));
+        .create_task(&orchestrator, &test_env.usdc_sac, &150);
+
+    assert_eq!(first_task_id, 1);
+    assert_eq!(second_task_id, 2);
+    assert_eq!(test_env.client.task_count(), 2);
+
+    let account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(account.locked, 250);
+    assert_eq!(account.active_tasks_count, 2);
+    assert_eq!(
+        test_env.client.get_available(&user, &test_env.usdc_sac),
+        250
+    );
 }
 
 #[test]
-fn test_create_task_insufficient_available_balance_fails() {
+fn test_create_second_task_insufficient_available_balance_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
 
@@ -497,11 +510,22 @@ fn test_create_task_insufficient_available_balance_fails() {
         .client
         .register_orchestrator(&user, &orchestrator, &name);
 
-    // Plan cost (600) exceeds deposited (500)
+    test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &300);
+
+    // Only 200 remains available, so a second task costing 250 must fail.
     let result = test_env
         .client
-        .try_create_task(&orchestrator, &test_env.usdc_sac, &600);
+        .try_create_task(&orchestrator, &test_env.usdc_sac, &250);
     assert!(result == Err(Ok(VaultError::InsufficientAvailable)));
+
+    let account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(account.locked, 300);
+    assert_eq!(account.active_tasks_count, 1);
 }
 
 #[test]
@@ -771,6 +795,72 @@ fn test_complete_task_success() {
         test_env.client.get_available(&user, &test_env.usdc_sac),
         400
     );
+}
+
+#[test]
+fn test_two_concurrent_tasks_complete_independently() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "MyOrchestrator");
+
+    test_env.token_admin_client.mint(&user, &1000);
+    test_env.client.deposit(&user, &test_env.usdc_sac, &500);
+
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator, &name);
+
+    let first_task_id = test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &100);
+    let second_task_id = test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &150);
+
+    test_env
+        .client
+        .release_payment(&orchestrator, &first_task_id, &test_env.usdc_sac, &60);
+    test_env
+        .client
+        .release_payment(&orchestrator, &second_task_id, &test_env.usdc_sac, &90);
+
+    test_env.client.complete_task(&orchestrator, &first_task_id);
+
+    let mid_account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(mid_account.locked, 150);
+    assert_eq!(mid_account.balance, 440);
+    assert_eq!(mid_account.total_spent, 60);
+    assert_eq!(mid_account.active_tasks_count, 1);
+    assert_eq!(
+        test_env.client.get_available(&user, &test_env.usdc_sac),
+        290
+    );
+    assert!(test_env.client.get_task(&first_task_id).unwrap().completed);
+    assert!(!test_env.client.get_task(&second_task_id).unwrap().completed);
+
+    test_env
+        .client
+        .complete_task(&orchestrator, &second_task_id);
+
+    let final_account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(final_account.locked, 0);
+    assert_eq!(final_account.balance, 350);
+    assert_eq!(final_account.total_spent, 150);
+    assert_eq!(final_account.active_tasks_count, 0);
+    assert_eq!(
+        test_env.client.get_available(&user, &test_env.usdc_sac),
+        350
+    );
+    assert!(test_env.client.get_task(&second_task_id).unwrap().completed);
 }
 
 #[test]
