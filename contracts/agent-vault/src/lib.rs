@@ -48,6 +48,14 @@ pub struct RegOrchEvent {
 }
 
 #[contractevent]
+pub struct UpdateOrchEvent {
+    #[topic]
+    pub user: Address,
+    pub old_orchestrator: Address,
+    pub new_orchestrator: Address,
+}
+
+#[contractevent]
 pub struct TaskNewEvent {
     #[topic]
     pub user: Address,
@@ -481,6 +489,61 @@ impl AgentVault {
             "register_orchestrator user={} orchestrator={}",
             user,
             orchestrator
+        );
+        Ok(())
+    }
+
+    /// Update the registered orchestrator for a user. Requires no active tasks so
+    /// in-flight task authorization cannot be stranded on the old orchestrator.
+    pub fn update_orchestrator(
+        env: Env,
+        user: Address,
+        new_orchestrator: Address,
+        name: String,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+
+        let config_key = DataKey::UserConfig(user.clone());
+        let mut config: UserConfig = env
+            .storage()
+            .persistent()
+            .get(&config_key)
+            .ok_or(VaultError::OrchestratorNotRegistered)?;
+        Self::extend_persistent_ttl(&env, &config_key);
+
+        if config.active_tasks_count != 0 {
+            return Err(VaultError::ActiveTaskExists);
+        }
+
+        let old_orchestrator = config
+            .orchestrator
+            .clone()
+            .ok_or(VaultError::OrchestratorNotRegistered)?;
+
+        let old_owner_key = DataKey::OrchestratorOwner(old_orchestrator.clone());
+        env.storage().persistent().remove(&old_owner_key);
+
+        config.orchestrator = Some(new_orchestrator.clone());
+        config.orchestrator_name = name;
+        env.storage().persistent().set(&config_key, &config);
+        Self::extend_persistent_ttl(&env, &config_key);
+
+        let new_owner_key = DataKey::OrchestratorOwner(new_orchestrator.clone());
+        env.storage().persistent().set(&new_owner_key, &user);
+        Self::extend_persistent_ttl(&env, &new_owner_key);
+
+        UpdateOrchEvent {
+            user: user.clone(),
+            old_orchestrator: old_orchestrator.clone(),
+            new_orchestrator: new_orchestrator.clone(),
+        }
+        .publish(&env);
+        log!(
+            &env,
+            "update_orchestrator user={} old_orchestrator={} new_orchestrator={}",
+            user,
+            old_orchestrator,
+            new_orchestrator
         );
         Ok(())
     }

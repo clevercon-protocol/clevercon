@@ -296,6 +296,80 @@ fn test_register_orchestrator_twice_panics() {
     assert!(result == Err(Ok(VaultError::OrchestratorAlreadyRegistered)));
 }
 
+#[test]
+fn test_update_orchestrator_success() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let old_orchestrator = Address::generate(&test_env.env);
+    let new_orchestrator = Address::generate(&test_env.env);
+    let old_name = soroban_sdk::String::from_str(&test_env.env, "OldOrchestrator");
+    let new_name = soroban_sdk::String::from_str(&test_env.env, "NewOrchestrator");
+
+    test_env
+        .client
+        .register_orchestrator(&user, &old_orchestrator, &old_name);
+
+    test_env
+        .client
+        .update_orchestrator(&user, &new_orchestrator, &new_name);
+
+    let config = test_env.client.get_user_config(&user).unwrap();
+    assert_eq!(config.orchestrator, Some(new_orchestrator.clone()));
+    assert_eq!(config.orchestrator_name, new_name);
+
+    assert!(test_env
+        .client
+        .get_orchestrator_owner(&old_orchestrator)
+        .is_none());
+    assert_eq!(
+        test_env.client.get_orchestrator_owner(&new_orchestrator),
+        Some(user)
+    );
+}
+
+#[test]
+fn test_update_orchestrator_blocked_when_task_active() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let old_orchestrator = Address::generate(&test_env.env);
+    let new_orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "MyOrchestrator");
+    let new_name = soroban_sdk::String::from_str(&test_env.env, "NextOrchestrator");
+
+    test_env.token_admin_client.mint(&user, &1000);
+    test_env.client.deposit(&user, &test_env.usdc_sac, &500);
+    test_env
+        .client
+        .register_orchestrator(&user, &old_orchestrator, &name);
+    test_env
+        .client
+        .create_task(&old_orchestrator, &test_env.usdc_sac, &100);
+
+    let result = test_env
+        .client
+        .try_update_orchestrator(&user, &new_orchestrator, &new_name);
+    assert!(result == Err(Ok(VaultError::ActiveTaskExists)));
+}
+
+#[test]
+fn test_update_orchestrator_fails_when_none_registered() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let new_orchestrator = Address::generate(&test_env.env);
+    let new_name = soroban_sdk::String::from_str(&test_env.env, "NewOrchestrator");
+
+    let result = test_env
+        .client
+        .try_update_orchestrator(&user, &new_orchestrator, &new_name);
+    assert!(result == Err(Ok(VaultError::OrchestratorNotRegistered)));
+}
+
 // 5. Create Task Tests
 
 #[test]
