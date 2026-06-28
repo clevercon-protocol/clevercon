@@ -805,8 +805,13 @@ app.delete('/api/tasks/history/:task_id', (req, res) => {
 
 // Preview a task — feasibility + plan only, no vault/execution. Used by QueueReviewModal.
 app.post('/api/tasks/preview', async (req, res) => {
-  const { task, budget } = req.body as { task?: string; budget?: number };
-  if (!task || typeof task !== 'string' || task.trim().length === 0) {
+  const { task, prompt, budget } = req.body as {
+    task?: string;
+    prompt?: string;
+    budget?: number;
+  };
+  const taskText = task ?? prompt;
+  if (!taskText || typeof taskText !== 'string' || taskText.trim().length === 0) {
     return res.status(400).json({ error: 'task is required' });
   }
   const taskBudget = typeof budget === 'number' && budget > 0 ? budget : BUDGET_DEFAULT;
@@ -820,15 +825,17 @@ app.post('/api/tasks/preview', async (req, res) => {
   if (agents.length === 0)
     return res.status(503).json({ error: 'no_agents', message: 'No agents registered' });
 
+  const agentMap = new Map(agents.map((a) => [a.agent_id, a]));
+
   let feasibility;
   try {
-    feasibility = await checkFeasibility(task, agents);
+    feasibility = await checkFeasibility(taskText, agents);
   } catch (err: any) {
     return res.status(500).json({ error: 'feasibility_failed', message: err.message });
   }
 
   if (!feasibility.feasible) {
-    return res.json({
+    return res.status(422).json({
       feasible: false,
       missing: feasibility.missing,
       message: `Cannot complete — missing: ${feasibility.missing.join(', ')}`,
@@ -837,7 +844,7 @@ app.post('/api/tasks/preview', async (req, res) => {
 
   let plan;
   try {
-    plan = await createPlan(task, agents, taskBudget);
+    plan = await createPlan(taskText, agents, taskBudget);
   } catch (err: any) {
     return res.status(500).json({ error: 'planning_failed', message: err.message });
   }
@@ -846,10 +853,12 @@ app.post('/api/tasks/preview', async (req, res) => {
     feasible: true,
     total_estimated_cost: plan.total_estimated_cost,
     steps: plan.steps.map((s) => ({
+      agent_id: s.agent_id,
       agent_name: s.agent_name,
       action: s.action,
       estimated_cost: s.estimated_cost,
       payment_method: s.payment_method,
+      endpoint: agentMap.get(s.agent_id)?.endpoint ?? null,
     })),
     reasoning: plan.reasoning,
     over_budget: plan.total_estimated_cost > taskBudget,
@@ -1388,6 +1397,8 @@ async function runTask(
 }
 
 // ── Start ────────────────────────────────────────────────────────────────────
+
+export { app };
 
 const server = createServer(app);
 
