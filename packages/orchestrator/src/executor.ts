@@ -53,6 +53,9 @@ export interface ExecutorEvents {
   task_complete: { task_id: string; status: string; total_cost: number; total_time_ms: number };
 }
 
+const _parsed = parseInt(process.env.STEP_TIMEOUT_MS ?? '30000', 10);
+const STEP_TIMEOUT_MS = Number.isFinite(_parsed) && _parsed > 0 ? _parsed : 30000;
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function buildDependencyLevels(steps: ExecutionStep[]): number[][] {
@@ -87,14 +90,31 @@ function normaliseDeps(depends_on: number | number[] | null): number[] {
   return [depends_on];
 }
 
-async function checkHealth(agent: AgentRecord): Promise<boolean> {
+async function checkHealth(agent: AgentRecord, signal?: AbortSignal): Promise<boolean> {
   // Render free tier cold-starts: service returns 503 immediately, then takes ~50-60s to wake.
   // Poll every 10s for up to ~90s total so we catch the service after it finishes starting.
   const delays = [0, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000]; // 9 attempts, ~80s total wait
   for (let attempt = 0; attempt < delays.length; attempt++) {
-    if (delays[attempt] > 0) await new Promise((r) => setTimeout(r, delays[attempt]));
+    // Bail early if the outer step timeout fired — do not waste time on further polls
+    if (signal?.aborted) return false;
+    if (delays[attempt] > 0) {
+      // Abort-aware sleep: resolve as soon as the signal fires instead of
+      // blocking for the full delay, so a timed-out step stops polling promptly.
+      const interrupted = await new Promise<boolean>((resolve) => {
+        const t = setTimeout(() => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve(false);
+        }, delays[attempt]);
+        const onAbort = () => {
+          clearTimeout(t);
+          resolve(true);
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+      });
+      if (interrupted) return false;
+    }
     try {
-      const response = await fetch(agent.health_check, { signal: AbortSignal.timeout(15000) });
+      const response = await fetch(agent.health_check, { signal: signal ?? AbortSignal.timeout(15000) });
       if (response.ok) return true;
       // 503/502 = still sleeping/starting, keep retrying; any 4xx = genuinely down
       if (response.status !== 503 && response.status !== 502) return false;
@@ -148,7 +168,40 @@ export class PlanExecutor extends EventEmitter {
       const levelSteps = level.map((id) => stepMap.get(id)!);
 
       const results = await Promise.all(
-        levelSteps.map((step) => this.executeStep(step, task_id, stepResultMap, registryUrl)),
+        levelSteps.map((step) => {
+          const stepStart = Date.now();
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), STEP_TIMEOUT_MS);
+
+          return this.executeStep(
+            step,
+            task_id,
+            stepResultMap,
+            registryUrl,
+            controller.signal,
+          )
+            .catch((err) => {
+              if ((err as Error).name === 'AbortError') {
+                // The signal was aborted either by the outer timer or by a
+                // propagated AbortError from an internal fetch — in both
+                // cases the step timed out.
+                const result = this.makeFailedResult(
+                  step,
+                  `Step ${step.step_id} timed out after ${STEP_TIMEOUT_MS}ms`,
+                  Date.now() - stepStart,
+                );
+                this.emit('step_failed', {
+                  task_id,
+                  step_id: step.step_id,
+                  agent_name: step.agent_name,
+                  error: result.error!,
+                });
+                return result;
+              }
+              throw err;
+            })
+            .finally(() => clearTimeout(timer));
+        }),
       );
 
       for (const result of results) {
@@ -201,6 +254,7 @@ export class PlanExecutor extends EventEmitter {
     task_id: string,
     previousResults: Map<number, StepResult>,
     _registryUrl: string,
+    signal?: AbortSignal,
   ): Promise<StepResult> {
     const agent = this.agentMap.get(step.agent_id);
     const stepStart = Date.now();
@@ -235,7 +289,7 @@ export class PlanExecutor extends EventEmitter {
       return result;
     }
 
-    const healthy = await checkHealth(agent);
+    const healthy = await checkHealth(agent, signal);
     if (!healthy) {
       const latency_ms = Date.now() - stepStart;
       const result = this.makeFailedResult(
@@ -255,10 +309,25 @@ export class PlanExecutor extends EventEmitter {
     try {
       const amountUsdc = agent.pricing.price_per_call;
 
+      // Bail before vault release if this step was already aborted —
+      // releasing on-chain escrow for a dead step wastes gas and USDC
+      if (signal?.aborted) {
+        const latency_ms = Date.now() - stepStart;
+        const result = this.makeFailedResult(
+          step,
+          `Step ${step.step_id} aborted before payment`,
+          latency_ms,
+        );
+        return result;
+      }
+
       // ── Vault release: contract → orchestrator (serialized to avoid sequence conflicts)
       let releaseHash: string | null = null;
       if (VAULT_ACTIVE && this.orchestratorKeypair && this.vaultTaskId !== null) {
         const released = await this.releaseSequential(async () => {
+          // Re-check after acquiring the serialization lock — the step may
+          // have timed out while we were waiting for a prior release.
+          if (signal?.aborted) return null;
           return releasePayment(this.orchestratorKeypair!, this.vaultTaskId!, amountUsdc);
         });
 
@@ -306,6 +375,7 @@ export class PlanExecutor extends EventEmitter {
           step.action,
           context || undefined,
           orchestratorSecret,
+          signal,
         );
         output = x402Result.output;
         tx_hash = x402Result.tx_hash;
@@ -316,6 +386,7 @@ export class PlanExecutor extends EventEmitter {
           { data: context || '' },
           step.action,
           orchestratorSecret,
+          signal,
         );
         output = mppResult.output;
         tx_hash = mppResult.tx_hash;

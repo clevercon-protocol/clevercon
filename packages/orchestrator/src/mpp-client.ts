@@ -34,12 +34,14 @@ export interface MPPResult {
  * @param data        Arbitrary payload object to POST
  * @param instruction Instruction/query for the agent
  * @param secretKey   Secret key to sign payments (defaults to ORCHESTRATOR_SECRET_KEY)
+ * @param signal      Optional AbortSignal — when aborted, the call is cancelled immediately
  */
 export async function makeMPPPayment(
   endpoint: string,
   data: Record<string, unknown>,
   instruction: string,
   secretKey?: string,
+  signal?: AbortSignal,
 ): Promise<MPPResult> {
   const key = secretKey ?? process.env.ORCHESTRATOR_SECRET_KEY!;
   const mppFetch = buildMPPFetch(key);
@@ -48,6 +50,7 @@ export async function makeMPPPayment(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ data, instruction }),
+    signal,
   });
 
   if (!response.ok) {
