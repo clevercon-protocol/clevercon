@@ -97,7 +97,22 @@ async function checkHealth(agent: AgentRecord, signal?: AbortSignal): Promise<bo
   for (let attempt = 0; attempt < delays.length; attempt++) {
     // Bail early if the outer step timeout fired — do not waste time on further polls
     if (signal?.aborted) return false;
-    if (delays[attempt] > 0) await new Promise((r) => setTimeout(r, delays[attempt]));
+    if (delays[attempt] > 0) {
+      // Abort-aware sleep: resolve as soon as the signal fires instead of
+      // blocking for the full delay, so a timed-out step stops polling promptly.
+      const interrupted = await new Promise<boolean>((resolve) => {
+        const t = setTimeout(() => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve(false);
+        }, delays[attempt]);
+        const onAbort = () => {
+          clearTimeout(t);
+          resolve(true);
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+      });
+      if (interrupted) return false;
+    }
     try {
       const response = await fetch(agent.health_check, { signal: signal ?? AbortSignal.timeout(15000) });
       if (response.ok) return true;
@@ -170,11 +185,18 @@ export class PlanExecutor extends EventEmitter {
                 // The signal was aborted either by the outer timer or by a
                 // propagated AbortError from an internal fetch — in both
                 // cases the step timed out.
-                return this.makeFailedResult(
+                const result = this.makeFailedResult(
                   step,
                   `Step ${step.step_id} timed out after ${STEP_TIMEOUT_MS}ms`,
                   Date.now() - stepStart,
                 );
+                this.emit('step_failed', {
+                  task_id,
+                  step_id: step.step_id,
+                  agent_name: step.agent_name,
+                  error: result.error!,
+                });
+                return result;
               }
               throw err;
             })
