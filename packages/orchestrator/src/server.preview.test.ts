@@ -40,6 +40,8 @@ const mockAgent = {
 describe('POST /api/tasks/preview', () => {
   let server: Server;
   let baseUrl: string;
+  // Port of the registry (default when REGISTRY_URL is unset)
+  const REGISTRY_PORT = '4000';
 
   beforeAll(async () => {
     await new Promise<void>((resolve) => {
@@ -59,11 +61,31 @@ describe('POST /api/tasks/preview', () => {
     vi.restoreAllMocks();
   });
 
+  /**
+   * Mock fetch so that calls to the registry (localhost:4000) are intercepted
+   * while calls to the test server (baseUrl) pass through to the real network.
+   */
+  function mockRegistryFetch(agents: unknown[]): void;
+  function mockRegistryFetch(err: Error): void;
+  function mockRegistryFetch(agentsOrErr: unknown[] | Error): void {
+    const realFetch = fetch;
+    vi.spyOn(global, 'fetch').mockImplementation((input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes(`:${REGISTRY_PORT}`)) {
+        if (agentsOrErr instanceof Error) {
+          return Promise.reject(agentsOrErr);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(agentsOrErr),
+        } as Response);
+      }
+      return realFetch(input, init);
+    });
+  }
+
   it('returns 503 when no agents are registered', async () => {
-    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve([]),
-    } as Response);
+    mockRegistryFetch([]);
 
     const res = await fetch(`${baseUrl}/api/tasks/preview`, {
       method: 'POST',
@@ -77,7 +99,7 @@ describe('POST /api/tasks/preview', () => {
   });
 
   it('returns 503 when registry is unreachable', async () => {
-    vi.spyOn(global, 'fetch').mockRejectedValueOnce(new Error('ECONNREFUSED'));
+    mockRegistryFetch(new Error('ECONNREFUSED'));
 
     const res = await fetch(`${baseUrl}/api/tasks/preview`, {
       method: 'POST',
@@ -91,10 +113,7 @@ describe('POST /api/tasks/preview', () => {
   });
 
   it('returns 200 with full step shape on happy path using prompt field', async () => {
-    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve([mockAgent]),
-    } as Response);
+    mockRegistryFetch([mockAgent]);
 
     vi.mocked(checkFeasibility).mockResolvedValueOnce({
       feasible: true,
@@ -140,10 +159,7 @@ describe('POST /api/tasks/preview', () => {
   });
 
   it('accepts task field as alias for prompt', async () => {
-    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve([mockAgent]),
-    } as Response);
+    mockRegistryFetch([mockAgent]);
 
     vi.mocked(checkFeasibility).mockResolvedValueOnce({
       feasible: true,
@@ -180,10 +196,7 @@ describe('POST /api/tasks/preview', () => {
   });
 
   it('returns 422 when feasibility check reports task as infeasible', async () => {
-    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve([mockAgent]),
-    } as Response);
+    mockRegistryFetch([mockAgent]);
 
     vi.mocked(checkFeasibility).mockResolvedValueOnce({
       feasible: false,
