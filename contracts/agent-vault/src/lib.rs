@@ -82,6 +82,20 @@ pub struct TaskDoneEvent {
     pub refund: i128,
 }
 
+#[contractevent]
+pub struct AddAssetEvent {
+    #[topic]
+    pub asset: Address,
+    pub admin: Address,
+}
+
+#[contractevent]
+pub struct RemoveAssetEvent {
+    #[topic]
+    pub asset: Address,
+    pub admin: Address,
+}
+
 #[contracterror]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum VaultError {
@@ -270,6 +284,13 @@ impl AgentVault {
         Self::extend_persistent_ttl(&env, &asset_key);
 
         log!(&env, "Asset added to whitelist: {}", asset);
+
+        AddAssetEvent {
+            asset: asset.clone(),
+            admin: admin.clone(),
+        }
+        .publish(&env);
+
         Ok(())
     }
 
@@ -288,9 +309,16 @@ impl AgentVault {
         let asset_key = DataKey::AssetSupported(asset.clone());
         if env.storage().persistent().has(&asset_key) {
             env.storage().persistent().remove(&asset_key);
+
+            log!(&env, "Asset removed from whitelist: {}", asset);
+
+            RemoveAssetEvent {
+                asset: asset.clone(),
+                admin: admin.clone(),
+            }
+            .publish(&env);
         }
 
-        log!(&env, "Asset removed from whitelist: {}", asset);
         Ok(())
     }
 

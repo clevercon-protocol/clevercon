@@ -1,6 +1,6 @@
-use crate::{AgentVault, AgentVaultClient, DataKey, VaultError};
-use soroban_sdk::testutils::{Address as _, Ledger as _};
-use soroban_sdk::{token, Address, Env};
+use crate::{AddAssetEvent, AgentVault, AgentVaultClient, DataKey, RemoveAssetEvent, VaultError};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
+use soroban_sdk::{token, vec, Address, Env, Event as _};
 
 struct TestEnv {
     env: Env,
@@ -1241,4 +1241,78 @@ fn test_get_user_tasks_separate_users() {
         .create_task(&orchestrator, &t.usdc_sac, &1_000_000_000_i128);
     assert_eq!(t.client.get_user_tasks(&user2).len(), 0);
     assert_eq!(t.client.get_user_tasks(&user1).len(), 1);
+}
+
+// Asset whitelist events (#37)
+
+#[test]
+fn test_add_asset_emits_event() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    let asset = Address::generate(&t.env);
+    t.client.add_asset(&t.admin, &asset);
+
+    // The only event so far should be the AddAssetEvent for this asset/admin.
+    let expected = AddAssetEvent {
+        asset: asset.clone(),
+        admin: t.admin.clone(),
+    };
+    assert_eq!(
+        t.env.events().all(),
+        vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                expected.topics(&t.env),
+                expected.data(&t.env),
+            ),
+        ],
+    );
+
+    assert!(t.client.is_supported_asset(&asset));
+}
+
+#[test]
+fn test_remove_asset_emits_event() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    let asset = Address::generate(&t.env);
+    t.client.add_asset(&t.admin, &asset);
+
+    // `env.events().all()` reflects the most recent invocation, so calling
+    // remove_asset last leaves exactly its RemoveAssetEvent in the buffer.
+    t.client.remove_asset(&t.admin, &asset);
+
+    let expected = RemoveAssetEvent {
+        asset: asset.clone(),
+        admin: t.admin.clone(),
+    };
+    assert_eq!(
+        t.env.events().all(),
+        vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                expected.topics(&t.env),
+                expected.data(&t.env),
+            ),
+        ],
+    );
+
+    assert!(!t.client.is_supported_asset(&asset));
+}
+
+#[test]
+fn test_remove_nonexistent_asset_emits_no_event() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    let asset = Address::generate(&t.env);
+
+    // Asset was never whitelisted: remove is a no-op and must not emit an event.
+    t.client.remove_asset(&t.admin, &asset);
+
+    assert!(t.env.events().all().events().is_empty());
 }
