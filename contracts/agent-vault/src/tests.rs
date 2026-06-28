@@ -1,5 +1,5 @@
 use crate::{AgentVault, AgentVaultClient, DataKey, VaultError};
-use soroban_sdk::testutils::{Address as _, Ledger as _};
+use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
 use soroban_sdk::{token, Address, Env};
 
 struct TestEnv {
@@ -1081,6 +1081,17 @@ fn test_pause_sets_flag() {
 }
 
 #[test]
+fn test_pause_emits_pause_event() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    test_env.client.pause(&test_env.admin);
+
+    let events = test_env.env.events().all();
+    assert_eq!(events.events().len(), 1);
+}
+
+#[test]
 fn test_unpause_clears_flag() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -1088,6 +1099,18 @@ fn test_unpause_clears_flag() {
     assert!(test_env.client.is_paused());
     test_env.client.unpause(&test_env.admin);
     assert!(!test_env.client.is_paused());
+}
+
+#[test]
+fn test_unpause_emits_unpause_event() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    test_env.client.pause(&test_env.admin);
+    test_env.client.unpause(&test_env.admin);
+
+    let events = test_env.env.events().all();
+    assert_eq!(events.events().len(), 1);
 }
 
 #[test]
