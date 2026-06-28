@@ -383,6 +383,7 @@ fn test_update_orchestrator_rejects_address_owned_by_another_user() {
 
     let user1_config = test_env.client.get_user_config(&user1).unwrap();
     assert_eq!(user1_config.orchestrator, Some(orchestrator1.clone()));
+    assert_eq!(user1_config.orchestrator_name, name1);
     assert_eq!(
         test_env.client.get_orchestrator_owner(&orchestrator1),
         Some(user1)
