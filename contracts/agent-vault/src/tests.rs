@@ -1706,7 +1706,7 @@ fn test_get_admin_returns_current_admin() {
     assert_eq!(stored, t.admin);
 }
 
-/// UpdateAdminEvent is emitted with correct old and new admin.
+/// UpdateAdminEvent is emitted on successful admin rotation.
 #[test]
 fn test_update_admin_emits_event() {
     let t = setup_test();

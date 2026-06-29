@@ -1169,14 +1169,16 @@ impl AgentVault {
     }
     /// Rotates the admin key. Only the current admin can call this.
     /// Emits UpdateAdminEvent on success.
-    pub fn update_admin(env: Env, admin: Address, new_admin: Address) {
+    pub fn update_admin(env: Env, admin: Address, new_admin: Address) -> Result<(), VaultError> {
         admin.require_auth();
         let stored_admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .expect("Not initialized");
-        assert!(admin == stored_admin, "Only admin can call this");
+            .ok_or(VaultError::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Self::extend_instance_ttl(&env);
         UpdateAdminEvent {
@@ -1184,6 +1186,7 @@ impl AgentVault {
             new_admin,
         }
         .publish(&env);
+        Ok(())
     }
 
     /// Returns the current admin address.
