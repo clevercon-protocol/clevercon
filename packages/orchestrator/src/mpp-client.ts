@@ -16,7 +16,7 @@ async function withFetchRetry(
   actionName: string,
   maxAttempts: number,
   baseDelayMs: number,
-  retryOn5xx: boolean
+  retryOn5xx: boolean,
 ): Promise<Response> {
   let attempt = 1;
   while (true) {
@@ -38,7 +38,7 @@ async function withFetchRetry(
 
       const delayMs = baseDelayMs * 2 ** (attempt - 1);
       console.warn(
-        `[mpp] ${actionName} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delayMs}ms.`
+        `[mpp] ${actionName} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delayMs}ms.`,
       );
       await new Promise((r) => setTimeout(r, delayMs));
       attempt++;
@@ -61,7 +61,7 @@ const customFetch: typeof fetch = async (input, init) => {
     } else {
       urlStr = input.toString();
     }
-    
+
     if (!init?.method && 'method' in input && typeof input.method === 'string') {
       method = input.method.toUpperCase();
     }
@@ -69,7 +69,13 @@ const customFetch: typeof fetch = async (input, init) => {
 
   if (method === 'POST') {
     if (urlStr.endsWith('/session/start')) {
-      return withFetchRetry(() => fetch(input, init), 'session start', MAX_MPP_RETRIES, MPP_RETRY_BASE_MS, true);
+      return withFetchRetry(
+        () => fetch(input, init),
+        'session start',
+        MAX_MPP_RETRIES,
+        MPP_RETRY_BASE_MS,
+        true,
+      );
     }
     if (urlStr.endsWith('/session/end')) {
       return withFetchRetry(() => fetch(input, init), 'session end', 2, MPP_RETRY_BASE_MS, false);
