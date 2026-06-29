@@ -184,6 +184,8 @@ fn test_withdraw_insufficient_fails() {
 
 #[test]
 fn test_withdraw_blocked_active_task() {
+    // After #39, an active task no longer blocks withdrawal outright — only the
+    // portion locked by the task for that asset is protected.
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
 
@@ -199,14 +201,62 @@ fn test_withdraw_blocked_active_task() {
         .client
         .register_orchestrator(&user, &orchestrator, &name);
 
-    // Create a task to set active_tasks_count = 1
+    // Lock 100 in an active task → 500 of the 600 stays unlocked.
     test_env
         .client
         .create_task(&orchestrator, &test_env.usdc_sac, &100);
 
-    // Attempt to withdraw
-    let result = test_env.client.try_withdraw(&user, &test_env.usdc_sac, &50);
-    assert!(result == Err(Ok(VaultError::ActiveTaskExists)));
+    // The unlocked portion is withdrawable even though a task is active...
+    test_env.client.withdraw(&user, &test_env.usdc_sac, &500);
+    assert_eq!(test_env.client.get_balance(&user, &test_env.usdc_sac), 100);
+
+    // ...but the locked remainder cannot be withdrawn.
+    let result = test_env.client.try_withdraw(&user, &test_env.usdc_sac, &1);
+    assert!(result == Err(Ok(VaultError::InsufficientAvailable)));
+}
+
+#[test]
+fn test_withdraw_other_asset_while_task_active() {
+    // The headline case from #39: a task locking asset A must not block the
+    // withdrawal of an entirely separate asset B.
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    // Whitelist a second asset (e.g. XLM) and wire up its token clients.
+    let asset_b_sac = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone());
+    let asset_b = asset_b_sac.address();
+    test_env.client.add_asset(&test_env.admin, &asset_b);
+    let asset_b_admin = token::StellarAssetClient::new(&test_env.env, &asset_b);
+    let asset_b_token = token::Client::new(&test_env.env, &asset_b);
+
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "TestOrch");
+
+    // Deposit USDC and lock ALL of it in an active task.
+    test_env.token_admin_client.mint(&user, &600);
+    test_env.client.deposit(&user, &test_env.usdc_sac, &600);
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator, &name);
+    test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &600);
+
+    // Deposit asset B — unrelated to the task.
+    asset_b_admin.mint(&user, &500);
+    test_env.client.deposit(&user, &asset_b, &500);
+
+    // Asset B is fully withdrawable even though USDC is entirely locked.
+    test_env.client.withdraw(&user, &asset_b, &500);
+    assert_eq!(asset_b_token.balance(&user), 500);
+    assert_eq!(test_env.client.get_balance(&user, &asset_b), 0);
+
+    // The locked USDC, however, stays put.
+    let result = test_env.client.try_withdraw(&user, &test_env.usdc_sac, &1);
+    assert!(result == Err(Ok(VaultError::InsufficientAvailable)));
 }
 
 #[test]

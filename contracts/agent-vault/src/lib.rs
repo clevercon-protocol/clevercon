@@ -390,7 +390,9 @@ impl AgentVault {
     }
 
     /// Withdraw tokens from vault back to user's external wallet.
-    /// BLOCKED while any task is active (active_tasks_count > 0).
+    /// Only the unlocked portion (`balance - locked`) of the given asset may be
+    /// withdrawn; funds locked by active tasks for that asset stay reserved, so a
+    /// withdrawal succeeds even while other funds — or other assets — are locked.
     pub fn withdraw(
         env: Env,
         user: Address,
@@ -403,16 +405,15 @@ impl AgentVault {
         }
 
         let config_key = DataKey::UserConfig(user.clone());
-        let config: UserConfig = env
+        // Fetched to assert the user has an account on record and to refresh the
+        // config TTL. Active tasks no longer block withdrawal — the per-asset
+        // `locked` field below is the correct, narrower guard.
+        let _config: UserConfig = env
             .storage()
             .persistent()
             .get(&config_key)
             .expect("No config found");
         Self::extend_persistent_ttl(&env, &config_key);
-
-        if config.active_tasks_count != 0 {
-            return Err(VaultError::ActiveTaskExists);
-        }
 
         let asset_key = DataKey::UserAsset(user.clone(), asset.clone());
         let mut asset_account: UserAssetAccount = env
@@ -424,6 +425,14 @@ impl AgentVault {
 
         if asset_account.balance < amount {
             return Err(VaultError::InsufficientBalance);
+        }
+        // Per-asset guard: only the unlocked portion may leave the vault. `locked`
+        // tracks exactly how much of THIS asset is committed to active tasks, so a
+        // different asset (or the free balance) stays withdrawable while a task
+        // runs, while the locked portion does not.
+        let available = asset_account.balance - asset_account.locked;
+        if amount > available {
+            return Err(VaultError::InsufficientAvailable);
         }
 
         Self::extend_instance_ttl(&env);
