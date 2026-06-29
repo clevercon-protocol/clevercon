@@ -1,4 +1,4 @@
-use crate::{AgentVault, AgentVaultClient, DataKey, VaultError};
+﻿use crate::{AgentVault, AgentVaultClient, DataKey, VaultError};
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
 use soroban_sdk::{token, Address, Env};
 
@@ -1733,4 +1733,3 @@ fn test_chained_admin_rotation() {
     let stored = t.client.get_admin();
     assert_eq!(stored, third_admin);
 }
-
