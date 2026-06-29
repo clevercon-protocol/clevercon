@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "npx tsx src/server.ts",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "test:integration": "vitest run src/__tests__/*.integration.test.ts --tag integration"
   },
   "dependencies": {
     "@clevercon/common": "*",

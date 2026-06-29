@@ -32,7 +32,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run"
+    "test": "vitest run --excludeTags integration",
+    "test:integration": "vitest run --tag integration"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
