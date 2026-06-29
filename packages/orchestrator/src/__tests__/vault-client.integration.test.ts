@@ -30,7 +30,7 @@ const CONTRACT_ID = process.env.AGENT_VAULT_CONTRACT_ID ?? '';
 const RPC_URL = process.env.STELLAR_RPC_URL || 'https://soroban-testnet.stellar.org';
 const NETWORK_PASSPHRASE = Networks.TESTNET;
 const STROOPS_PER_USDC = 10_000_000;
-const TIMEOUT = 30_000;
+const TIMEOUT = 120_000;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -139,8 +139,10 @@ async function getBalance(userAddress: string): Promise<bigint> {
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
-describe.skipIf(!CONTRACT_ID)('vault-client integration @integration', () => {
-  const usdcSac = process.env.USDC_SAC ?? '';
+const USDC_SAC = process.env.USDC_SAC ?? '';
+
+describe.skipIf(!CONTRACT_ID || !USDC_SAC)('vault-client integration @integration', () => {
+  const usdcSac = USDC_SAC;
   let orchestratorKp: Keypair;
 
   beforeAll(async () => {
