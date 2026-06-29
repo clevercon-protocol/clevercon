@@ -102,7 +102,7 @@ async function callView(method: string, args: xdr.ScVal[]): Promise<unknown> {
       accountId: () => dummy.publicKey(),
       sequenceNumber: () => '0',
       incrementSequenceNumber: () => {},
-    } as unknown as SorobanRpc.Account,
+    } as any,
     { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE },
   )
     .addOperation(contract.call(method, ...args))
