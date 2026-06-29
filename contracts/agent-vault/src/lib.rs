@@ -101,6 +101,13 @@ pub struct UnpauseEvent {
     #[topic]
     pub admin: Address,
 }
+#[contractevent]
+pub struct UpdateAdminEvent {
+    #[topic]
+    pub old_admin: Address,
+    #[topic]
+    pub new_admin: Address,
+}
 
 #[contracterror]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1159,6 +1166,36 @@ impl AgentVault {
             .unwrap_or(STALE_TASK_THRESHOLD_SECONDS);
         Self::extend_instance_ttl(&env);
         threshold
+    }
+    /// Rotates the admin key. Only the current admin can call this.
+    /// Emits UpdateAdminEvent on success.
+    pub fn update_admin(env: Env, admin: Address, new_admin: Address) -> Result<(), VaultError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(VaultError::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        Self::extend_instance_ttl(&env);
+        UpdateAdminEvent {
+            old_admin: admin,
+            new_admin,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Returns the current admin address.
+    pub fn get_admin(env: Env) -> Address {
+        Self::extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized")
     }
 }
 
