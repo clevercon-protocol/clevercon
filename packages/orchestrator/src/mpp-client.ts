@@ -8,6 +8,82 @@
 import { Mppx } from 'mppx/client';
 import { stellar } from '@stellar/mpp/charge/client';
 
+const MAX_MPP_RETRIES = parseInt(process.env.MAX_MPP_RETRIES || '3', 10);
+const MPP_RETRY_BASE_MS = parseInt(process.env.MPP_RETRY_BASE_MS || '500', 10);
+
+async function withFetchRetry(
+  fn: () => Promise<Response>,
+  actionName: string,
+  maxAttempts: number,
+  baseDelayMs: number,
+  retryOn5xx: boolean,
+): Promise<Response> {
+  let attempt = 1;
+  while (true) {
+    try {
+      const response = await fn();
+
+      if (retryOn5xx && response.status >= 500 && response.status < 600) {
+        if (attempt >= maxAttempts) {
+          return response;
+        }
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      return response;
+    } catch (err) {
+      if (attempt >= maxAttempts) {
+        throw err;
+      }
+
+      const delayMs = baseDelayMs * 2 ** (attempt - 1);
+      console.warn(
+        `[mpp] ${actionName} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delayMs}ms.`,
+      );
+      await new Promise((r) => setTimeout(r, delayMs));
+      attempt++;
+    }
+  }
+}
+
+const customFetch: typeof fetch = async (input, init) => {
+  let urlStr = '';
+  let method = init?.method?.toUpperCase() || 'GET';
+
+  // Safely extract the URL string and method without assuming global Request/URL types
+  if (typeof input === 'string') {
+    urlStr = input;
+  } else if (input && typeof input === 'object') {
+    if ('url' in input && typeof input.url === 'string') {
+      urlStr = input.url;
+    } else if ('href' in input && typeof input.href === 'string') {
+      urlStr = input.href;
+    } else {
+      urlStr = input.toString();
+    }
+
+    if (!init?.method && 'method' in input && typeof input.method === 'string') {
+      method = input.method.toUpperCase();
+    }
+  }
+
+  if (method === 'POST') {
+    if (urlStr.endsWith('/session/start')) {
+      return withFetchRetry(
+        () => fetch(input, init),
+        'session start',
+        MAX_MPP_RETRIES,
+        MPP_RETRY_BASE_MS,
+        true,
+      );
+    }
+    if (urlStr.endsWith('/session/end')) {
+      return withFetchRetry(() => fetch(input, init), 'session end', 2, MPP_RETRY_BASE_MS, false);
+    }
+  }
+  return fetch(input, init);
+};
+
 // Build a fresh MPP fetch per call — MPP payment channels are stateful;
 // reusing a cached instance across calls can produce stale channel state.
 function buildMPPFetch(secretKey: string): typeof fetch {
@@ -19,6 +95,7 @@ function buildMPPFetch(secretKey: string): typeof fetch {
       }),
     ],
     polyfill: false,
+    fetch: customFetch,
   });
   return mppx.fetch as typeof fetch;
 }
