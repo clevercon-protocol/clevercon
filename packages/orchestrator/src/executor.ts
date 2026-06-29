@@ -26,7 +26,7 @@ import { txExplorerUrl } from '@clevercon/common';
 import { makeX402Payment } from './x402-client.js';
 import { makeMPPPayment } from './mpp-client.js';
 import { rateResponse } from './rater.js';
-import { releasePayment, completeTask, VAULT_ACTIVE } from './agent-vault-client.js';
+import { releasePayment, VAULT_ACTIVE } from './agent-vault-client.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -200,7 +200,7 @@ export class PlanExecutor extends EventEmitter {
     step: ExecutionStep,
     task_id: string,
     previousResults: Map<number, StepResult>,
-    registryUrl: string,
+    _registryUrl: string,
   ): Promise<StepResult> {
     const agent = this.agentMap.get(step.agent_id);
     const stepStart = Date.now();

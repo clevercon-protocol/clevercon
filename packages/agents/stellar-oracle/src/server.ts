@@ -5,7 +5,14 @@ import { Keypair } from '@stellar/stellar-sdk';
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 import { ExactStellarScheme } from '@x402/stellar/exact/server';
-import { getXLMUSDCTrades, getOrderbook, getAccountBalances, getNetworkStats } from './horizon.js';
+import {
+  getXLMUSDCTrades,
+  getOrderbook,
+  getAssetMetadata,
+  getAccountBalances,
+  getNetworkStats,
+} from './horizon.js';
+import { getCacheStats } from './cache.js';
 import { getCryptoQuote, getCryptoCandles } from './x402-consumer.js';
 import { registerSelf } from './register.js';
 
@@ -36,6 +43,10 @@ app.use(express.json());
 // ── Unpaid endpoints ──────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', agent: 'StellarOracle', address: PAY_TO });
+});
+
+app.get('/cache/stats', (_req, res) => {
+  res.json(getCacheStats());
 });
 
 app.get('/', (_req, res) => {
@@ -97,6 +108,8 @@ app.post('/query', async (req, res) => {
     const wantsNetwork =
       q.includes('network') || q.includes('ledger') || q.includes('stats') || q === '';
     const wantsBalances = q.includes('balance') || q.includes('account');
+    const wantsAssetMetadata =
+      q.includes('asset') || q.includes('issuer') || q.includes('metadata') || q === '';
     const wantsCandles = q.includes('candle') || q.includes('ohlc') || q.includes('chart');
 
     // Parse symbol from query (default XLM-USD)
@@ -104,24 +117,26 @@ app.post('/query', async (req, res) => {
     const symbol = symbolMatch ? symbolMatch[0].toUpperCase() : 'XLM-USD';
 
     // Fetch Horizon data + xlm402 external quote in parallel
-    const [trades, orderbook, networkStats, externalQuote, externalCandles] = await Promise.all([
-      wantsTrades ? getXLMUSDCTrades(10) : Promise.resolve(null),
-      wantsOrderbook ? getOrderbook() : Promise.resolve(null),
-      wantsNetwork ? getNetworkStats() : Promise.resolve(null),
-      // Always fetch cross-exchange quote when price/market is requested
-      wantsTrades || q === ''
-        ? getCryptoQuote(symbol).catch((e) => {
-            console.warn('[StellarOracle] xlm402 quote failed:', e.message);
-            return null;
-          })
-        : Promise.resolve(null),
-      wantsCandles
-        ? getCryptoCandles(symbol).catch((e) => {
-            console.warn('[StellarOracle] xlm402 candles failed:', e.message);
-            return null;
-          })
-        : Promise.resolve(null),
-    ]);
+    const [trades, orderbook, assetMetadata, networkStats, externalQuote, externalCandles] =
+      await Promise.all([
+        wantsTrades ? getXLMUSDCTrades(10) : Promise.resolve(null),
+        wantsOrderbook ? getOrderbook() : Promise.resolve(null),
+        wantsAssetMetadata ? getAssetMetadata() : Promise.resolve(null),
+        wantsNetwork ? getNetworkStats() : Promise.resolve(null),
+        // Always fetch cross-exchange quote when price/market is requested
+        wantsTrades || q === ''
+          ? getCryptoQuote(symbol).catch((e) => {
+              console.warn('[StellarOracle] xlm402 quote failed:', e.message);
+              return null;
+            })
+          : Promise.resolve(null),
+        wantsCandles
+          ? getCryptoCandles(symbol).catch((e) => {
+              console.warn('[StellarOracle] xlm402 candles failed:', e.message);
+              return null;
+            })
+          : Promise.resolve(null),
+      ]);
 
     let balances = null;
     if (wantsBalances) {
@@ -134,6 +149,7 @@ app.post('/query', async (req, res) => {
     const result: Record<string, any> = { query, timestamp: new Date().toISOString() };
     if (trades) result.stellar_dex_trades = trades;
     if (orderbook) result.stellar_dex_orderbook = orderbook;
+    if (assetMetadata) result.asset_metadata = assetMetadata;
     if (networkStats) result.network_stats = networkStats;
     if (balances) result.account_balances = balances;
     if (externalQuote) result.cross_exchange_price = externalQuote.data;

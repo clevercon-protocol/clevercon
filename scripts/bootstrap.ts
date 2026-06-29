@@ -13,11 +13,7 @@
  */
 
 import 'dotenv/config';
-import { fileURLToPath } from 'url';
-import path from 'path';
 import WebSocket from 'ws';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -313,10 +309,8 @@ async function main() {
   console.log('[bootstrap] Orchestrator is healthy\n');
 
   // Connect WebSocket and wait for it to open
-  let wsReady = false;
   const ws = await new Promise<WebSocket>((resolve) => {
     const socket = connectWS(() => {
-      wsReady = true;
       resolve(socket);
     });
   });

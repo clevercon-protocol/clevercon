@@ -15,6 +15,7 @@
 //! 3. `DataKey::Task(task_id)`: Maps a task_id to `TaskInfo` which now includes the `asset: Address` field.
 //! 4. `DataKey::AssetSupported(Asset)`: Maps an asset SAC address to `true`, indicating it is a supported whitelisted asset.
 
+use soroban_sdk::contracterror;
 use soroban_sdk::{
     contract, contractevent, contractimpl, contracttype, log, token, Address, Env, String,
 };
@@ -44,6 +45,14 @@ pub struct RegOrchEvent {
     #[topic]
     pub user: Address,
     pub orchestrator: Address,
+}
+
+#[contractevent]
+pub struct UpdateOrchEvent {
+    #[topic]
+    pub user: Address,
+    pub old_orchestrator: Address,
+    pub new_orchestrator: Address,
 }
 
 #[contractevent]
@@ -81,6 +90,40 @@ pub struct TaskDoneEvent {
     pub refund: i128,
 }
 
+#[contractevent]
+pub struct PauseEvent {
+    #[topic]
+    pub admin: Address,
+}
+
+#[contractevent]
+pub struct UnpauseEvent {
+    #[topic]
+    pub admin: Address,
+}
+
+#[contracterror]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum VaultError {
+    AlreadyInitialized = 1,
+    Unauthorized = 2,
+    ContractPaused = 3,
+    AssetNotSupported = 4,
+    InsufficientBalance = 5,
+    InsufficientAvailable = 6,
+    ActiveTaskExists = 7,
+    TaskNotFound = 8,
+    TaskAlreadyCompleted = 9,
+    TaskNotStale = 10,
+    InvalidAmount = 11,
+    ExceedsPlanCost = 12,
+    AssetMismatch = 13,
+    OrchestratorNotRegistered = 14,
+    OrchestratorAlreadyRegistered = 15,
+    NotYourTask = 16,
+    NotYourOrchestrator = 17,
+}
+
 // Storage keys
 
 /// Storage keys for all persistent and instance data in this contract.
@@ -104,6 +147,9 @@ pub enum DataKey {
     AssetSupported(Address),
     /// Returns true if the contract is paused.
     Paused,
+    UserTasks(Address),
+    /// Configurable threshold for force-completing stale tasks.
+    StaleTaskThreshold,
 }
 
 // Data structs
@@ -203,14 +249,17 @@ impl AgentVault {
     // Initialisation
 
     /// One-time init — sets admin and USDC SAC address, and automatically whitelists USDC.
-    pub fn init(env: Env, admin: Address, usdc_sac: Address) {
+    pub fn init(env: Env, admin: Address, usdc_sac: Address) -> Result<(), VaultError> {
         admin.require_auth();
         if env.storage().instance().has(&DataKey::Admin) {
-            panic!("Already initialized");
+            return Err(VaultError::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::UsdcSac, &usdc_sac);
         env.storage().instance().set(&DataKey::TaskCounter, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::StaleTaskThreshold, &STALE_TASK_THRESHOLD_SECONDS);
 
         // Automatically whitelist usdc_sac
         let asset_key = DataKey::AssetSupported(usdc_sac.clone());
@@ -224,36 +273,49 @@ impl AgentVault {
             admin,
             usdc_sac
         );
+        Ok(())
     }
 
     // Asset Management
 
     /// Admin whitelists an accepted asset SAC token.
-    pub fn add_asset(env: Env, admin: Address, asset: Address) {
+    pub fn add_asset(env: Env, admin: Address, asset: Address) -> Result<(), VaultError> {
         admin.require_auth();
         let stored_admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
             .expect("Not initialized");
-        assert_eq!(admin, stored_admin, "Only admin can call this");
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
 
         let asset_key = DataKey::AssetSupported(asset.clone());
         env.storage().persistent().set(&asset_key, &true);
         Self::extend_persistent_ttl(&env, &asset_key);
 
         log!(&env, "Asset added to whitelist: {}", asset);
+        Ok(())
     }
 
     /// Admin removes an asset from the whitelist.
-    pub fn remove_asset(env: Env, admin: Address, asset: Address) {
+    pub fn remove_asset(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        force: bool,
+    ) -> Result<(), VaultError> {
         admin.require_auth();
         let stored_admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
             .expect("Not initialized");
-        assert_eq!(admin, stored_admin, "Only admin can call this");
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
+
+        assert!(force, "Pass force=true to confirm removal of a live asset");
 
         let asset_key = DataKey::AssetSupported(asset.clone());
         if env.storage().persistent().has(&asset_key) {
@@ -261,6 +323,7 @@ impl AgentVault {
         }
 
         log!(&env, "Asset removed from whitelist: {}", asset);
+        Ok(())
     }
 
     /// Public view function to check if an asset is supported.
@@ -276,14 +339,20 @@ impl AgentVault {
     // Deposits & Withdrawals
 
     /// Deposit supported tokens from user's external wallet into their vault balance.
-    pub fn deposit(env: Env, user: Address, asset: Address, amount: i128) {
+    pub fn deposit(
+        env: Env,
+        user: Address,
+        asset: Address,
+        amount: i128,
+    ) -> Result<(), VaultError> {
         user.require_auth();
-        Self::require_not_paused(&env);
-        assert!(amount > 0, "Deposit must be positive");
-        assert!(
-            Self::is_supported_asset(env.clone(), asset.clone()),
-            "Asset not supported"
-        );
+        Self::require_not_paused(&env)?;
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+        if !Self::is_supported_asset(env.clone(), asset.clone()) {
+            return Err(VaultError::AssetNotSupported);
+        }
 
         Self::extend_instance_ttl(&env);
         let token_client = token::Client::new(&env, &asset);
@@ -317,26 +386,34 @@ impl AgentVault {
             amount,
             asset_account.balance
         );
+        Ok(())
     }
 
     /// Withdraw tokens from vault back to user's external wallet.
-    /// BLOCKED while any task is active (active_tasks_count > 0).
-    pub fn withdraw(env: Env, user: Address, asset: Address, amount: i128) {
+    /// Only the unlocked portion (`balance - locked`) of the given asset may be
+    /// withdrawn; funds locked by active tasks for that asset stay reserved, so a
+    /// withdrawal succeeds even while other funds — or other assets — are locked.
+    pub fn withdraw(
+        env: Env,
+        user: Address,
+        asset: Address,
+        amount: i128,
+    ) -> Result<(), VaultError> {
         user.require_auth();
-        assert!(amount > 0, "Withdrawal must be positive");
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
 
         let config_key = DataKey::UserConfig(user.clone());
-        let config: UserConfig = env
+        // Fetched to assert the user has an account on record and to refresh the
+        // config TTL. Active tasks no longer block withdrawal — the per-asset
+        // `locked` field below is the correct, narrower guard.
+        let _config: UserConfig = env
             .storage()
             .persistent()
             .get(&config_key)
             .expect("No config found");
         Self::extend_persistent_ttl(&env, &config_key);
-
-        assert!(
-            config.active_tasks_count == 0,
-            "Cannot withdraw while tasks are active"
-        );
 
         let asset_key = DataKey::UserAsset(user.clone(), asset.clone());
         let mut asset_account: UserAssetAccount = env
@@ -346,7 +423,17 @@ impl AgentVault {
             .expect("No asset account");
         Self::extend_persistent_ttl(&env, &asset_key);
 
-        assert!(asset_account.balance >= amount, "Insufficient balance");
+        if asset_account.balance < amount {
+            return Err(VaultError::InsufficientBalance);
+        }
+        // Per-asset guard: only the unlocked portion may leave the vault. `locked`
+        // tracks exactly how much of THIS asset is committed to active tasks, so a
+        // different asset (or the free balance) stays withdrawable while a task
+        // runs, while the locked portion does not.
+        let available = asset_account.balance - asset_account.locked;
+        if amount > available {
+            return Err(VaultError::InsufficientAvailable);
+        }
 
         Self::extend_instance_ttl(&env);
         let token_client = token::Client::new(&env, &asset);
@@ -370,20 +457,25 @@ impl AgentVault {
             amount,
             asset_account.balance
         );
+        Ok(())
     }
 
     // Orchestrator registration
 
     /// Register a personal orchestrator for this user. ONE-TIME per user.
-    pub fn register_orchestrator(env: Env, user: Address, orchestrator: Address, name: String) {
+    pub fn register_orchestrator(
+        env: Env,
+        user: Address,
+        orchestrator: Address,
+        name: String,
+    ) -> Result<(), VaultError> {
         user.require_auth();
 
         let mut config = Self::get_or_create_config(&env, &user);
 
-        assert!(
-            config.orchestrator.is_none(),
-            "Orchestrator already registered for this user"
-        );
+        if config.orchestrator.is_some() {
+            return Err(VaultError::OrchestratorAlreadyRegistered);
+        }
 
         config.orchestrator = Some(orchestrator.clone());
         config.orchestrator_name = name.clone();
@@ -407,20 +499,89 @@ impl AgentVault {
             user,
             orchestrator
         );
+        Ok(())
+    }
+
+    /// Update the registered orchestrator for a user. Requires no active tasks so
+    /// in-flight task authorization cannot be stranded on the old orchestrator.
+    pub fn update_orchestrator(
+        env: Env,
+        user: Address,
+        new_orchestrator: Address,
+        name: String,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+
+        let config_key = DataKey::UserConfig(user.clone());
+        let mut config: UserConfig = env
+            .storage()
+            .persistent()
+            .get(&config_key)
+            .ok_or(VaultError::OrchestratorNotRegistered)?;
+        Self::extend_persistent_ttl(&env, &config_key);
+
+        if config.active_tasks_count != 0 {
+            return Err(VaultError::ActiveTaskExists);
+        }
+
+        let old_orchestrator = config
+            .orchestrator
+            .clone()
+            .ok_or(VaultError::OrchestratorNotRegistered)?;
+
+        let new_owner_key = DataKey::OrchestratorOwner(new_orchestrator.clone());
+        if let Some(existing_owner) = env.storage().persistent().get::<_, Address>(&new_owner_key) {
+            Self::extend_persistent_ttl(&env, &new_owner_key);
+            if existing_owner != user {
+                return Err(VaultError::OrchestratorAlreadyRegistered);
+            }
+        }
+
+        let old_owner_key = DataKey::OrchestratorOwner(old_orchestrator.clone());
+        env.storage().persistent().remove(&old_owner_key);
+
+        config.orchestrator = Some(new_orchestrator.clone());
+        config.orchestrator_name = name;
+        env.storage().persistent().set(&config_key, &config);
+        Self::extend_persistent_ttl(&env, &config_key);
+
+        env.storage().persistent().set(&new_owner_key, &user);
+        Self::extend_persistent_ttl(&env, &new_owner_key);
+
+        UpdateOrchEvent {
+            user: user.clone(),
+            old_orchestrator: old_orchestrator.clone(),
+            new_orchestrator: new_orchestrator.clone(),
+        }
+        .publish(&env);
+        log!(
+            &env,
+            "update_orchestrator user={} old_orchestrator={} new_orchestrator={}",
+            user,
+            old_orchestrator,
+            new_orchestrator
+        );
+        Ok(())
     }
 
     // Task lifecycle
 
     /// Orchestrator creates a task, locking plan_cost from user's available balance in the specified asset.
-    /// Returns the new task_id. Only one active task per user at a time.
-    pub fn create_task(env: Env, orchestrator: Address, asset: Address, plan_cost: i128) -> u64 {
+    /// Returns the new task_id.
+    pub fn create_task(
+        env: Env,
+        orchestrator: Address,
+        asset: Address,
+        plan_cost: i128,
+    ) -> Result<u64, VaultError> {
         orchestrator.require_auth();
-        Self::require_not_paused(&env);
-        assert!(plan_cost > 0, "Plan cost must be positive");
-        assert!(
-            Self::is_supported_asset(env.clone(), asset.clone()),
-            "Asset not supported"
-        );
+        Self::require_not_paused(&env)?;
+        if plan_cost <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+        if !Self::is_supported_asset(env.clone(), asset.clone()) {
+            return Err(VaultError::AssetNotSupported);
+        }
 
         // Resolve orchestrator → user
         let owner_key = DataKey::OrchestratorOwner(orchestrator.clone());
@@ -428,7 +589,7 @@ impl AgentVault {
             .storage()
             .persistent()
             .get(&owner_key)
-            .expect("Orchestrator not registered");
+            .ok_or(VaultError::OrchestratorNotRegistered)?;
         Self::extend_persistent_ttl(&env, &owner_key);
 
         let config_key = DataKey::UserConfig(user.clone());
@@ -439,11 +600,6 @@ impl AgentVault {
             .expect("User config not found");
         Self::extend_persistent_ttl(&env, &config_key);
 
-        assert!(
-            config.active_tasks_count == 0,
-            "User already has an active task"
-        );
-
         let asset_key = DataKey::UserAsset(user.clone(), asset.clone());
         let mut asset_account: UserAssetAccount = env
             .storage()
@@ -453,7 +609,9 @@ impl AgentVault {
         Self::extend_persistent_ttl(&env, &asset_key);
 
         let available = asset_account.balance - asset_account.locked;
-        assert!(available >= plan_cost, "Insufficient available balance");
+        if available < plan_cost {
+            return Err(VaultError::InsufficientAvailable);
+        }
 
         asset_account.locked += plan_cost;
         config.active_tasks_count += 1;
@@ -482,6 +640,15 @@ impl AgentVault {
         let task_key = DataKey::Task(counter);
         env.storage().persistent().set(&task_key, &task);
         Self::extend_persistent_ttl(&env, &task_key);
+        let tasks_key = DataKey::UserTasks(user.clone());
+        let mut user_tasks: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&tasks_key)
+            .unwrap_or(soroban_sdk::Vec::new(&env));
+        user_tasks.push_back(counter);
+        env.storage().persistent().set(&tasks_key, &user_tasks);
+        Self::extend_persistent_ttl(&env, &tasks_key);
 
         env.storage()
             .instance()
@@ -505,7 +672,7 @@ impl AgentVault {
             plan_cost
         );
 
-        counter
+        Ok(counter)
     }
 
     /// Release funds for one step: contract transfers `amount` tokens to the ORCHESTRATOR.
@@ -516,26 +683,33 @@ impl AgentVault {
         task_id: u64,
         asset: Address,
         amount: i128,
-    ) -> bool {
+    ) -> Result<bool, VaultError> {
         orchestrator.require_auth();
-        Self::require_not_paused(&env);
-        assert!(amount > 0, "Amount must be positive");
+        Self::require_not_paused(&env)?;
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
 
         let task_key = DataKey::Task(task_id);
         let mut task: TaskInfo = env
             .storage()
             .persistent()
             .get(&task_key)
-            .expect("Task not found");
+            .ok_or(VaultError::TaskNotFound)?;
         Self::extend_persistent_ttl(&env, &task_key);
 
-        assert!(!task.completed, "Task already completed");
-        assert!(
-            task.orchestrator == orchestrator,
-            "Not authorized for this task"
-        );
-        assert!(task.asset == asset, "Asset mismatch for this task");
-        assert!(task.spent + amount <= task.plan_cost, "Exceeds plan cost");
+        if task.completed {
+            return Err(VaultError::TaskAlreadyCompleted);
+        }
+        if task.orchestrator != orchestrator {
+            return Err(VaultError::NotYourOrchestrator);
+        }
+        if task.asset != asset {
+            return Err(VaultError::AssetMismatch);
+        }
+        if task.spent + amount > task.plan_cost {
+            return Err(VaultError::ExceedsPlanCost);
+        }
 
         Self::extend_instance_ttl(&env);
         let token_client = token::Client::new(&env, &asset);
@@ -562,54 +736,61 @@ impl AgentVault {
             task.spent
         );
 
-        true
+        Ok(true)
     }
 
     /// Orchestrator marks task complete.
-    pub fn complete_task(env: Env, orchestrator: Address, task_id: u64) {
+    pub fn complete_task(env: Env, orchestrator: Address, task_id: u64) -> Result<(), VaultError> {
         orchestrator.require_auth();
-        Self::finalize_task(&env, task_id, Some(&orchestrator));
+        Self::finalize_task(&env, task_id, Some(&orchestrator))?;
+        Ok(())
     }
 
     /// User cancels their own task at any time.
-    pub fn cancel_task(env: Env, user: Address, task_id: u64) {
+    pub fn cancel_task(env: Env, user: Address, task_id: u64) -> Result<(), VaultError> {
         user.require_auth();
         let task_key = DataKey::Task(task_id);
         let task: TaskInfo = env
             .storage()
             .persistent()
             .get(&task_key)
-            .expect("Task not found");
+            .ok_or(VaultError::TaskNotFound)?;
         Self::extend_persistent_ttl(&env, &task_key);
-        assert!(task.user == user, "Not your task");
-        Self::finalize_task(&env, task_id, None);
+        if task.user != user {
+            return Err(VaultError::NotYourTask);
+        }
+        Self::finalize_task(&env, task_id, None)?;
+        Ok(())
     }
 
     /// Safety escape hatch: anyone can finalize a task stuck for >30 minutes.
-    pub fn force_complete_stale_task(env: Env, task_id: u64) {
+    pub fn force_complete_stale_task(env: Env, task_id: u64) -> Result<(), VaultError> {
         let task_key = DataKey::Task(task_id);
         let task: TaskInfo = env
             .storage()
             .persistent()
             .get(&task_key)
-            .expect("Task not found");
+            .ok_or(VaultError::TaskNotFound)?;
         Self::extend_persistent_ttl(&env, &task_key);
-        assert!(!task.completed, "Task already completed");
+        if task.completed {
+            return Err(VaultError::TaskAlreadyCompleted);
+        }
 
         let now = env.ledger().timestamp();
         let elapsed = now - task.created_at;
-        assert!(
-            elapsed > STALE_TASK_THRESHOLD_SECONDS,
-            "Task is not stale yet"
-        );
+        let threshold = Self::get_stale_threshold(env.clone());
+        if elapsed <= threshold {
+            return Err(VaultError::TaskNotStale);
+        }
 
-        Self::finalize_task(&env, task_id, None);
+        Self::finalize_task(&env, task_id, None)?;
+        Ok(())
     }
 
     // Internal helpers
 
     /// Panics if the contract is paused.
-    fn require_not_paused(env: &Env) {
+    fn require_not_paused(env: &Env) -> Result<(), VaultError> {
         let paused = env
             .storage()
             .instance()
@@ -617,8 +798,9 @@ impl AgentVault {
             .unwrap_or(false);
         Self::extend_instance_ttl(env);
         if paused {
-            panic!("Contract is paused");
+            return Err(VaultError::ContractPaused);
         }
+        Ok(())
     }
 
     /// Shared finalization logic for `complete_task`, `cancel_task`, and
@@ -627,7 +809,11 @@ impl AgentVault {
     ///
     /// If `expected_orchestrator` is `Some`, the caller must match the task's
     /// registered orchestrator (used by `complete_task`).
-    fn finalize_task(env: &Env, task_id: u64, expected_orchestrator: Option<&Address>) {
+    fn finalize_task(
+        env: &Env,
+        task_id: u64,
+        expected_orchestrator: Option<&Address>,
+    ) -> Result<(), VaultError> {
         let task_key = DataKey::Task(task_id);
         let mut task: TaskInfo = env
             .storage()
@@ -635,10 +821,14 @@ impl AgentVault {
             .get(&task_key)
             .expect("Task not found");
         Self::extend_persistent_ttl(env, &task_key);
-        assert!(!task.completed, "Already completed");
+        if task.completed {
+            return Err(VaultError::TaskAlreadyCompleted);
+        }
 
         if let Some(orch) = expected_orchestrator {
-            assert!(task.orchestrator == *orch, "Not authorized");
+            if task.orchestrator != *orch {
+                return Err(VaultError::NotYourOrchestrator);
+            }
         }
 
         let config_key = DataKey::UserConfig(task.user.clone());
@@ -687,6 +877,7 @@ impl AgentVault {
             task.spent,
             refund
         );
+        Ok(())
     }
 
     /// Loads the user's asset account balance, or returns a zeroed struct if not found.
@@ -823,10 +1014,33 @@ impl AgentVault {
         }
     }
 
+    /// Asset-agnostic user configuration (orchestrator registration, active tasks).
+    pub fn get_user_config(env: Env, user: Address) -> Option<UserConfig> {
+        let key = DataKey::UserConfig(user);
+        let result = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(&env, &key);
+        }
+        result
+    }
+
     /// Full task record by task_id.
     pub fn get_task(env: Env, task_id: u64) -> Option<TaskInfo> {
         let key = DataKey::Task(task_id);
         let result = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_persistent_ttl(&env, &key);
+        }
+        result
+    }
+
+    pub fn get_user_tasks(env: Env, user: Address) -> soroban_sdk::Vec<u64> {
+        let key = DataKey::UserTasks(user);
+        let result = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(soroban_sdk::Vec::new(&env));
         if env.storage().persistent().has(&key) {
             Self::extend_persistent_ttl(&env, &key);
         }
@@ -857,31 +1071,45 @@ impl AgentVault {
     // ── Pause / Unpause ─────────────────────────────────────────────────
 
     /// Pauses the contract, blocking deposit, create_task, and release_payment.
-    pub fn pause(env: Env, admin: Address) {
+    pub fn pause(env: Env, admin: Address) -> Result<(), VaultError> {
         admin.require_auth();
         let stored_admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
             .expect("Not initialized");
-        assert!(admin == stored_admin, "admin must match stored admin");
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
 
         env.storage().instance().set(&DataKey::Paused, &true);
         Self::extend_instance_ttl(&env);
+        PauseEvent {
+            admin: admin.clone(),
+        }
+        .publish(&env);
+        Ok(())
     }
 
     /// Unpauses the contract, restoring normal operation.
-    pub fn unpause(env: Env, admin: Address) {
+    pub fn unpause(env: Env, admin: Address) -> Result<(), VaultError> {
         admin.require_auth();
         let stored_admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
             .expect("Not initialized");
-        assert!(admin == stored_admin, "admin must match stored admin");
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
 
         env.storage().instance().set(&DataKey::Paused, &false);
         Self::extend_instance_ttl(&env);
+        UnpauseEvent {
+            admin: admin.clone(),
+        }
+        .publish(&env);
+        Ok(())
     }
 
     /// Returns true if the contract is paused.
@@ -893,6 +1121,44 @@ impl AgentVault {
             .unwrap_or(false);
         Self::extend_instance_ttl(&env);
         paused
+    }
+
+    // ── Stale Task Threshold Management ────────────────────────────────
+
+    /// Admin updates the threshold (in seconds) after which a task is considered stale.
+    pub fn set_stale_threshold(env: Env, admin: Address, seconds: u64) -> Result<(), VaultError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
+
+        if seconds < 60 {
+            // "Threshold must be at least 60 seconds"
+            return Err(VaultError::InvalidAmount);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::StaleTaskThreshold, &seconds);
+        Self::extend_instance_ttl(&env);
+        log!(&env, "Stale task threshold updated to: {} seconds", seconds);
+        Ok(())
+    }
+
+    /// Returns the current stale task threshold in seconds.
+    pub fn get_stale_threshold(env: Env) -> u64 {
+        let threshold = env
+            .storage()
+            .instance()
+            .get(&DataKey::StaleTaskThreshold)
+            .unwrap_or(STALE_TASK_THRESHOLD_SECONDS);
+        Self::extend_instance_ttl(&env);
+        threshold
     }
 }
 

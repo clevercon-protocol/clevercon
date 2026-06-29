@@ -1,5 +1,5 @@
-use crate::{AgentVault, AgentVaultClient, DataKey};
-use soroban_sdk::testutils::{Address as _, Ledger as _};
+use crate::{AgentVault, AgentVaultClient, DataKey, VaultError};
+use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
 use soroban_sdk::{token, Address, Env};
 
 struct TestEnv {
@@ -70,11 +70,13 @@ fn test_init() {
 }
 
 #[test]
-#[should_panic(expected = "Already initialized")]
 fn test_init_twice_panics() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
-    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let result = test_env
+        .client
+        .try_init(&test_env.admin, &test_env.usdc_sac);
+    assert!(result == Err(Ok(VaultError::AlreadyInitialized)));
 }
 
 // 2. Deposit Tests
@@ -105,24 +107,29 @@ fn test_deposit_success() {
     assert_eq!(account.balance, 400);
     assert_eq!(account.total_deposited, 400);
     assert_eq!(test_env.client.get_balance(&user, &test_env.usdc_sac), 400);
+
+    // deposit persists UserConfig (required for withdraw); orchestrator stays unset
+    let config = test_env.client.get_user_config(&user).unwrap();
+    assert!(config.orchestrator.is_none());
+    assert_eq!(config.active_tasks_count, 0);
 }
 
 #[test]
-#[should_panic(expected = "Deposit must be positive")]
 fn test_deposit_zero_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let user = Address::generate(&test_env.env);
-    test_env.client.deposit(&user, &test_env.usdc_sac, &0);
+    let result = test_env.client.try_deposit(&user, &test_env.usdc_sac, &0);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
 }
 
 #[test]
-#[should_panic(expected = "Deposit must be positive")]
 fn test_deposit_negative_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let user = Address::generate(&test_env.env);
-    test_env.client.deposit(&user, &test_env.usdc_sac, &-50);
+    let result = test_env.client.try_deposit(&user, &test_env.usdc_sac, &-50);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
 }
 
 // 3. Withdraw Tests
@@ -152,30 +159,33 @@ fn test_withdraw_success() {
 }
 
 #[test]
-#[should_panic(expected = "Withdrawal must be positive")]
 fn test_withdraw_zero_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let user = Address::generate(&test_env.env);
     test_env.token_admin_client.mint(&user, &1000);
     test_env.client.deposit(&user, &test_env.usdc_sac, &600);
-    test_env.client.withdraw(&user, &test_env.usdc_sac, &0);
+    let result = test_env.client.try_withdraw(&user, &test_env.usdc_sac, &0);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
 }
 
 #[test]
-#[should_panic(expected = "Insufficient balance")]
 fn test_withdraw_insufficient_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let user = Address::generate(&test_env.env);
     test_env.token_admin_client.mint(&user, &1000);
     test_env.client.deposit(&user, &test_env.usdc_sac, &600);
-    test_env.client.withdraw(&user, &test_env.usdc_sac, &601);
+    let result = test_env
+        .client
+        .try_withdraw(&user, &test_env.usdc_sac, &601);
+    assert!(result == Err(Ok(VaultError::InsufficientBalance)));
 }
 
 #[test]
-#[should_panic(expected = "Cannot withdraw while tasks are active")]
 fn test_withdraw_blocked_active_task() {
+    // After #39, an active task no longer blocks withdrawal outright — only the
+    // portion locked by the task for that asset is protected.
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
 
@@ -191,27 +201,99 @@ fn test_withdraw_blocked_active_task() {
         .client
         .register_orchestrator(&user, &orchestrator, &name);
 
-    // Create a task to set active_tasks_count = 1
+    // Lock 100 in an active task → 500 of the 600 stays unlocked.
     test_env
         .client
         .create_task(&orchestrator, &test_env.usdc_sac, &100);
 
-    // Attempt to withdraw
-    test_env.client.withdraw(&user, &test_env.usdc_sac, &50);
+    // The unlocked portion is withdrawable even though a task is active...
+    test_env.client.withdraw(&user, &test_env.usdc_sac, &500);
+    assert_eq!(test_env.client.get_balance(&user, &test_env.usdc_sac), 100);
+
+    // ...but the locked remainder cannot be withdrawn.
+    let result = test_env.client.try_withdraw(&user, &test_env.usdc_sac, &1);
+    assert!(result == Err(Ok(VaultError::InsufficientAvailable)));
 }
 
 #[test]
-#[should_panic(expected = "Withdrawal must be positive")]
+fn test_withdraw_other_asset_while_task_active() {
+    // The headline case from #39: a task locking asset A must not block the
+    // withdrawal of an entirely separate asset B.
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    // Whitelist a second asset (e.g. XLM) and wire up its token clients.
+    let asset_b_sac = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone());
+    let asset_b = asset_b_sac.address();
+    test_env.client.add_asset(&test_env.admin, &asset_b);
+    let asset_b_admin = token::StellarAssetClient::new(&test_env.env, &asset_b);
+    let asset_b_token = token::Client::new(&test_env.env, &asset_b);
+
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "TestOrch");
+
+    // Deposit USDC and lock ALL of it in an active task.
+    test_env.token_admin_client.mint(&user, &600);
+    test_env.client.deposit(&user, &test_env.usdc_sac, &600);
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator, &name);
+    test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &600);
+
+    // Deposit asset B — unrelated to the task.
+    asset_b_admin.mint(&user, &500);
+    test_env.client.deposit(&user, &asset_b, &500);
+
+    // Asset B is fully withdrawable even though USDC is entirely locked.
+    test_env.client.withdraw(&user, &asset_b, &500);
+    assert_eq!(asset_b_token.balance(&user), 500);
+    assert_eq!(test_env.client.get_balance(&user, &asset_b), 0);
+
+    // The locked USDC, however, stays put.
+    let result = test_env.client.try_withdraw(&user, &test_env.usdc_sac, &1);
+    assert!(result == Err(Ok(VaultError::InsufficientAvailable)));
+}
+
+#[test]
 fn test_withdraw_negative_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let user = Address::generate(&test_env.env);
     test_env.token_admin_client.mint(&user, &1000);
     test_env.client.deposit(&user, &test_env.usdc_sac, &600);
-    test_env.client.withdraw(&user, &test_env.usdc_sac, &-10);
+    let result = test_env
+        .client
+        .try_withdraw(&user, &test_env.usdc_sac, &-10);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
 }
 
 // 4. Register Orchestrator Tests
+
+#[test]
+fn test_get_user_config_before_and_after_register() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "MyOrchestrator");
+
+    assert!(test_env.client.get_user_config(&user).is_none());
+
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator, &name);
+
+    let config = test_env.client.get_user_config(&user).unwrap();
+    assert_eq!(config.orchestrator.unwrap(), orchestrator);
+    assert_eq!(config.orchestrator_name, name);
+    assert_eq!(config.active_tasks_count, 0);
+}
 
 #[test]
 fn test_register_orchestrator_success() {
@@ -245,7 +327,6 @@ fn test_register_orchestrator_success() {
 }
 
 #[test]
-#[should_panic(expected = "Orchestrator already registered for this user")]
 fn test_register_orchestrator_twice_panics() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -259,9 +340,123 @@ fn test_register_orchestrator_twice_panics() {
         .client
         .register_orchestrator(&user, &orchestrator1, &name);
     // Call second time
+    let result = test_env
+        .client
+        .try_register_orchestrator(&user, &orchestrator2, &name);
+    assert!(result == Err(Ok(VaultError::OrchestratorAlreadyRegistered)));
+}
+
+#[test]
+fn test_update_orchestrator_success() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let old_orchestrator = Address::generate(&test_env.env);
+    let new_orchestrator = Address::generate(&test_env.env);
+    let old_name = soroban_sdk::String::from_str(&test_env.env, "OldOrchestrator");
+    let new_name = soroban_sdk::String::from_str(&test_env.env, "NewOrchestrator");
+
     test_env
         .client
-        .register_orchestrator(&user, &orchestrator2, &name);
+        .register_orchestrator(&user, &old_orchestrator, &old_name);
+
+    test_env
+        .client
+        .update_orchestrator(&user, &new_orchestrator, &new_name);
+
+    let config = test_env.client.get_user_config(&user).unwrap();
+    assert_eq!(config.orchestrator, Some(new_orchestrator.clone()));
+    assert_eq!(config.orchestrator_name, new_name);
+
+    assert!(test_env
+        .client
+        .get_orchestrator_owner(&old_orchestrator)
+        .is_none());
+    assert_eq!(
+        test_env.client.get_orchestrator_owner(&new_orchestrator),
+        Some(user)
+    );
+}
+
+#[test]
+fn test_update_orchestrator_blocked_when_task_active() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let old_orchestrator = Address::generate(&test_env.env);
+    let new_orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "MyOrchestrator");
+    let new_name = soroban_sdk::String::from_str(&test_env.env, "NextOrchestrator");
+
+    test_env.token_admin_client.mint(&user, &1000);
+    test_env.client.deposit(&user, &test_env.usdc_sac, &500);
+    test_env
+        .client
+        .register_orchestrator(&user, &old_orchestrator, &name);
+    test_env
+        .client
+        .create_task(&old_orchestrator, &test_env.usdc_sac, &100);
+
+    let result = test_env
+        .client
+        .try_update_orchestrator(&user, &new_orchestrator, &new_name);
+    assert!(result == Err(Ok(VaultError::ActiveTaskExists)));
+}
+
+#[test]
+fn test_update_orchestrator_rejects_address_owned_by_another_user() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user1 = Address::generate(&test_env.env);
+    let user2 = Address::generate(&test_env.env);
+    let orchestrator1 = Address::generate(&test_env.env);
+    let shared_orchestrator = Address::generate(&test_env.env);
+    let name1 = soroban_sdk::String::from_str(&test_env.env, "User1Orchestrator");
+    let name2 = soroban_sdk::String::from_str(&test_env.env, "User2Orchestrator");
+    let takeover_name = soroban_sdk::String::from_str(&test_env.env, "TakeoverAttempt");
+
+    test_env
+        .client
+        .register_orchestrator(&user1, &orchestrator1, &name1);
+    test_env
+        .client
+        .register_orchestrator(&user2, &shared_orchestrator, &name2);
+
+    let result =
+        test_env
+            .client
+            .try_update_orchestrator(&user1, &shared_orchestrator, &takeover_name);
+    assert!(result == Err(Ok(VaultError::OrchestratorAlreadyRegistered)));
+
+    let user1_config = test_env.client.get_user_config(&user1).unwrap();
+    assert_eq!(user1_config.orchestrator, Some(orchestrator1.clone()));
+    assert_eq!(user1_config.orchestrator_name, name1);
+    assert_eq!(
+        test_env.client.get_orchestrator_owner(&orchestrator1),
+        Some(user1)
+    );
+    assert_eq!(
+        test_env.client.get_orchestrator_owner(&shared_orchestrator),
+        Some(user2)
+    );
+}
+
+#[test]
+fn test_update_orchestrator_fails_when_none_registered() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let new_orchestrator = Address::generate(&test_env.env);
+    let new_name = soroban_sdk::String::from_str(&test_env.env, "NewOrchestrator");
+
+    let result = test_env
+        .client
+        .try_update_orchestrator(&user, &new_orchestrator, &new_name);
+    assert!(result == Err(Ok(VaultError::OrchestratorNotRegistered)));
 }
 
 // 5. Create Task Tests
@@ -311,8 +506,46 @@ fn test_create_task_success() {
 }
 
 #[test]
-#[should_panic(expected = "User already has an active task")]
-fn test_create_task_already_active_fails() {
+fn test_create_task_allows_multiple_concurrent_tasks_when_balance_is_sufficient() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "MyOrchestrator");
+
+    test_env.token_admin_client.mint(&user, &1000);
+    test_env.client.deposit(&user, &test_env.usdc_sac, &500);
+
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator, &name);
+
+    let first_task_id = test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &100);
+    let second_task_id = test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &150);
+
+    assert_eq!(first_task_id, 1);
+    assert_eq!(second_task_id, 2);
+    assert_eq!(test_env.client.task_count(), 2);
+
+    let account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(account.locked, 250);
+    assert_eq!(account.active_tasks_count, 2);
+    assert_eq!(
+        test_env.client.get_available(&user, &test_env.usdc_sac),
+        250
+    );
+}
+
+#[test]
+fn test_create_second_task_insufficient_available_balance_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
 
@@ -329,38 +562,23 @@ fn test_create_task_already_active_fails() {
 
     test_env
         .client
-        .create_task(&orchestrator, &test_env.usdc_sac, &100);
-    // Second task while the first is active
-    test_env
+        .create_task(&orchestrator, &test_env.usdc_sac, &300);
+
+    // Only 200 remains available, so a second task costing 250 must fail.
+    let result = test_env
         .client
-        .create_task(&orchestrator, &test_env.usdc_sac, &100);
+        .try_create_task(&orchestrator, &test_env.usdc_sac, &250);
+    assert!(result == Err(Ok(VaultError::InsufficientAvailable)));
+
+    let account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(account.locked, 300);
+    assert_eq!(account.active_tasks_count, 1);
 }
 
 #[test]
-#[should_panic(expected = "Insufficient available balance")]
-fn test_create_task_insufficient_available_balance_fails() {
-    let test_env = setup_test();
-    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
-
-    let user = Address::generate(&test_env.env);
-    let orchestrator = Address::generate(&test_env.env);
-    let name = soroban_sdk::String::from_str(&test_env.env, "MyOrchestrator");
-
-    test_env.token_admin_client.mint(&user, &1000);
-    test_env.client.deposit(&user, &test_env.usdc_sac, &500);
-
-    test_env
-        .client
-        .register_orchestrator(&user, &orchestrator, &name);
-
-    // Plan cost (600) exceeds deposited (500)
-    test_env
-        .client
-        .create_task(&orchestrator, &test_env.usdc_sac, &600);
-}
-
-#[test]
-#[should_panic(expected = "Plan cost must be positive")]
 fn test_create_task_zero_cost_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -370,13 +588,13 @@ fn test_create_task_zero_cost_fails() {
     test_env
         .client
         .register_orchestrator(&user, &orchestrator, &name);
-    test_env
+    let result = test_env
         .client
-        .create_task(&orchestrator, &test_env.usdc_sac, &0);
+        .try_create_task(&orchestrator, &test_env.usdc_sac, &0);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
 }
 
 #[test]
-#[should_panic(expected = "Plan cost must be positive")]
 fn test_create_task_negative_cost_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -386,9 +604,10 @@ fn test_create_task_negative_cost_fails() {
     test_env
         .client
         .register_orchestrator(&user, &orchestrator, &name);
-    test_env
+    let result = test_env
         .client
-        .create_task(&orchestrator, &test_env.usdc_sac, &-10);
+        .try_create_task(&orchestrator, &test_env.usdc_sac, &-10);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
 }
 
 // 6. Release Payment Tests
@@ -440,7 +659,6 @@ fn test_release_payment_success() {
 }
 
 #[test]
-#[should_panic(expected = "Exceeds plan cost")]
 fn test_release_payment_exceeds_plan_cost_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -459,13 +677,14 @@ fn test_release_payment_exceeds_plan_cost_fails() {
         .client
         .create_task(&orchestrator, &test_env.usdc_sac, &300);
 
-    test_env
-        .client
-        .release_payment(&orchestrator, &task_id, &test_env.usdc_sac, &301);
+    let result =
+        test_env
+            .client
+            .try_release_payment(&orchestrator, &task_id, &test_env.usdc_sac, &301);
+    assert!(result == Err(Ok(VaultError::ExceedsPlanCost)));
 }
 
 #[test]
-#[should_panic(expected = "Task already completed")]
 fn test_release_payment_on_completed_task_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -490,13 +709,14 @@ fn test_release_payment_on_completed_task_fails() {
     test_env.client.complete_task(&orchestrator, &task_id);
 
     // Try releasing on completed task
-    test_env
-        .client
-        .release_payment(&orchestrator, &task_id, &test_env.usdc_sac, &50);
+    let result =
+        test_env
+            .client
+            .try_release_payment(&orchestrator, &task_id, &test_env.usdc_sac, &50);
+    assert!(result == Err(Ok(VaultError::TaskAlreadyCompleted)));
 }
 
 #[test]
-#[should_panic(expected = "Not authorized for this task")]
 fn test_release_payment_unauthorized_orchestrator_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -517,13 +737,16 @@ fn test_release_payment_unauthorized_orchestrator_fails() {
         .create_task(&orchestrator, &test_env.usdc_sac, &300);
 
     // Call release_payment with wrong orchestrator
-    test_env
-        .client
-        .release_payment(&wrong_orchestrator, &task_id, &test_env.usdc_sac, &100);
+    let result = test_env.client.try_release_payment(
+        &wrong_orchestrator,
+        &task_id,
+        &test_env.usdc_sac,
+        &100,
+    );
+    assert!(result == Err(Ok(VaultError::NotYourOrchestrator)));
 }
 
 #[test]
-#[should_panic(expected = "Amount must be positive")]
 fn test_release_payment_zero_amount_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -543,13 +766,14 @@ fn test_release_payment_zero_amount_fails() {
         .create_task(&orchestrator, &test_env.usdc_sac, &300);
 
     // Call release_payment with 0 amount
-    test_env
-        .client
-        .release_payment(&orchestrator, &task_id, &test_env.usdc_sac, &0);
+    let result =
+        test_env
+            .client
+            .try_release_payment(&orchestrator, &task_id, &test_env.usdc_sac, &0);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
 }
 
 #[test]
-#[should_panic(expected = "Amount must be positive")]
 fn test_release_payment_negative_amount_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -569,9 +793,11 @@ fn test_release_payment_negative_amount_fails() {
         .create_task(&orchestrator, &test_env.usdc_sac, &300);
 
     // Call release_payment with negative amount
-    test_env
-        .client
-        .release_payment(&orchestrator, &task_id, &test_env.usdc_sac, &-50);
+    let result =
+        test_env
+            .client
+            .try_release_payment(&orchestrator, &task_id, &test_env.usdc_sac, &-50);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
 }
 
 // 7. Complete Task Tests
@@ -622,7 +848,72 @@ fn test_complete_task_success() {
 }
 
 #[test]
-#[should_panic(expected = "Not authorized")]
+fn test_two_concurrent_tasks_complete_independently() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "MyOrchestrator");
+
+    test_env.token_admin_client.mint(&user, &1000);
+    test_env.client.deposit(&user, &test_env.usdc_sac, &500);
+
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator, &name);
+
+    let first_task_id = test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &100);
+    let second_task_id = test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &150);
+
+    test_env
+        .client
+        .release_payment(&orchestrator, &first_task_id, &test_env.usdc_sac, &60);
+    test_env
+        .client
+        .release_payment(&orchestrator, &second_task_id, &test_env.usdc_sac, &90);
+
+    test_env.client.complete_task(&orchestrator, &first_task_id);
+
+    let mid_account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(mid_account.locked, 150);
+    assert_eq!(mid_account.balance, 440);
+    assert_eq!(mid_account.total_spent, 60);
+    assert_eq!(mid_account.active_tasks_count, 1);
+    assert_eq!(
+        test_env.client.get_available(&user, &test_env.usdc_sac),
+        290
+    );
+    assert!(test_env.client.get_task(&first_task_id).unwrap().completed);
+    assert!(!test_env.client.get_task(&second_task_id).unwrap().completed);
+
+    test_env
+        .client
+        .complete_task(&orchestrator, &second_task_id);
+
+    let final_account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(final_account.locked, 0);
+    assert_eq!(final_account.balance, 350);
+    assert_eq!(final_account.total_spent, 150);
+    assert_eq!(final_account.active_tasks_count, 0);
+    assert_eq!(
+        test_env.client.get_available(&user, &test_env.usdc_sac),
+        350
+    );
+    assert!(test_env.client.get_task(&second_task_id).unwrap().completed);
+}
+
+#[test]
 fn test_complete_task_unauthorized_orchestrator_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -643,7 +934,10 @@ fn test_complete_task_unauthorized_orchestrator_fails() {
         .create_task(&orchestrator, &test_env.usdc_sac, &300);
 
     // Call complete_task with wrong orchestrator
-    test_env.client.complete_task(&wrong_orchestrator, &task_id);
+    let result = test_env
+        .client
+        .try_complete_task(&wrong_orchestrator, &task_id);
+    assert!(result == Err(Ok(VaultError::NotYourOrchestrator)));
 }
 
 // 8. Cancel Task Tests
@@ -688,7 +982,6 @@ fn test_cancel_task_success() {
 }
 
 #[test]
-#[should_panic(expected = "Not your task")]
 fn test_cancel_task_wrong_user_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -709,13 +1002,13 @@ fn test_cancel_task_wrong_user_fails() {
         .create_task(&orchestrator, &test_env.usdc_sac, &300);
 
     // Another user tries to cancel
-    test_env.client.cancel_task(&wrong_user, &task_id);
+    let result = test_env.client.try_cancel_task(&wrong_user, &task_id);
+    assert!(result == Err(Ok(VaultError::NotYourTask)));
 }
 
 // 9. Force Complete Stale Task Tests
 
 #[test]
-#[should_panic(expected = "Task is not stale yet")]
 fn test_force_complete_stale_task_fails_before_threshold() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -740,7 +1033,8 @@ fn test_force_complete_stale_task_fails_before_threshold() {
     test_env.env.ledger().set_timestamp(1000 + 1799);
 
     // Attempt to force complete should fail
-    test_env.client.force_complete_stale_task(&task_id);
+    let result = test_env.client.try_force_complete_stale_task(&task_id);
+    assert!(result == Err(Ok(VaultError::TaskNotStale)));
 }
 
 #[test]
@@ -867,11 +1161,13 @@ fn test_instance_storage_survives_ttl_after_extension() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
 
+    // init extends instance TTL to ledger + 518_400. Advance until remaining TTL
+    // is below the 17_280 extension threshold so deposit must refresh instance storage.
     let starting_sequence = test_env.env.ledger().sequence();
     test_env
         .env
         .ledger()
-        .set_sequence_number(starting_sequence + 300_000);
+        .set_sequence_number(starting_sequence + 501_121);
 
     let user = Address::generate(&test_env.env);
     test_env.token_admin_client.mint(&user, &1000);
@@ -883,7 +1179,9 @@ fn test_instance_storage_survives_ttl_after_extension() {
         .unwrap();
     assert_eq!(account.balance, 100);
 
+    // Instance storage must remain readable after deposit refreshes instance TTL.
     assert_eq!(test_env.client.task_count(), 0);
+    assert!(!test_env.client.is_paused());
 }
 
 // Multi-Asset Whitelist & Flow Tests
@@ -906,12 +1204,32 @@ fn test_multi_asset_whitelist() {
     assert!(test_env.client.is_supported_asset(&xlm_sac));
 
     // Admin removes the asset
-    test_env.client.remove_asset(&test_env.admin, &xlm_sac);
+    test_env
+        .client
+        .remove_asset(&test_env.admin, &xlm_sac, &true);
     assert!(!test_env.client.is_supported_asset(&xlm_sac));
 }
 
 #[test]
-#[should_panic(expected = "Asset not supported")]
+#[should_panic(expected = "Pass force=true to confirm removal of a live asset")]
+fn test_remove_asset_requires_force() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let xlm_sac = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone())
+        .address();
+
+    test_env.client.add_asset(&test_env.admin, &xlm_sac);
+
+    // Attempting to remove without force=true should panic
+    test_env
+        .client
+        .remove_asset(&test_env.admin, &xlm_sac, &false);
+}
+
+#[test]
 fn test_deposit_non_whitelisted_asset_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -923,7 +1241,8 @@ fn test_deposit_non_whitelisted_asset_fails() {
         .address();
 
     // Attempt deposit of unwhitelisted token
-    test_env.client.deposit(&user, &xlm_sac, &200);
+    let result = test_env.client.try_deposit(&user, &xlm_sac, &200);
+    assert!(result == Err(Ok(VaultError::AssetNotSupported)));
 }
 
 #[test]
@@ -1015,6 +1334,17 @@ fn test_pause_sets_flag() {
 }
 
 #[test]
+fn test_pause_emits_pause_event() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    test_env.client.pause(&test_env.admin);
+
+    let events = test_env.env.events().all();
+    assert_eq!(events.events().len(), 1);
+}
+
+#[test]
 fn test_unpause_clears_flag() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -1025,7 +1355,18 @@ fn test_unpause_clears_flag() {
 }
 
 #[test]
-#[should_panic(expected = "Contract is paused")]
+fn test_unpause_emits_unpause_event() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    test_env.client.pause(&test_env.admin);
+    test_env.client.unpause(&test_env.admin);
+
+    let events = test_env.env.events().all();
+    assert_eq!(events.events().len(), 1);
+}
+
+#[test]
 fn test_deposit_reverts_when_paused() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -1033,11 +1374,11 @@ fn test_deposit_reverts_when_paused() {
     test_env.token_admin_client.mint(&user, &1000);
 
     test_env.client.pause(&test_env.admin);
-    test_env.client.deposit(&user, &test_env.usdc_sac, &100);
+    let result = test_env.client.try_deposit(&user, &test_env.usdc_sac, &100);
+    assert!(result == Err(Ok(VaultError::ContractPaused)));
 }
 
 #[test]
-#[should_panic(expected = "Contract is paused")]
 fn test_create_task_reverts_when_paused() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -1052,13 +1393,13 @@ fn test_create_task_reverts_when_paused() {
         .register_orchestrator(&user, &orchestrator, &name);
 
     test_env.client.pause(&test_env.admin);
-    test_env
+    let result = test_env
         .client
-        .create_task(&orchestrator, &test_env.usdc_sac, &300);
+        .try_create_task(&orchestrator, &test_env.usdc_sac, &300);
+    assert!(result == Err(Ok(VaultError::ContractPaused)));
 }
 
 #[test]
-#[should_panic(expected = "Contract is paused")]
 fn test_release_payment_reverts_when_paused() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
@@ -1076,9 +1417,11 @@ fn test_release_payment_reverts_when_paused() {
         .create_task(&orchestrator, &test_env.usdc_sac, &300);
 
     test_env.client.pause(&test_env.admin);
-    test_env
-        .client
-        .release_payment(&orchestrator, &task_id, &test_env.usdc_sac, &100);
+    let result =
+        test_env
+            .client
+            .try_release_payment(&orchestrator, &task_id, &test_env.usdc_sac, &100);
+    assert!(result == Err(Ok(VaultError::ContractPaused)));
 }
 
 #[test]
@@ -1131,21 +1474,170 @@ fn test_unpause_restores_deposit() {
 }
 
 #[test]
-#[should_panic(expected = "admin must match stored admin")]
 fn test_unauthorized_pause_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let non_admin = Address::generate(&test_env.env);
 
-    test_env.client.pause(&non_admin);
+    let result = test_env.client.try_pause(&non_admin);
+    assert!(result == Err(Ok(VaultError::Unauthorized)));
 }
 
 #[test]
-#[should_panic(expected = "admin must match stored admin")]
 fn test_unauthorized_unpause_fails() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let non_admin = Address::generate(&test_env.env);
 
-    test_env.client.unpause(&non_admin);
+    let result = test_env.client.try_unpause(&non_admin);
+    assert!(result == Err(Ok(VaultError::Unauthorized)));
+}
+
+#[test]
+fn test_get_user_tasks_empty() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let result = t.client.get_user_tasks(&user);
+    assert_eq!(result.len(), 0);
+}
+
+#[test]
+fn test_get_user_tasks_single() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let orchestrator = Address::generate(&t.env);
+    t.token_admin_client.mint(&user, &10_000_000_000_i128);
+    t.client.deposit(&user, &t.usdc_sac, &10_000_000_000_i128);
+    t.client.register_orchestrator(
+        &user,
+        &orchestrator,
+        &soroban_sdk::String::from_str(&t.env, "orch1"),
+    );
+    let id = t
+        .client
+        .create_task(&orchestrator, &t.usdc_sac, &1_000_000_000_i128);
+    let tasks = t.client.get_user_tasks(&user);
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks.get(0).unwrap(), id);
+}
+
+#[test]
+fn test_get_user_tasks_multiple_in_order() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let orchestrator = Address::generate(&t.env);
+    t.token_admin_client.mint(&user, &30_000_000_000_i128);
+    t.client.deposit(&user, &t.usdc_sac, &30_000_000_000_i128);
+    t.client.register_orchestrator(
+        &user,
+        &orchestrator,
+        &soroban_sdk::String::from_str(&t.env, "orch1"),
+    );
+    let id1 = t
+        .client
+        .create_task(&orchestrator, &t.usdc_sac, &1_000_000_000_i128);
+    t.client.complete_task(&orchestrator, &id1);
+    let id2 = t
+        .client
+        .create_task(&orchestrator, &t.usdc_sac, &1_000_000_000_i128);
+    t.client.complete_task(&orchestrator, &id2);
+    let tasks = t.client.get_user_tasks(&user);
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks.get(0).unwrap(), id1);
+    assert_eq!(tasks.get(1).unwrap(), id2);
+}
+
+#[test]
+fn test_get_user_tasks_separate_users() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user1 = Address::generate(&t.env);
+    let user2 = Address::generate(&t.env);
+    let orchestrator = Address::generate(&t.env);
+    t.token_admin_client.mint(&user1, &10_000_000_000_i128);
+    t.client.deposit(&user1, &t.usdc_sac, &10_000_000_000_i128);
+    t.client.register_orchestrator(
+        &user1,
+        &orchestrator,
+        &soroban_sdk::String::from_str(&t.env, "orch1"),
+    );
+    t.client
+        .create_task(&orchestrator, &t.usdc_sac, &1_000_000_000_i128);
+    assert_eq!(t.client.get_user_tasks(&user2).len(), 0);
+    assert_eq!(t.client.get_user_tasks(&user1).len(), 1);
+}
+
+// 11. Stale Task Threshold Tests
+
+#[test]
+fn test_get_stale_threshold_default() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    assert_eq!(t.client.get_stale_threshold(), 1800);
+}
+
+#[test]
+fn test_set_stale_threshold_success() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    t.client.set_stale_threshold(&t.admin, &3600);
+    assert_eq!(t.client.get_stale_threshold(), 3600);
+}
+
+#[test]
+fn test_set_stale_threshold_unauthorized_fails() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let non_admin = Address::generate(&t.env);
+
+    let result = t.client.try_set_stale_threshold(&non_admin, &3600);
+    assert!(result == Err(Ok(VaultError::Unauthorized)));
+}
+
+#[test]
+fn test_set_stale_threshold_enforces_minimum() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    let result = t.client.try_set_stale_threshold(&t.admin, &59);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
+}
+
+#[test]
+fn test_force_complete_respects_updated_threshold() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    let user = Address::generate(&t.env);
+    let orchestrator = Address::generate(&t.env);
+    let name = soroban_sdk::String::from_str(&t.env, "MyOrchestrator");
+
+    t.token_admin_client.mint(&user, &1000);
+    t.client.deposit(&user, &t.usdc_sac, &500);
+    t.client.register_orchestrator(&user, &orchestrator, &name);
+
+    // Set threshold to 1 hour (3600s)
+    t.client.set_stale_threshold(&t.admin, &3600);
+
+    t.env.ledger().set_timestamp(1000);
+    let task_id = t.client.create_task(&orchestrator, &t.usdc_sac, &300);
+
+    // Advance 31 minutes (1860s) - would be stale under old 1800s default
+    t.env.ledger().set_timestamp(1000 + 1860);
+
+    // Attempt to force complete should fail now
+    let result = t.client.try_force_complete_stale_task(&task_id);
+    assert!(result == Err(Ok(VaultError::TaskNotStale)));
+
+    // Advance to 61 minutes (3660s)
+    t.env.ledger().set_timestamp(1000 + 3660);
+
+    // Now it should succeed
+    t.client.force_complete_stale_task(&task_id);
+    let task = t.client.get_task(&task_id).unwrap();
+    assert!(task.completed);
 }
