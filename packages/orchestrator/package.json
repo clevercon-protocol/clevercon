@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "npx tsx src/server.ts",
     "start": "node dist/server.js",
-    "test:integration": "cd ../.. && vitest run --config vitest.integration.config.ts --reporter=verbose"
+    "test:integration": "cd ../.. && vitest run --config vitest.integration.config.ts --reporter=verbose",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@clevercon/common": "*",
