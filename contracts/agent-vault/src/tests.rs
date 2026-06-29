@@ -1734,5 +1734,3 @@ fn test_chained_admin_rotation() {
     assert_eq!(stored, third_admin);
 }
 
-
-
