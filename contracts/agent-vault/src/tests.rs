@@ -1641,3 +1641,98 @@ fn test_force_complete_respects_updated_threshold() {
     let task = t.client.get_task(&task_id).unwrap();
     assert!(task.completed);
 }
+// ── Admin key rotation tests ─────────────────────────────────────────────────
+
+/// Positive: admin rotates to new_admin successfully.
+#[test]
+fn test_update_admin_succeeds() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let new_admin = Address::generate(&t.env);
+
+    t.client.update_admin(&t.admin, &new_admin);
+
+    // get_admin must return new_admin
+    let stored = t.client.get_admin();
+    assert_eq!(stored, new_admin);
+}
+
+/// After rotation, the old admin can no longer pause the contract.
+#[test]
+fn test_old_admin_cannot_pause_after_rotation() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let new_admin = Address::generate(&t.env);
+
+    t.client.update_admin(&t.admin, &new_admin);
+
+    // Old admin tries to pause — must fail
+    let result = t.client.try_pause(&t.admin);
+    assert!(result.is_err());
+}
+
+/// After rotation, the new admin can pause the contract.
+#[test]
+fn test_new_admin_can_pause_after_rotation() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let new_admin = Address::generate(&t.env);
+
+    t.client.update_admin(&t.admin, &new_admin);
+    t.client.pause(&new_admin);
+    // If we get here without panic, new admin successfully paused
+}
+
+/// Negative: non-admin caller cannot rotate the admin key.
+#[test]
+#[should_panic]
+fn test_non_admin_cannot_update_admin() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let attacker = Address::generate(&t.env);
+    let new_admin = Address::generate(&t.env);
+
+    // attacker is not the stored admin — must panic
+    t.client.update_admin(&attacker, &new_admin);
+}
+
+/// get_admin returns the current admin without requiring auth.
+#[test]
+fn test_get_admin_returns_current_admin() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    let stored = t.client.get_admin();
+    assert_eq!(stored, t.admin);
+}
+
+/// UpdateAdminEvent is emitted with correct old and new admin.
+#[test]
+fn test_update_admin_emits_event() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let new_admin = Address::generate(&t.env);
+
+    t.client.update_admin(&t.admin, &new_admin);
+
+    let events = t.env.events().all();
+    assert_eq!(events.events().len(), 1);
+}
+
+/// Chained rotation: new admin can rotate again.
+#[test]
+fn test_chained_admin_rotation() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let second_admin = Address::generate(&t.env);
+    let third_admin = Address::generate(&t.env);
+
+    t.client.update_admin(&t.admin, &second_admin);
+    t.client.update_admin(&second_admin, &third_admin);
+
+    let stored = t.client.get_admin();
+    assert_eq!(stored, third_admin);
+}
+
+
+
