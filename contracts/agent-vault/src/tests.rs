@@ -1210,6 +1210,136 @@ fn test_multi_asset_whitelist() {
     assert!(!test_env.client.is_supported_asset(&xlm_sac));
 }
 
+// Supported-assets enumeration (get_supported_assets)
+
+/// Convenience: does the enumerable index currently contain `asset`?
+fn index_contains(assets: &soroban_sdk::Vec<Address>, asset: &Address) -> bool {
+    assets.iter().any(|a| a == *asset)
+}
+
+#[test]
+fn test_get_supported_assets_seeded_with_usdc_on_init() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let assets = test_env.client.get_supported_assets();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets.get(0).unwrap(), test_env.usdc_sac);
+    // The index and is_supported_asset() must agree.
+    assert!(test_env.client.is_supported_asset(&test_env.usdc_sac));
+}
+
+#[test]
+fn test_get_supported_assets_appends_on_add() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let xlm_sac = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone())
+        .address();
+    test_env.client.add_asset(&test_env.admin, &xlm_sac);
+
+    let assets = test_env.client.get_supported_assets();
+    assert_eq!(assets.len(), 2);
+    assert!(index_contains(&assets, &test_env.usdc_sac));
+    assert!(index_contains(&assets, &xlm_sac));
+    assert!(test_env.client.is_supported_asset(&xlm_sac));
+}
+
+#[test]
+fn test_get_supported_assets_add_is_idempotent() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let xlm_sac = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone())
+        .address();
+
+    // Adding the same asset twice must not create a duplicate entry.
+    test_env.client.add_asset(&test_env.admin, &xlm_sac);
+    test_env.client.add_asset(&test_env.admin, &xlm_sac);
+
+    let assets = test_env.client.get_supported_assets();
+    assert_eq!(assets.len(), 2);
+    assert!(index_contains(&assets, &xlm_sac));
+
+    // Re-adding the auto-seeded USDC is likewise a no-op on the index.
+    test_env
+        .client
+        .add_asset(&test_env.admin, &test_env.usdc_sac);
+    assert_eq!(test_env.client.get_supported_assets().len(), 2);
+}
+
+#[test]
+fn test_get_supported_assets_removes_on_remove() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let xlm_sac = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone())
+        .address();
+    test_env.client.add_asset(&test_env.admin, &xlm_sac);
+    assert_eq!(test_env.client.get_supported_assets().len(), 2);
+
+    // Removing XLM leaves only USDC in the index, and the two views agree.
+    test_env
+        .client
+        .remove_asset(&test_env.admin, &xlm_sac, &true);
+
+    let assets = test_env.client.get_supported_assets();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets.get(0).unwrap(), test_env.usdc_sac);
+    assert!(!index_contains(&assets, &xlm_sac));
+    assert!(!test_env.client.is_supported_asset(&xlm_sac));
+    assert!(test_env.client.is_supported_asset(&test_env.usdc_sac));
+}
+
+#[test]
+fn test_get_supported_assets_empty_after_removing_all() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let xlm_sac = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone())
+        .address();
+    test_env.client.add_asset(&test_env.admin, &xlm_sac);
+
+    // Remove both the added asset and the auto-seeded USDC.
+    test_env
+        .client
+        .remove_asset(&test_env.admin, &xlm_sac, &true);
+    test_env
+        .client
+        .remove_asset(&test_env.admin, &test_env.usdc_sac, &true);
+
+    assert_eq!(test_env.client.get_supported_assets().len(), 0);
+    assert!(!test_env.client.is_supported_asset(&test_env.usdc_sac));
+    assert!(!test_env.client.is_supported_asset(&xlm_sac));
+}
+
+#[test]
+fn test_remove_nonexistent_asset_leaves_index_unchanged() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    // An asset that was never whitelisted — removal is a harmless no-op.
+    let never_added = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone())
+        .address();
+    test_env
+        .client
+        .remove_asset(&test_env.admin, &never_added, &true);
+
+    let assets = test_env.client.get_supported_assets();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets.get(0).unwrap(), test_env.usdc_sac);
+}
+
 #[test]
 #[should_panic(expected = "Pass force=true to confirm removal of a live asset")]
 fn test_remove_asset_requires_force() {
