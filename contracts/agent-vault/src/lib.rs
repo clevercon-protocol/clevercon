@@ -955,6 +955,12 @@ impl AgentVault {
 
     // Read-only views
 
+    /// The vault's actual token balance for `asset`, read from the SAC.
+    pub fn token_balance(env: Env, asset: Address) -> i128 {
+        let token_client = token::Client::new(&env, &asset);
+        token_client.balance(&env.current_contract_address())
+    }
+
     /// Total balance for user and asset (available + locked), in stroops.
     pub fn get_balance(env: Env, user: Address, asset: Address) -> i128 {
         let key = DataKey::UserAsset(user, asset);
