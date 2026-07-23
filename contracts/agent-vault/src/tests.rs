@@ -40,6 +40,28 @@ fn setup_test() -> TestEnv {
     }
 }
 
+fn create_task_history(test_env: &TestEnv, task_count: u32) -> Address {
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    test_env.token_admin_client.mint(&user, &100);
+    test_env.client.deposit(&user, &test_env.usdc_sac, &100);
+    test_env.client.register_orchestrator(
+        &user,
+        &orchestrator,
+        &soroban_sdk::String::from_str(&test_env.env, "history-orchestrator"),
+    );
+
+    for index in 0..task_count {
+        let task_id =
+            test_env
+                .client
+                .create_task(&orchestrator, &test_env.usdc_sac, &i128::from(index + 1));
+        test_env.client.complete_task(&orchestrator, &task_id);
+    }
+
+    user
+}
+
 // 1. Init Tests
 
 #[test]
@@ -1568,6 +1590,64 @@ fn test_get_user_tasks_separate_users() {
         .create_task(&orchestrator, &t.usdc_sac, &1_000_000_000_i128);
     assert_eq!(t.client.get_user_tasks(&user2).len(), 0);
     assert_eq!(t.client.get_user_tasks(&user1).len(), 1);
+}
+
+#[test]
+fn test_get_user_task_infos_empty() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+
+    assert_eq!(t.client.get_user_task_infos(&user, &0, &10).len(), 0);
+}
+
+#[test]
+fn test_get_user_task_infos_full_page_in_creation_order() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = create_task_history(&t, 5);
+
+    let tasks = t.client.get_user_task_infos(&user, &1, &3);
+
+    assert_eq!(tasks.len(), 3);
+    assert_eq!(tasks.get(0).unwrap().plan_cost, 2);
+    assert_eq!(tasks.get(1).unwrap().plan_cost, 3);
+    assert_eq!(tasks.get(2).unwrap().plan_cost, 4);
+}
+
+#[test]
+fn test_get_user_task_infos_partial_last_page() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = create_task_history(&t, 5);
+
+    let tasks = t.client.get_user_task_infos(&user, &3, &4);
+
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks.get(0).unwrap().plan_cost, 4);
+    assert_eq!(tasks.get(1).unwrap().plan_cost, 5);
+}
+
+#[test]
+fn test_get_user_task_infos_out_of_range_start() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = create_task_history(&t, 3);
+
+    assert_eq!(t.client.get_user_task_infos(&user, &u32::MAX, &10).len(), 0);
+}
+
+#[test]
+fn test_get_user_task_infos_caps_limit() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = create_task_history(&t, 55);
+
+    let tasks = t.client.get_user_task_infos(&user, &0, &u32::MAX);
+
+    assert_eq!(tasks.len(), 50);
+    assert_eq!(tasks.get(0).unwrap().plan_cost, 1);
+    assert_eq!(tasks.get(49).unwrap().plan_cost, 50);
 }
 
 // 11. Stale Task Threshold Tests
