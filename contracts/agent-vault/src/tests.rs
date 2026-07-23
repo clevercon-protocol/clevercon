@@ -1641,6 +1641,127 @@ fn test_force_complete_respects_updated_threshold() {
     let task = t.client.get_task(&task_id).unwrap();
     assert!(task.completed);
 }
+
+// 12. Max Active Tasks Tests
+
+#[test]
+fn test_get_max_active_tasks_default() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    assert_eq!(t.client.get_max_active_tasks(), 50);
+}
+
+#[test]
+fn test_set_max_active_tasks_success() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    t.client.set_max_active_tasks(&t.admin, &5);
+    assert_eq!(t.client.get_max_active_tasks(), 5);
+}
+
+#[test]
+fn test_set_max_active_tasks_unauthorized_fails() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let non_admin = Address::generate(&t.env);
+
+    let result = t.client.try_set_max_active_tasks(&non_admin, &5);
+    assert!(result == Err(Ok(VaultError::Unauthorized)));
+}
+
+#[test]
+fn test_set_max_active_tasks_rejects_zero() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    let result = t.client.try_set_max_active_tasks(&t.admin, &0);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
+}
+
+#[test]
+fn test_create_task_fails_when_cap_reached() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    t.client.set_max_active_tasks(&t.admin, &2);
+
+    let user = Address::generate(&t.env);
+    let orchestrator = Address::generate(&t.env);
+    let name = soroban_sdk::String::from_str(&t.env, "MyOrchestrator");
+
+    t.token_admin_client.mint(&user, &1000);
+    t.client.deposit(&user, &t.usdc_sac, &900);
+    t.client.register_orchestrator(&user, &orchestrator, &name);
+
+    t.client.create_task(&orchestrator, &t.usdc_sac, &100);
+    t.client.create_task(&orchestrator, &t.usdc_sac, &100);
+
+    let result = t.client.try_create_task(&orchestrator, &t.usdc_sac, &100);
+    assert!(result == Err(Ok(VaultError::TooManyActiveTasks)));
+
+    let config = t.client.get_user_config(&user).unwrap();
+    assert_eq!(config.active_tasks_count, 2);
+}
+
+#[test]
+fn test_completing_task_frees_slot_for_new_task() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    t.client.set_max_active_tasks(&t.admin, &1);
+
+    let user = Address::generate(&t.env);
+    let orchestrator = Address::generate(&t.env);
+    let name = soroban_sdk::String::from_str(&t.env, "MyOrchestrator");
+
+    t.token_admin_client.mint(&user, &1000);
+    t.client.deposit(&user, &t.usdc_sac, &900);
+    t.client.register_orchestrator(&user, &orchestrator, &name);
+
+    let task_id = t.client.create_task(&orchestrator, &t.usdc_sac, &100);
+
+    let result = t.client.try_create_task(&orchestrator, &t.usdc_sac, &100);
+    assert!(result == Err(Ok(VaultError::TooManyActiveTasks)));
+
+    t.client.complete_task(&orchestrator, &task_id);
+
+    // Slot freed, new task creation now succeeds.
+    let second_task_id = t.client.create_task(&orchestrator, &t.usdc_sac, &100);
+    assert_eq!(second_task_id, 2);
+}
+
+#[test]
+fn test_lowering_cap_below_current_count_does_not_affect_existing_tasks() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    let user = Address::generate(&t.env);
+    let orchestrator = Address::generate(&t.env);
+    let name = soroban_sdk::String::from_str(&t.env, "MyOrchestrator");
+
+    t.token_admin_client.mint(&user, &1000);
+    t.client.deposit(&user, &t.usdc_sac, &900);
+    t.client.register_orchestrator(&user, &orchestrator, &name);
+
+    let first_task_id = t.client.create_task(&orchestrator, &t.usdc_sac, &100);
+    let second_task_id = t.client.create_task(&orchestrator, &t.usdc_sac, &100);
+
+    // Lower the cap below the user's current active count (2).
+    t.client.set_max_active_tasks(&t.admin, &1);
+
+    // Existing tasks are untouched and can still be finalized.
+    t.client.complete_task(&orchestrator, &first_task_id);
+    let task = t.client.get_task(&first_task_id).unwrap();
+    assert!(task.completed);
+
+    // New task creation stays blocked until the count drops under the new cap.
+    let result = t.client.try_create_task(&orchestrator, &t.usdc_sac, &100);
+    assert!(result == Err(Ok(VaultError::TooManyActiveTasks)));
+
+    t.client.complete_task(&orchestrator, &second_task_id);
+    let third_task_id = t.client.create_task(&orchestrator, &t.usdc_sac, &100);
+    assert_eq!(third_task_id, 3);
+}
+
 // ── Admin key rotation tests ─────────────────────────────────────────────────
 
 /// Positive: admin rotates to new_admin successfully.
