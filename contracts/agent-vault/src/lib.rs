@@ -129,6 +129,7 @@ pub enum VaultError {
     OrchestratorAlreadyRegistered = 15,
     NotYourTask = 16,
     NotYourOrchestrator = 17,
+    TooManyActiveTasks = 18,
 }
 
 // Storage keys
@@ -157,6 +158,8 @@ pub enum DataKey {
     UserTasks(Address),
     /// Configurable threshold for force-completing stale tasks.
     StaleTaskThreshold,
+    /// Configurable cap on how many active tasks a single user may hold at once.
+    MaxActiveTasks,
 }
 
 // Data structs
@@ -237,6 +240,12 @@ pub struct TaskInfo {
 
 /// Tasks older than this that haven't completed can be force-finalized by anyone.
 const STALE_TASK_THRESHOLD_SECONDS: u64 = 1800; // 30 minutes
+
+/// Default cap on concurrent active tasks per user. Normal usage — even an
+/// orchestrator juggling several in-flight plans for one user — sits well
+/// under this; it exists to bound storage growth from a buggy or hostile
+/// orchestrator, not to constrain everyday behavior.
+const DEFAULT_MAX_ACTIVE_TASKS: u32 = 50;
 
 const PERSISTENT_TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const PERSISTENT_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
@@ -606,6 +615,10 @@ impl AgentVault {
             .get(&config_key)
             .expect("User config not found");
         Self::extend_persistent_ttl(&env, &config_key);
+
+        if config.active_tasks_count >= Self::get_max_active_tasks(env.clone()) {
+            return Err(VaultError::TooManyActiveTasks);
+        }
 
         let asset_key = DataKey::UserAsset(user.clone(), asset.clone());
         let mut asset_account: UserAssetAccount = env
@@ -1167,6 +1180,43 @@ impl AgentVault {
         Self::extend_instance_ttl(&env);
         threshold
     }
+
+    // ── Max Active Tasks Management ────────────────────────────────────
+
+    /// Admin updates the cap on concurrent active tasks a single user may hold.
+    pub fn set_max_active_tasks(env: Env, admin: Address, max: u32) -> Result<(), VaultError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
+
+        if max < 1 {
+            // A cap of 0 would freeze all task creation for every user.
+            return Err(VaultError::InvalidAmount);
+        }
+
+        env.storage().instance().set(&DataKey::MaxActiveTasks, &max);
+        Self::extend_instance_ttl(&env);
+        log!(&env, "Max active tasks updated to: {}", max);
+        Ok(())
+    }
+
+    /// Returns the current cap on concurrent active tasks per user.
+    pub fn get_max_active_tasks(env: Env) -> u32 {
+        let max = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxActiveTasks)
+            .unwrap_or(DEFAULT_MAX_ACTIVE_TASKS);
+        Self::extend_instance_ttl(&env);
+        max
+    }
+
     /// Rotates the admin key. Only the current admin can call this.
     /// Emits UpdateAdminEvent on success.
     pub fn update_admin(env: Env, admin: Address, new_admin: Address) -> Result<(), VaultError> {
