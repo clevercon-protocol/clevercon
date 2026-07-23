@@ -285,8 +285,9 @@ impl AgentVault {
         // Automatically whitelist usdc_sac
         let asset_key = DataKey::AssetSupported(usdc_sac.clone());
         env.storage().persistent().set(&asset_key, &true);
-        Self::extend_persistent_ttl(&env, &asset_key);
         Self::index_add_asset(&env, &usdc_sac);
+        // Put the index and the seeded flag on one TTL lifecycle from the start.
+        Self::extend_asset_support_ttl(&env);
 
         Self::extend_instance_ttl(&env);
         log!(
@@ -314,8 +315,10 @@ impl AgentVault {
 
         let asset_key = DataKey::AssetSupported(asset.clone());
         env.storage().persistent().set(&asset_key, &true);
-        Self::extend_persistent_ttl(&env, &asset_key);
         Self::index_add_asset(&env, &asset);
+        // Bring the whole support set onto one TTL lifecycle, including the flag
+        // just written and every previously-whitelisted asset.
+        Self::extend_asset_support_ttl(&env);
 
         log!(&env, "Asset added to whitelist: {}", asset);
         Ok(())
@@ -345,6 +348,8 @@ impl AgentVault {
             env.storage().persistent().remove(&asset_key);
         }
         Self::index_remove_asset(&env, &asset);
+        // Keep the remaining support set on one TTL lifecycle after removal.
+        Self::extend_asset_support_ttl(&env);
 
         log!(&env, "Asset removed from whitelist: {}", asset);
         Ok(())
@@ -355,7 +360,10 @@ impl AgentVault {
         let asset_key = DataKey::AssetSupported(asset);
         let result = env.storage().persistent().has(&asset_key);
         if result {
-            Self::extend_persistent_ttl(&env, &asset_key);
+            // Refresh the whole support set — index and every flag — so the two
+            // representations can never expire out of step. See
+            // [`Self::extend_asset_support_ttl`].
+            Self::extend_asset_support_ttl(&env);
         }
         result
     }
@@ -371,7 +379,10 @@ impl AgentVault {
             .get(&key)
             .unwrap_or(Vec::new(&env));
         if env.storage().persistent().has(&key) {
-            Self::extend_persistent_ttl(&env, &key);
+            // Refresh the whole support set — index and every flag — so the two
+            // representations can never expire out of step. See
+            // [`Self::extend_asset_support_ttl`].
+            Self::extend_asset_support_ttl(&env);
         }
         result
     }
@@ -992,6 +1003,30 @@ impl AgentVault {
             assets.remove(index as u32);
             env.storage().persistent().set(&key, &assets);
             Self::extend_persistent_ttl(env, &key);
+        }
+    }
+
+    /// Refreshes the TTLs of the entire asset-support state as one unit: the
+    /// enumerable [`DataKey::SupportedAssets`] index and every per-asset
+    /// [`DataKey::AssetSupported`] flag it references. Every path that reads or
+    /// mutates support state funnels through this, so the index and the flags
+    /// always share a single TTL lifecycle. Without it, whichever representation
+    /// a given call happened to touch would be refreshed alone; the other could
+    /// expire first, leaving `is_supported_asset` and `get_supported_assets`
+    /// disagreeing — and a later `index_add_asset` rebuilding a fresh index
+    /// could silently drop a still-supported asset.
+    fn extend_asset_support_ttl(env: &Env) {
+        let key = DataKey::SupportedAssets;
+        let assets: Vec<Address> = match env.storage().persistent().get(&key) {
+            Some(a) => a,
+            None => return,
+        };
+        Self::extend_persistent_ttl(env, &key);
+        for asset in assets.iter() {
+            let asset_key = DataKey::AssetSupported(asset);
+            if env.storage().persistent().has(&asset_key) {
+                Self::extend_persistent_ttl(env, &asset_key);
+            }
         }
     }
 

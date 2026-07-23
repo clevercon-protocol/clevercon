@@ -1,4 +1,5 @@
 use crate::{AgentVault, AgentVaultClient, DataKey, VaultError};
+use soroban_sdk::testutils::storage::Persistent as _;
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
 use soroban_sdk::{token, Address, Env};
 
@@ -1338,6 +1339,90 @@ fn test_remove_nonexistent_asset_leaves_index_unchanged() {
     let assets = test_env.client.get_supported_assets();
     assert_eq!(assets.len(), 1);
     assert_eq!(assets.get(0).unwrap(), test_env.usdc_sac);
+}
+
+// The contract extends a persistent entry's TTL back up to ~518_400 ledgers
+// only once its remaining TTL drops below ~17_280. Advancing just past that
+// extension point lets a test observe whether a given call refreshed a
+// particular key: a still-low TTL afterwards means it was NOT refreshed.
+const TTL_EXTEND_THRESHOLD: u32 = 17_280;
+const TTL_DECAY_STEP: u32 = 510_000;
+
+/// Reads the remaining persistent TTL of `key`, in ledgers, from inside the
+/// contract's storage context.
+fn persistent_ttl(test_env: &TestEnv, key: &DataKey) -> u32 {
+    test_env.env.as_contract(&test_env.contract_id, || {
+        test_env.env.storage().persistent().get_ttl(key)
+    })
+}
+
+#[test]
+fn test_is_supported_asset_refreshes_index_ttl() {
+    // Direction 1: per-asset lookups (as deposit/create_task perform) must keep
+    // the SupportedAssets index on the same TTL lifecycle. Otherwise the index
+    // expires first and get_supported_assets silently loses assets that
+    // is_supported_asset still reports as supported.
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let xlm_sac = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone())
+        .address();
+    test_env.client.add_asset(&test_env.admin, &xlm_sac);
+
+    // Advance until the index's TTL has decayed below the extension threshold.
+    let start = test_env.env.ledger().sequence();
+    test_env
+        .env
+        .ledger()
+        .set_sequence_number(start + TTL_DECAY_STEP);
+    assert!(
+        persistent_ttl(&test_env, &DataKey::SupportedAssets) < TTL_EXTEND_THRESHOLD,
+        "precondition: index TTL should have decayed below the extension threshold"
+    );
+
+    // A per-asset lookup must refresh the index lifecycle as well.
+    assert!(test_env.client.is_supported_asset(&xlm_sac));
+
+    assert!(
+        persistent_ttl(&test_env, &DataKey::SupportedAssets) > TTL_EXTEND_THRESHOLD,
+        "is_supported_asset must extend the SupportedAssets index TTL, not just the per-asset flag"
+    );
+}
+
+#[test]
+fn test_get_supported_assets_refreshes_per_asset_flag_ttl() {
+    // Direction 2: enumerating the whitelist must keep each per-asset flag on the
+    // same TTL lifecycle. Otherwise the flags expire first and is_supported_asset
+    // disagrees with the index the enumeration just returned.
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let xlm_sac = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone())
+        .address();
+    test_env.client.add_asset(&test_env.admin, &xlm_sac);
+
+    let start = test_env.env.ledger().sequence();
+    test_env
+        .env
+        .ledger()
+        .set_sequence_number(start + TTL_DECAY_STEP);
+    let flag_key = DataKey::AssetSupported(xlm_sac.clone());
+    assert!(
+        persistent_ttl(&test_env, &flag_key) < TTL_EXTEND_THRESHOLD,
+        "precondition: per-asset flag TTL should have decayed below the extension threshold"
+    );
+
+    // Enumerating must refresh each per-asset flag lifecycle as well.
+    let _ = test_env.client.get_supported_assets();
+
+    assert!(
+        persistent_ttl(&test_env, &flag_key) > TTL_EXTEND_THRESHOLD,
+        "get_supported_assets must extend each per-asset AssetSupported flag TTL, not just the index"
+    );
 }
 
 #[test]
