@@ -1200,9 +1200,7 @@ impl AgentVault {
             return Err(VaultError::InvalidAmount);
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::MaxActiveTasks, &max);
+        env.storage().instance().set(&DataKey::MaxActiveTasks, &max);
         Self::extend_instance_ttl(&env);
         log!(&env, "Max active tasks updated to: {}", max);
         Ok(())
