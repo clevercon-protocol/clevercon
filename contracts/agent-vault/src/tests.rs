@@ -1,4 +1,4 @@
-﻿use crate::{AgentVault, AgentVaultClient, DataKey, VaultError};
+use crate::{AgentVault, AgentVaultClient, DataKey, VaultError};
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
 use soroban_sdk::{token, Address, Env};
 
@@ -1732,4 +1732,404 @@ fn test_chained_admin_rotation() {
 
     let stored = t.client.get_admin();
     assert_eq!(stored, third_admin);
+}
+
+mod invariant_tests {
+    extern crate std;
+    use super::*;
+
+    trait IsOkOk {
+        #[allow(clippy::wrong_self_convention)]
+        fn is_ok_ok(self) -> bool;
+    }
+
+    impl<T, E1, E2> IsOkOk for Result<Result<T, E1>, E2> {
+        #[allow(clippy::wrong_self_convention)]
+        fn is_ok_ok(self) -> bool {
+            matches!(self, Ok(Ok(_)))
+        }
+    }
+
+    struct SimpleRng {
+        state: u64,
+    }
+
+    impl SimpleRng {
+        fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        fn next(&mut self) -> u64 {
+            self.state = self.state.wrapping_mul(1664525).wrapping_add(1013904223);
+            self.state
+        }
+
+        fn next_range(&mut self, min: u64, max: u64) -> u64 {
+            if min >= max {
+                return min;
+            }
+            let range = max - min + 1;
+            min + (self.next() % range)
+        }
+    }
+
+    struct TaskState {
+        id: u64,
+        user_idx: usize,
+        orchestrator_idx: usize,
+        asset_idx: usize,
+    }
+
+    struct InvariantTestHarness {
+        env: Env,
+        client: AgentVaultClient<'static>,
+        usdc_sac: Address,
+        xlm_sac: Address,
+        token_admins: [token::StellarAssetClient<'static>; 2],
+        users: [Address; 2],
+        orchestrators: [Address; 2],
+        active_tasks: std::vec::Vec<TaskState>,
+        last_total_spent: [[i128; 2]; 2],
+    }
+
+    fn setup_harness() -> InvariantTestHarness {
+        let test_env = setup_test();
+        test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+        let xlm_sac_contract = test_env
+            .env
+            .register_stellar_asset_contract_v2(test_env.admin.clone());
+        let xlm_sac = xlm_sac_contract.address();
+        test_env.client.add_asset(&test_env.admin, &xlm_sac);
+
+        let xlm_admin = token::StellarAssetClient::new(&test_env.env, &xlm_sac);
+        let token_admins = [test_env.token_admin_client, xlm_admin];
+
+        let user_a = Address::generate(&test_env.env);
+        let user_b = Address::generate(&test_env.env);
+        let users = [user_a, user_b];
+
+        let orch_a = Address::generate(&test_env.env);
+        let orch_b = Address::generate(&test_env.env);
+        let orchestrators = [orch_a, orch_b];
+
+        let name_a = soroban_sdk::String::from_str(&test_env.env, "OrchA");
+        let name_b = soroban_sdk::String::from_str(&test_env.env, "OrchB");
+        test_env
+            .client
+            .register_orchestrator(&users[0], &orchestrators[0], &name_a);
+        test_env
+            .client
+            .register_orchestrator(&users[1], &orchestrators[1], &name_b);
+
+        InvariantTestHarness {
+            env: test_env.env,
+            client: test_env.client,
+            usdc_sac: test_env.usdc_sac,
+            xlm_sac,
+            token_admins,
+            users,
+            orchestrators,
+            active_tasks: std::vec::Vec::new(),
+            last_total_spent: [[0; 2]; 2],
+        }
+    }
+
+    impl InvariantTestHarness {
+        fn assert_invariants(&mut self, seed: u64, step_idx: usize) {
+            let assets = [self.usdc_sac.clone(), self.xlm_sac.clone()];
+            for (u_idx, user) in self.users.iter().enumerate() {
+                for (a_idx, asset) in assets.iter().enumerate() {
+                    if let Some(account) = self.client.get_account(user, asset) {
+                        assert!(
+                            0 <= account.locked,
+                            "Seed {}, Step {}: locked balance underflow (locked = {})",
+                            seed,
+                            step_idx,
+                            account.locked
+                        );
+                        assert!(
+                            account.locked <= account.balance,
+                            "Seed {}, Step {}: locked > balance (locked = {}, balance = {})",
+                            seed,
+                            step_idx,
+                            account.locked,
+                            account.balance
+                        );
+                        assert!(
+                            account.balance >= 0,
+                            "Seed {}, Step {}: balance negative (balance = {})",
+                            seed,
+                            step_idx,
+                            account.balance
+                        );
+
+                        let prev_spent = self.last_total_spent[u_idx][a_idx];
+                        assert!(
+                            account.total_spent >= prev_spent,
+                            "Seed {}, Step {}: total_spent decreased from {} to {}",
+                            seed,
+                            step_idx,
+                            prev_spent,
+                            account.total_spent
+                        );
+                        self.last_total_spent[u_idx][a_idx] = account.total_spent;
+                    }
+                }
+            }
+        }
+
+        fn finalize_and_check<F, R>(
+            &mut self,
+            task_idx: usize,
+            seed: u64,
+            step_idx: usize,
+            finalize_op: F,
+        ) where
+            F: FnOnce(&mut Self, u64) -> R,
+            R: IsOkOk,
+        {
+            if task_idx >= self.active_tasks.len() {
+                return;
+            }
+            let task_state = &self.active_tasks[task_idx];
+            let task_id = task_state.id;
+            let user_idx = task_state.user_idx;
+            let asset_idx = task_state.asset_idx;
+
+            let user = self.users[user_idx].clone();
+            let assets = [self.usdc_sac.clone(), self.xlm_sac.clone()];
+            let asset = assets[asset_idx].clone();
+
+            let task_before = self.client.get_task(&task_id).unwrap();
+            let account_before = self.client.get_account(&user, &asset).unwrap();
+
+            let res = finalize_op(self, task_id);
+
+            if res.is_ok_ok() {
+                let task_after = self.client.get_task(&task_id).unwrap();
+                let account_after = self.client.get_account(&user, &asset).unwrap();
+
+                assert!(
+                    task_after.completed,
+                    "Seed {}, Step {}: finalized task not marked completed",
+                    seed, step_idx
+                );
+
+                let locked_diff = account_before.locked - account_after.locked;
+                assert_eq!(
+                    locked_diff, task_before.plan_cost,
+                    "Seed {}, Step {}: locked did not decrease by plan_cost: expected {}, got {}",
+                    seed, step_idx, task_before.plan_cost, locked_diff
+                );
+
+                let balance_diff = account_before.balance - account_after.balance;
+                assert_eq!(
+                    balance_diff, task_before.spent,
+                    "Seed {}, Step {}: balance did not decrease by spent: expected {}, got {}",
+                    seed, step_idx, task_before.spent, balance_diff
+                );
+
+                let spent_diff = account_after.total_spent - account_before.total_spent;
+                assert_eq!(
+                    spent_diff, task_before.spent,
+                    "Seed {}, Step {}: total_spent did not increase by spent: expected {}, got {}",
+                    seed, step_idx, task_before.spent, spent_diff
+                );
+
+                assert!(
+                    0 <= task_before.spent && task_before.spent <= task_before.plan_cost,
+                    "Seed {}, Step {}: spent out of bounds: spent = {}, plan_cost = {}",
+                    seed,
+                    step_idx,
+                    task_before.spent,
+                    task_before.plan_cost
+                );
+
+                self.active_tasks.remove(task_idx);
+            }
+        }
+
+        fn deposit(&mut self, user_idx: usize, asset_idx: usize, amount: i128) {
+            let user = &self.users[user_idx];
+            let assets = [self.usdc_sac.clone(), self.xlm_sac.clone()];
+            let asset = &assets[asset_idx];
+
+            self.token_admins[asset_idx].mint(user, &amount);
+            let _ = self.client.try_deposit(user, asset, &amount);
+        }
+
+        fn withdraw(&mut self, user_idx: usize, asset_idx: usize, amount: i128) {
+            let user = &self.users[user_idx];
+            let assets = [self.usdc_sac.clone(), self.xlm_sac.clone()];
+            let asset = &assets[asset_idx];
+
+            let _ = self.client.try_withdraw(user, asset, &amount);
+        }
+
+        fn create_task(&mut self, orch_idx: usize, asset_idx: usize, plan_cost: i128) {
+            let orchestrator = &self.orchestrators[orch_idx];
+            let assets = [self.usdc_sac.clone(), self.xlm_sac.clone()];
+            let asset = &assets[asset_idx];
+
+            let res = self.client.try_create_task(orchestrator, asset, &plan_cost);
+
+            if let Ok(Ok(task_id)) = res {
+                self.active_tasks.push(TaskState {
+                    id: task_id,
+                    user_idx: orch_idx,
+                    orchestrator_idx: orch_idx,
+                    asset_idx,
+                });
+            }
+        }
+
+        fn release_payment(&mut self, task_idx: usize, amount: i128) {
+            if task_idx >= self.active_tasks.len() {
+                return;
+            }
+            let task_state = &self.active_tasks[task_idx];
+            let task_id = task_state.id;
+            let orchestrator = &self.orchestrators[task_state.orchestrator_idx];
+            let assets = [self.usdc_sac.clone(), self.xlm_sac.clone()];
+            let asset = &assets[task_state.asset_idx];
+
+            let _ = self
+                .client
+                .try_release_payment(orchestrator, &task_id, asset, &amount);
+        }
+
+        fn complete_task(&mut self, task_idx: usize, seed: u64, step_idx: usize) {
+            if task_idx >= self.active_tasks.len() {
+                return;
+            }
+            let orchestrator =
+                self.orchestrators[self.active_tasks[task_idx].orchestrator_idx].clone();
+            self.finalize_and_check(task_idx, seed, step_idx, move |harness, task_id| {
+                harness.client.try_complete_task(&orchestrator, &task_id)
+            });
+        }
+
+        fn cancel_task(&mut self, task_idx: usize, seed: u64, step_idx: usize) {
+            if task_idx >= self.active_tasks.len() {
+                return;
+            }
+            let user = self.users[self.active_tasks[task_idx].user_idx].clone();
+            self.finalize_and_check(task_idx, seed, step_idx, move |harness, task_id| {
+                harness.client.try_cancel_task(&user, &task_id)
+            });
+        }
+
+        fn force_complete_stale_task(
+            &mut self,
+            task_idx: usize,
+            time_advance: u64,
+            seed: u64,
+            step_idx: usize,
+        ) {
+            if time_advance > 0 {
+                let current = self.env.ledger().timestamp();
+                self.env.ledger().set_timestamp(current + time_advance);
+            }
+            self.finalize_and_check(task_idx, seed, step_idx, |harness, task_id| {
+                harness.client.try_force_complete_stale_task(&task_id)
+            });
+        }
+    }
+
+    #[test]
+    fn test_vault_accounting_invariants() {
+        for seed in 1..=30 {
+            let mut harness = setup_harness();
+            let mut rng = SimpleRng::new(seed);
+
+            for step_idx in 0..100 {
+                let op = rng.next_range(0, 6);
+                match op {
+                    0 => {
+                        let user_idx = rng.next_range(0, 1) as usize;
+                        let asset_idx = rng.next_range(0, 1) as usize;
+                        let amount = rng.next_range(1, 10000) as i128;
+                        harness.deposit(user_idx, asset_idx, amount);
+                    }
+                    1 => {
+                        let user_idx = rng.next_range(0, 1) as usize;
+                        let asset_idx = rng.next_range(0, 1) as usize;
+                        let amount = rng.next_range(1, 12000) as i128;
+                        harness.withdraw(user_idx, asset_idx, amount);
+                    }
+                    2 => {
+                        let orch_idx = rng.next_range(0, 1) as usize;
+                        let asset_idx = rng.next_range(0, 1) as usize;
+                        let plan_cost = rng.next_range(1, 5000) as i128;
+                        harness.create_task(orch_idx, asset_idx, plan_cost);
+                    }
+                    3 => {
+                        if !harness.active_tasks.is_empty() {
+                            let task_idx =
+                                rng.next_range(0, (harness.active_tasks.len() - 1) as u64) as usize;
+                            let amount = rng.next_range(1, 6000) as i128;
+                            harness.release_payment(task_idx, amount);
+                        }
+                    }
+                    4 => {
+                        if !harness.active_tasks.is_empty() {
+                            let task_idx =
+                                rng.next_range(0, (harness.active_tasks.len() - 1) as u64) as usize;
+                            harness.complete_task(task_idx, seed, step_idx);
+                        }
+                    }
+                    5 => {
+                        if !harness.active_tasks.is_empty() {
+                            let task_idx =
+                                rng.next_range(0, (harness.active_tasks.len() - 1) as u64) as usize;
+                            harness.cancel_task(task_idx, seed, step_idx);
+                        }
+                    }
+                    6 => {
+                        if !harness.active_tasks.is_empty() {
+                            let task_idx =
+                                rng.next_range(0, (harness.active_tasks.len() - 1) as u64) as usize;
+                            let time_advance = rng.next_range(0, 2400);
+                            harness.force_complete_stale_task(
+                                task_idx,
+                                time_advance,
+                                seed,
+                                step_idx,
+                            );
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+
+                harness.assert_invariants(seed, step_idx);
+            }
+        }
+    }
+
+    #[test]
+    fn test_explicit_partial_release_and_completion_math() {
+        let mut harness = setup_harness();
+        harness.deposit(0, 0, 1000);
+        harness.assert_invariants(999, 0);
+
+        harness.create_task(0, 0, 600);
+        harness.assert_invariants(999, 1);
+        assert_eq!(harness.active_tasks.len(), 1);
+
+        harness.release_payment(0, 200);
+        harness.assert_invariants(999, 2);
+
+        harness.complete_task(0, 999, 3);
+        harness.assert_invariants(999, 4);
+        assert_eq!(harness.active_tasks.len(), 0);
+
+        let account = harness
+            .client
+            .get_account(&harness.users[0], &harness.usdc_sac)
+            .unwrap();
+        assert_eq!(account.balance, 800);
+        assert_eq!(account.locked, 0);
+        assert_eq!(account.total_spent, 200);
+    }
 }
