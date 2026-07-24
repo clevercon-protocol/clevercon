@@ -252,6 +252,9 @@ const STALE_TASK_THRESHOLD_SECONDS: u64 = 1800; // 30 minutes
 /// orchestrator, not to constrain everyday behavior.
 const DEFAULT_MAX_ACTIVE_TASKS: u32 = 50;
 
+/// Maximum number of task records returned by `get_user_task_infos`.
+const MAX_USER_TASK_INFOS_PAGE_SIZE: u32 = 50;
+
 const PERSISTENT_TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const PERSISTENT_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
 
@@ -1171,6 +1174,35 @@ impl AgentVault {
             Self::extend_persistent_ttl(&env, &key);
         }
         result
+    }
+
+    /// Returns a page of a user's full task records in creation order.
+    ///
+    /// `start` is an index into the user's task ID list, not a task ID. Page
+    /// size is capped at 50 to bound contract resource usage. An out-of-range
+    /// `start` or a user with no tasks returns an empty vector.
+    pub fn get_user_task_infos(
+        env: Env,
+        user: Address,
+        start: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<TaskInfo> {
+        let ids = Self::get_user_tasks(env.clone(), user);
+        let mut out = soroban_sdk::Vec::new(&env);
+        let capped = limit.min(MAX_USER_TASK_INFOS_PAGE_SIZE);
+        let end = start.saturating_add(capped).min(ids.len());
+        let mut i = start;
+
+        while i < end {
+            if let Some(id) = ids.get(i) {
+                if let Some(task) = Self::get_task(env.clone(), id) {
+                    out.push_back(task);
+                }
+            }
+            i += 1;
+        }
+
+        out
     }
 
     /// Reverse lookup: given an orchestrator address, return the user it belongs to.
