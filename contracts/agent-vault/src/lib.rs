@@ -132,6 +132,7 @@ pub enum VaultError {
     NotYourTask = 16,
     NotYourOrchestrator = 17,
     TooManyActiveTasks = 18,
+    NoChange = 19,
 }
 
 // Storage keys
@@ -564,6 +565,7 @@ impl AgentVault {
 
     /// Update the registered orchestrator for a user. Requires no active tasks so
     /// in-flight task authorization cannot be stranded on the old orchestrator.
+    /// Rejects if new_orchestrator equals the current orchestrator (no-op check).
     pub fn update_orchestrator(
         env: Env,
         user: Address,
@@ -578,7 +580,6 @@ impl AgentVault {
             .persistent()
             .get(&config_key)
             .ok_or(VaultError::OrchestratorNotRegistered)?;
-        Self::extend_persistent_ttl(&env, &config_key);
 
         if config.active_tasks_count != 0 {
             return Err(VaultError::ActiveTaskExists);
@@ -591,11 +592,19 @@ impl AgentVault {
 
         let new_owner_key = DataKey::OrchestratorOwner(new_orchestrator.clone());
         if let Some(existing_owner) = env.storage().persistent().get::<_, Address>(&new_owner_key) {
-            Self::extend_persistent_ttl(&env, &new_owner_key);
             if existing_owner != user {
                 return Err(VaultError::OrchestratorAlreadyRegistered);
             }
         }
+
+        // Reject no-op rotation: new_orchestrator must differ from old orchestrator
+        // This check comes BEFORE any TTL refreshes or state mutations
+        if new_orchestrator == old_orchestrator {
+            return Err(VaultError::NoChange);
+        }
+
+        // All validations passed; now refresh TTLs and perform state writes
+        Self::extend_persistent_ttl(&env, &config_key);
 
         let old_owner_key = DataKey::OrchestratorOwner(old_orchestrator.clone());
         env.storage().persistent().remove(&old_owner_key);
@@ -1194,7 +1203,7 @@ impl AgentVault {
         result
     }
 
-    // ── Pause / Unpause ─────────────────────────────────────────────────
+    // Pause / Unpause
 
     /// Pauses the contract, blocking deposit, create_task, and release_payment.
     pub fn pause(env: Env, admin: Address) -> Result<(), VaultError> {
@@ -1249,7 +1258,7 @@ impl AgentVault {
         paused
     }
 
-    // ── Stale Task Threshold Management ────────────────────────────────
+    // Stale Task Threshold Management
 
     /// Admin updates the threshold (in seconds) after which a task is considered stale.
     pub fn set_stale_threshold(env: Env, admin: Address, seconds: u64) -> Result<(), VaultError> {
@@ -1287,7 +1296,7 @@ impl AgentVault {
         threshold
     }
 
-    // ── Max Active Tasks Management ────────────────────────────────────
+    // Max Active Tasks Management
 
     /// Admin updates the cap on concurrent active tasks a single user may hold.
     pub fn set_max_active_tasks(env: Env, admin: Address, max: u32) -> Result<(), VaultError> {
@@ -1324,6 +1333,7 @@ impl AgentVault {
     }
 
     /// Rotates the admin key. Only the current admin can call this.
+    /// Rejects if new_admin equals the current admin (no-op check).
     /// Emits UpdateAdminEvent on success.
     pub fn update_admin(env: Env, admin: Address, new_admin: Address) -> Result<(), VaultError> {
         admin.require_auth();
@@ -1334,6 +1344,10 @@ impl AgentVault {
             .ok_or(VaultError::Unauthorized)?;
         if admin != stored_admin {
             return Err(VaultError::Unauthorized);
+        }
+        // Reject no-op rotation: new_admin must differ from current admin
+        if new_admin == stored_admin {
+            return Err(VaultError::NoChange);
         }
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Self::extend_instance_ttl(&env);
