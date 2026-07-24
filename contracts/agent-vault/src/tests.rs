@@ -2469,3 +2469,9 @@ mod invariant_tests {
         assert_eq!(account.total_spent, 200);
     }
 }
+
+#[test]
+fn test_version_returns_contract_version() {
+    let test_env = setup_test();
+    assert_eq!(test_env.client.version(), 2);
+}

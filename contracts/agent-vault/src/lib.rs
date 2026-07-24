@@ -258,6 +258,15 @@ const PERSISTENT_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
 const INSTANCE_TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const INSTANCE_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
 
+/// Compile-time contract version, exposed on-chain via `version()`.
+///
+/// MUST be bumped whenever the public interface or storage layout
+/// changes -- operators and clients rely on this to confirm a
+/// deployment before assuming a given function or storage layout
+/// exists, especially important on Soroban where the same address
+/// can be upgraded in place.
+const CONTRACT_VERSION: u32 = 2;
+
 // Contract
 
 /// The CleverVault contract — a trustless treasury that holds multiple whitelisted
@@ -1337,6 +1346,16 @@ impl AgentVault {
             .instance()
             .get(&DataKey::Admin)
             .expect("Not initialized")
+    }
+
+    /// Returns the compile-time `CONTRACT_VERSION` of this deployment.
+    ///
+    /// Lets operators and clients cheaply confirm which build of
+    /// CleverVault a given address is running before assuming a given
+    /// function or storage layout exists.
+    pub fn version(env: Env) -> u32 {
+        Self::extend_instance_ttl(&env);
+        CONTRACT_VERSION
     }
 }
 
