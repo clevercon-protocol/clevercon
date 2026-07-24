@@ -409,6 +409,13 @@ impl AgentVault {
     /// Only the unlocked portion (`balance - locked`) of the given asset may be
     /// withdrawn; funds locked by active tasks for that asset stay reserved, so a
     /// withdrawal succeeds even while other funds — or other assets — are locked.
+    ///
+    /// # Checks-Effects-Interactions ordering
+    /// All validation (checks) and storage mutations (effects) are completed
+    /// **before** the `token::Client::transfer` call (interaction). This ensures
+    /// the vault's accounting is already consistent if a transfer ever re-enters
+    /// the contract, and that a panicking transfer reverts the whole transaction
+    /// without leaving any state change behind.
     pub fn withdraw(
         env: Env,
         user: Address,
@@ -451,13 +458,15 @@ impl AgentVault {
             return Err(VaultError::InsufficientAvailable);
         }
 
-        Self::extend_instance_ttl(&env);
-        let token_client = token::Client::new(&env, &asset);
-        token_client.transfer(&env.current_contract_address(), &user, &amount);
-
+        // --- Effects: update state before the external call ---
         asset_account.balance -= amount;
         env.storage().persistent().set(&asset_key, &asset_account);
         Self::extend_persistent_ttl(&env, &asset_key);
+        Self::extend_instance_ttl(&env);
+
+        // --- Interaction: token transfer is the final step ---
+        let token_client = token::Client::new(&env, &asset);
+        token_client.transfer(&env.current_contract_address(), &user, &amount);
 
         WithdrawEvent {
             user: user.clone(),
@@ -697,6 +706,14 @@ impl AgentVault {
 
     /// Release funds for one step: contract transfers `amount` tokens to the ORCHESTRATOR.
     /// Returns true on success.
+    ///
+    /// # Checks-Effects-Interactions ordering
+    /// All validation (checks) and storage mutations (effects) — including
+    /// `task.spent` increment and the persistent-storage write — are completed
+    /// **before** the `token::Client::transfer` call (interaction). This ensures
+    /// the vault's accounting is consistent if a transfer ever re-enters the
+    /// contract, and that a panicking transfer reverts the whole transaction
+    /// without leaving any state change behind.
     pub fn release_payment(
         env: Env,
         orchestrator: Address,
@@ -732,12 +749,15 @@ impl AgentVault {
         }
 
         Self::extend_instance_ttl(&env);
-        let token_client = token::Client::new(&env, &asset);
-        token_client.transfer(&env.current_contract_address(), &orchestrator, &amount);
 
+        // --- Effects: update state before the external call ---
         task.spent += amount;
         env.storage().persistent().set(&task_key, &task);
         Self::extend_persistent_ttl(&env, &task_key);
+
+        // --- Interaction: token transfer is the final step ---
+        let token_client = token::Client::new(&env, &asset);
+        token_client.transfer(&env.current_contract_address(), &orchestrator, &amount);
 
         ReleaseEvent {
             user: task.user.clone(),
