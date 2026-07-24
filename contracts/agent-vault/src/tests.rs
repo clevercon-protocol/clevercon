@@ -1976,8 +1976,7 @@ fn test_lowering_cap_below_current_count_does_not_affect_existing_tasks() {
     let third_task_id = t.client.create_task(&orchestrator, &t.usdc_sac, &100);
     assert_eq!(third_task_id, 3);
 }
-
-// ── Admin key rotation tests ─────────────────────────────────────────────────
+// Admin key rotation tests
 
 /// Positive: admin rotates to new_admin successfully.
 #[test]

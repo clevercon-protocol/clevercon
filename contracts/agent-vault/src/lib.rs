@@ -1203,7 +1203,7 @@ impl AgentVault {
         result
     }
 
-    // ── Pause / Unpause ─────────────────────────────────────────────────
+    // Pause / Unpause
 
     /// Pauses the contract, blocking deposit, create_task, and release_payment.
     pub fn pause(env: Env, admin: Address) -> Result<(), VaultError> {
@@ -1258,7 +1258,7 @@ impl AgentVault {
         paused
     }
 
-    // ── Stale Task Threshold Management ────────────────────────────────
+    // Stale Task Threshold Management
 
     /// Admin updates the threshold (in seconds) after which a task is considered stale.
     pub fn set_stale_threshold(env: Env, admin: Address, seconds: u64) -> Result<(), VaultError> {
@@ -1296,7 +1296,7 @@ impl AgentVault {
         threshold
     }
 
-    // ── Max Active Tasks Management ────────────────────────────────────
+    // Max Active Tasks Management
 
     /// Admin updates the cap on concurrent active tasks a single user may hold.
     pub fn set_max_active_tasks(env: Env, admin: Address, max: u32) -> Result<(), VaultError> {
