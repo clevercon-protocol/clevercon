@@ -476,6 +476,22 @@ impl AgentVault {
         Ok(())
     }
 
+    /// Withdraw all available tokens (balance - locked) from vault back to user's external wallet.
+    /// This computes the withdrawable amount on-chain and transfers exactly the unlocked portion
+    /// in a single call. If no available balance exists (either 0 balance or all locked), it
+    /// errors with InsufficientAvailable.
+    pub fn withdraw_all(env: Env, user: Address, asset: Address) -> Result<i128, VaultError> {
+        let asset_key = DataKey::UserAsset(user.clone(), asset.clone());
+        let account: UserAssetAccount = env.storage().persistent()
+            .get(&asset_key).ok_or(VaultError::InsufficientBalance)?;
+        let available = account.balance - account.locked;
+        if available <= 0 {
+            return Err(VaultError::InsufficientAvailable);
+        }
+        Self::withdraw(env, user, asset, available)?;
+        Ok(available)
+    }
+
     // Orchestrator registration
 
     /// Register a personal orchestrator for this user. ONE-TIME per user.
