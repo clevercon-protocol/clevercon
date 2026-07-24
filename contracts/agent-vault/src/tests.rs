@@ -272,6 +272,113 @@ fn test_withdraw_negative_fails() {
     assert!(result == Err(Ok(VaultError::InvalidAmount)));
 }
 
+// 3b. Withdraw All Tests
+
+#[test]
+fn test_withdraw_all_full_withdrawal() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    test_env.token_admin_client.mint(&user, &1000);
+    test_env.client.deposit(&user, &test_env.usdc_sac, &600);
+
+    // Withdraw all USDC (should be 600)
+    let withdrawn = test_env.client.withdraw_all(&user, &test_env.usdc_sac);
+    assert_eq!(withdrawn, 600);
+
+    // Verify USDC is returned to user
+    assert_eq!(test_env.token_client.balance(&user), 1000);
+    assert_eq!(test_env.token_client.balance(&test_env.contract_id), 0);
+
+    // Verify balance reduces to 0
+    let account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(account.balance, 0);
+}
+
+#[test]
+fn test_withdraw_all_with_some_funds_locked() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "TestOrch");
+
+    test_env.token_admin_client.mint(&user, &1000);
+    test_env.client.deposit(&user, &test_env.usdc_sac, &600);
+
+    // Register orchestrator
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator, &name);
+
+    // Lock 150 in an active task → 450 stays unlocked.
+    test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &150);
+
+    // Withdraw all available USDC (should be 450)
+    let withdrawn = test_env.client.withdraw_all(&user, &test_env.usdc_sac);
+    assert_eq!(withdrawn, 450);
+
+    // Verify user balance in contract is now exactly the locked amount
+    assert_eq!(test_env.client.get_balance(&user, &test_env.usdc_sac), 150);
+    assert_eq!(test_env.client.get_available(&user, &test_env.usdc_sac), 0);
+
+    // Verify USDC on-chain balances
+    assert_eq!(test_env.token_client.balance(&user), 850); // 400 leftover + 450 returned
+    assert_eq!(test_env.token_client.balance(&test_env.contract_id), 150);
+
+    // Complete the task with 50 spent, 100 refund.
+    test_env
+        .client
+        .release_payment(&orchestrator, &1, &test_env.usdc_sac, &50);
+    test_env.client.complete_task(&orchestrator, &1);
+
+    // Verify refund happened correctly (100 remains in contract, user account has 100 available)
+    let account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(account.balance, 100);
+    assert_eq!(account.locked, 0);
+    assert_eq!(test_env.client.get_available(&user, &test_env.usdc_sac), 100);
+    assert_eq!(test_env.token_client.balance(&test_env.contract_id), 100);
+}
+
+#[test]
+fn test_withdraw_all_nothing_available_fails() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "TestOrch");
+
+    // Case 1: No balance at all (not deposited yet)
+    let result1 = test_env.client.try_withdraw_all(&user, &test_env.usdc_sac);
+    assert!(result1 == Err(Ok(VaultError::InsufficientBalance)));
+
+    // Deposit some funds
+    test_env.token_admin_client.mint(&user, &1000);
+    test_env.client.deposit(&user, &test_env.usdc_sac, &200);
+
+    // Case 2: Available balance is 0 because all of it is locked
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator, &name);
+    test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &200);
+
+    let result2 = test_env.client.try_withdraw_all(&user, &test_env.usdc_sac);
+    assert!(result2 == Err(Ok(VaultError::InsufficientAvailable)));
+}
+
 // 4. Register Orchestrator Tests
 
 #[test]
