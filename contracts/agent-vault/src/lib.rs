@@ -14,10 +14,12 @@
 //!    orchestrator, orchestrator_name, and active_tasks_count.
 //! 3. `DataKey::Task(task_id)`: Maps a task_id to `TaskInfo` which now includes the `asset: Address` field.
 //! 4. `DataKey::AssetSupported(Asset)`: Maps an asset SAC address to `true`, indicating it is a supported whitelisted asset.
+//! 5. `DataKey::SupportedAssets`: An enumerable `Vec<Address>` of every whitelisted asset, kept in sync with the
+//!    per-asset `AssetSupported` flags so `get_supported_assets` and `is_supported_asset` never disagree.
 
 use soroban_sdk::contracterror;
 use soroban_sdk::{
-    contract, contractevent, contractimpl, contracttype, log, token, Address, Env, String,
+    contract, contractevent, contractimpl, contracttype, log, token, Address, Env, String, Vec,
 };
 
 // Events
@@ -153,6 +155,9 @@ pub enum DataKey {
     OrchestratorOwner(Address),
     /// Maps an asset address to a boolean indicating support status.
     AssetSupported(Address),
+    /// Enumerable index of all whitelisted asset addresses, kept in sync with
+    /// the per-asset [`DataKey::AssetSupported`] flags.
+    SupportedAssets,
     /// Returns true if the contract is paused.
     Paused,
     UserTasks(Address),
@@ -280,7 +285,9 @@ impl AgentVault {
         // Automatically whitelist usdc_sac
         let asset_key = DataKey::AssetSupported(usdc_sac.clone());
         env.storage().persistent().set(&asset_key, &true);
-        Self::extend_persistent_ttl(&env, &asset_key);
+        Self::index_add_asset(&env, &usdc_sac);
+        // Put the index and the seeded flag on one TTL lifecycle from the start.
+        Self::extend_asset_support_ttl(&env);
 
         Self::extend_instance_ttl(&env);
         log!(
@@ -308,7 +315,10 @@ impl AgentVault {
 
         let asset_key = DataKey::AssetSupported(asset.clone());
         env.storage().persistent().set(&asset_key, &true);
-        Self::extend_persistent_ttl(&env, &asset_key);
+        Self::index_add_asset(&env, &asset);
+        // Bring the whole support set onto one TTL lifecycle, including the flag
+        // just written and every previously-whitelisted asset.
+        Self::extend_asset_support_ttl(&env);
 
         log!(&env, "Asset added to whitelist: {}", asset);
         Ok(())
@@ -337,6 +347,9 @@ impl AgentVault {
         if env.storage().persistent().has(&asset_key) {
             env.storage().persistent().remove(&asset_key);
         }
+        Self::index_remove_asset(&env, &asset);
+        // Keep the remaining support set on one TTL lifecycle after removal.
+        Self::extend_asset_support_ttl(&env);
 
         log!(&env, "Asset removed from whitelist: {}", asset);
         Ok(())
@@ -347,7 +360,29 @@ impl AgentVault {
         let asset_key = DataKey::AssetSupported(asset);
         let result = env.storage().persistent().has(&asset_key);
         if result {
-            Self::extend_persistent_ttl(&env, &asset_key);
+            // Refresh the whole support set — index and every flag — so the two
+            // representations can never expire out of step. See
+            // [`Self::extend_asset_support_ttl`].
+            Self::extend_asset_support_ttl(&env);
+        }
+        result
+    }
+
+    /// Enumerates every currently whitelisted asset. Stays consistent with
+    /// [`is_supported_asset`]: an address appears here if and only if that
+    /// function returns true for it.
+    pub fn get_supported_assets(env: Env) -> Vec<Address> {
+        let key = DataKey::SupportedAssets;
+        let result = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(Vec::new(&env));
+        if env.storage().persistent().has(&key) {
+            // Refresh the whole support set — index and every flag — so the two
+            // representations can never expire out of step. See
+            // [`Self::extend_asset_support_ttl`].
+            Self::extend_asset_support_ttl(&env);
         }
         result
     }
@@ -937,6 +972,62 @@ impl AgentVault {
             Self::extend_persistent_ttl(env, &key);
         }
         config
+    }
+
+    /// Appends `asset` to the enumerable [`DataKey::SupportedAssets`] index.
+    /// Idempotent — an asset already present is not duplicated.
+    fn index_add_asset(env: &Env, asset: &Address) {
+        let key = DataKey::SupportedAssets;
+        let mut assets: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(Vec::new(env));
+        if !assets.iter().any(|a| a == *asset) {
+            assets.push_back(asset.clone());
+            env.storage().persistent().set(&key, &assets);
+            Self::extend_persistent_ttl(env, &key);
+        }
+    }
+
+    /// Removes `asset` from the enumerable [`DataKey::SupportedAssets`] index.
+    /// A no-op if the asset is not present.
+    fn index_remove_asset(env: &Env, asset: &Address) {
+        let key = DataKey::SupportedAssets;
+        let assets: Vec<Address> = match env.storage().persistent().get(&key) {
+            Some(a) => a,
+            None => return,
+        };
+        if let Some(index) = assets.iter().position(|a| a == *asset) {
+            let mut assets = assets;
+            assets.remove(index as u32);
+            env.storage().persistent().set(&key, &assets);
+            Self::extend_persistent_ttl(env, &key);
+        }
+    }
+
+    /// Refreshes the TTLs of the entire asset-support state as one unit: the
+    /// enumerable [`DataKey::SupportedAssets`] index and every per-asset
+    /// [`DataKey::AssetSupported`] flag it references. Every path that reads or
+    /// mutates support state funnels through this, so the index and the flags
+    /// always share a single TTL lifecycle. Without it, whichever representation
+    /// a given call happened to touch would be refreshed alone; the other could
+    /// expire first, leaving `is_supported_asset` and `get_supported_assets`
+    /// disagreeing — and a later `index_add_asset` rebuilding a fresh index
+    /// could silently drop a still-supported asset.
+    fn extend_asset_support_ttl(env: &Env) {
+        let key = DataKey::SupportedAssets;
+        let assets: Vec<Address> = match env.storage().persistent().get(&key) {
+            Some(a) => a,
+            None => return,
+        };
+        Self::extend_persistent_ttl(env, &key);
+        for asset in assets.iter() {
+            let asset_key = DataKey::AssetSupported(asset);
+            if env.storage().persistent().has(&asset_key) {
+                Self::extend_persistent_ttl(env, &asset_key);
+            }
+        }
     }
 
     fn extend_persistent_ttl(env: &Env, key: &DataKey) {
