@@ -2468,6 +2468,92 @@ mod invariant_tests {
         assert_eq!(account.locked, 0);
         assert_eq!(account.total_spent, 200);
     }
+
+    #[test]
+    fn test_token_balance_multiple_deposits() {
+        let test_env = setup_test();
+        test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+        let user1 = Address::generate(&test_env.env);
+        let user2 = Address::generate(&test_env.env);
+
+        test_env.token_admin_client.mint(&user1, &1000);
+        test_env.token_admin_client.mint(&user2, &2000);
+
+        test_env.client.deposit(&user1, &test_env.usdc_sac, &400);
+        test_env.client.deposit(&user2, &test_env.usdc_sac, &600);
+
+        let bal1 = test_env.client.get_balance(&user1, &test_env.usdc_sac);
+        let bal2 = test_env.client.get_balance(&user2, &test_env.usdc_sac);
+
+        let contract_bal = test_env.client.token_balance(&test_env.usdc_sac);
+
+        assert_eq!(contract_bal, bal1 + bal2);
+        assert_eq!(contract_bal, 1000);
+    }
+
+    #[test]
+    fn test_token_balance_withdraw_reduction() {
+        let test_env = setup_test();
+        test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+        let user = Address::generate(&test_env.env);
+        test_env.token_admin_client.mint(&user, &1000);
+        test_env.client.deposit(&user, &test_env.usdc_sac, &600);
+
+        let balance_before = test_env.client.token_balance(&test_env.usdc_sac);
+        assert_eq!(balance_before, 600);
+
+        test_env.client.withdraw(&user, &test_env.usdc_sac, &200);
+
+        let balance_after = test_env.client.token_balance(&test_env.usdc_sac);
+        assert_eq!(balance_after, 400);
+        assert_eq!(balance_before - balance_after, 200);
+    }
+
+    #[test]
+    fn test_token_balance_partial_spend() {
+        let test_env = setup_test();
+        test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+        let user = Address::generate(&test_env.env);
+        let orchestrator = Address::generate(&test_env.env);
+        let name = soroban_sdk::String::from_str(&test_env.env, "MyOrchestrator");
+
+        test_env.token_admin_client.mint(&user, &1000);
+        test_env.client.deposit(&user, &test_env.usdc_sac, &500);
+
+        test_env
+            .client
+            .register_orchestrator(&user, &orchestrator, &name);
+
+        let initial_balance = test_env.client.token_balance(&test_env.usdc_sac);
+        assert_eq!(initial_balance, 500);
+
+        // Create a task with plan_cost 300
+        let task_id = test_env
+            .client
+            .create_task(&orchestrator, &test_env.usdc_sac, &300);
+
+        // Token balance is unchanged
+        assert_eq!(test_env.client.token_balance(&test_env.usdc_sac), 500);
+
+        // Release step payment of 100
+        test_env
+            .client
+            .release_payment(&orchestrator, &task_id, &test_env.usdc_sac, &100);
+
+        // Token balance drops by 100
+        assert_eq!(test_env.client.token_balance(&test_env.usdc_sac), 400);
+
+        // Complete task with partial spend (100 spent)
+        test_env.client.complete_task(&orchestrator, &task_id);
+
+        // Token balance remains at 400 (drops by exactly spent (100), not plan_cost (300))
+        let final_balance = test_env.client.token_balance(&test_env.usdc_sac);
+        assert_eq!(final_balance, 400);
+        assert_eq!(initial_balance - final_balance, 100);
+    }
 }
 
 #[test]
