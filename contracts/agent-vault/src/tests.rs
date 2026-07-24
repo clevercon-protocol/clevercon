@@ -2563,7 +2563,7 @@ fn test_version_returns_contract_version() {
 }
 
 
-// ── No-op rotation rejection tests ───────────────────────────────────────────
+// No-op rotation rejection tests
 
 /// Verify that no-op admin rotation is rejected without state changes.
 #[test]
