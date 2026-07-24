@@ -132,6 +132,7 @@ pub enum VaultError {
     NotYourTask = 16,
     NotYourOrchestrator = 17,
     TooManyActiveTasks = 18,
+    NoChange = 19,
 }
 
 // Storage keys
@@ -564,6 +565,7 @@ impl AgentVault {
 
     /// Update the registered orchestrator for a user. Requires no active tasks so
     /// in-flight task authorization cannot be stranded on the old orchestrator.
+    /// Rejects if new_orchestrator equals the current orchestrator (no-op check).
     pub fn update_orchestrator(
         env: Env,
         user: Address,
@@ -595,6 +597,11 @@ impl AgentVault {
             if existing_owner != user {
                 return Err(VaultError::OrchestratorAlreadyRegistered);
             }
+        }
+
+        // Reject no-op rotation: new_orchestrator must differ from old orchestrator
+        if new_orchestrator == old_orchestrator {
+            return Err(VaultError::NoChange);
         }
 
         let old_owner_key = DataKey::OrchestratorOwner(old_orchestrator.clone());
@@ -1324,6 +1331,7 @@ impl AgentVault {
     }
 
     /// Rotates the admin key. Only the current admin can call this.
+    /// Rejects if new_admin equals the current admin (no-op check).
     /// Emits UpdateAdminEvent on success.
     pub fn update_admin(env: Env, admin: Address, new_admin: Address) -> Result<(), VaultError> {
         admin.require_auth();
@@ -1334,6 +1342,10 @@ impl AgentVault {
             .ok_or(VaultError::Unauthorized)?;
         if admin != stored_admin {
             return Err(VaultError::Unauthorized);
+        }
+        // Reject no-op rotation: new_admin must differ from current admin
+        if new_admin == stored_admin {
+            return Err(VaultError::NoChange);
         }
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Self::extend_instance_ttl(&env);
