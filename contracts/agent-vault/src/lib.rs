@@ -580,7 +580,6 @@ impl AgentVault {
             .persistent()
             .get(&config_key)
             .ok_or(VaultError::OrchestratorNotRegistered)?;
-        Self::extend_persistent_ttl(&env, &config_key);
 
         if config.active_tasks_count != 0 {
             return Err(VaultError::ActiveTaskExists);
@@ -593,16 +592,19 @@ impl AgentVault {
 
         let new_owner_key = DataKey::OrchestratorOwner(new_orchestrator.clone());
         if let Some(existing_owner) = env.storage().persistent().get::<_, Address>(&new_owner_key) {
-            Self::extend_persistent_ttl(&env, &new_owner_key);
             if existing_owner != user {
                 return Err(VaultError::OrchestratorAlreadyRegistered);
             }
         }
 
         // Reject no-op rotation: new_orchestrator must differ from old orchestrator
+        // This check comes BEFORE any TTL refreshes or state mutations
         if new_orchestrator == old_orchestrator {
             return Err(VaultError::NoChange);
         }
+
+        // All validations passed; now refresh TTLs and perform state writes
+        Self::extend_persistent_ttl(&env, &config_key);
 
         let old_owner_key = DataKey::OrchestratorOwner(old_orchestrator.clone());
         env.storage().persistent().remove(&old_owner_key);

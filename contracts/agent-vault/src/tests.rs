@@ -2565,7 +2565,7 @@ fn test_version_returns_contract_version() {
 
 // ── No-op rotation rejection tests ───────────────────────────────────────────
 
-/// Negative: admin cannot rotate to the same admin (no-op check).
+/// Verify that no-op admin rotation is rejected without state changes.
 #[test]
 fn test_update_admin_rejects_no_op_rotation() {
     let t = setup_test();
@@ -2580,7 +2580,7 @@ fn test_update_admin_rejects_no_op_rotation() {
     assert_eq!(stored, t.admin);
 }
 
-/// Negative: orchestrator cannot be updated to the current orchestrator (no-op check).
+/// Verify that no-op orchestrator rotation is rejected without state changes.
 #[test]
 fn test_update_orchestrator_rejects_no_op_rotation() {
     let test_env = setup_test();
@@ -2660,27 +2660,27 @@ fn test_update_orchestrator_legitimate_rotation_still_works() {
     assert_eq!(config2.orchestrator_name, another_name);
 }
 
-/// Verify that no-op admin rotation produces no events.
+/// Verify that legitimate admin rotation emits exactly one event.
 #[test]
-fn test_update_admin_no_op_emits_no_event() {
+fn test_update_admin_legitimate_rotation_emits_event() {
     let t = setup_test();
     t.client.init(&t.admin, &t.usdc_sac);
+    let new_admin = Address::generate(&t.env);
 
     // Clear any init events
     let _ = t.env.events().all();
 
-    // Attempt no-op rotation (should fail and emit no event)
-    let result = t.client.try_update_admin(&t.admin, &t.admin);
-    assert!(result == Err(Ok(VaultError::NoChange)));
+    // Perform legitimate rotation
+    t.client.update_admin(&t.admin, &new_admin);
 
-    // Verify no event was emitted
+    // Verify exactly one event was emitted
     let events = t.env.events().all();
-    assert_eq!(events.events().len(), 0);
+    assert_eq!(events.events().len(), 1);
 }
 
-/// Verify that no-op orchestrator rotation produces no events.
+/// Verify that legitimate orchestrator rotation emits exactly one event.
 #[test]
-fn test_update_orchestrator_no_op_emits_no_event() {
+fn test_update_orchestrator_legitimate_rotation_emits_event() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
 
@@ -2695,13 +2695,15 @@ fn test_update_orchestrator_no_op_emits_no_event() {
     // Clear any registration events
     let _ = test_env.env.events().all();
 
-    // Attempt no-op rotation (should fail and emit no event)
-    let result = test_env
-        .client
-        .try_update_orchestrator(&user, &orchestrator, &name);
-    assert!(result == Err(Ok(VaultError::NoChange)));
+    let new_orchestrator = Address::generate(&test_env.env);
+    let new_name = soroban_sdk::String::from_str(&test_env.env, "NewOrchestrator");
 
-    // Verify no event was emitted
+    // Perform legitimate rotation
+    test_env
+        .client
+        .update_orchestrator(&user, &new_orchestrator, &new_name);
+
+    // Verify exactly one event was emitted
     let events = test_env.env.events().all();
-    assert_eq!(events.events().len(), 0);
+    assert_eq!(events.events().len(), 1);
 }
