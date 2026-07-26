@@ -155,6 +155,140 @@ fn test_deposit_negative_fails() {
     assert!(result == Err(Ok(VaultError::InvalidAmount)));
 }
 
+// 2b. Deposit For Tests
+
+#[test]
+fn test_deposit_for_success() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let from = Address::generate(&test_env.env);
+    let user = Address::generate(&test_env.env);
+
+    test_env.token_admin_client.mint(&from, &1000);
+    assert_eq!(test_env.token_client.balance(&from), 1000);
+
+    test_env.client.deposit_for(&from, &user, &test_env.usdc_sac, &400);
+
+    // from's wallet debited, contract credited
+    assert_eq!(test_env.token_client.balance(&from), 600);
+    assert_eq!(test_env.token_client.balance(&test_env.contract_id), 400);
+
+    // user's vault account credited
+    let account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(account.balance, 400);
+    assert_eq!(account.total_deposited, 400);
+
+    // from has no vault account (deposit_for does not credit the funder)
+    assert!(test_env.client.get_account(&from, &test_env.usdc_sac).is_none());
+}
+
+#[test]
+fn test_deposit_for_zero_fails() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let from = Address::generate(&test_env.env);
+    let user = Address::generate(&test_env.env);
+    let result = test_env.client.try_deposit_for(&from, &user, &test_env.usdc_sac, &0);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
+}
+
+#[test]
+fn test_deposit_for_negative_fails() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let from = Address::generate(&test_env.env);
+    let user = Address::generate(&test_env.env);
+    let result = test_env.client.try_deposit_for(&from, &user, &test_env.usdc_sac, &-50);
+    assert!(result == Err(Ok(VaultError::InvalidAmount)));
+}
+
+#[test]
+fn test_deposit_for_non_whitelisted_asset_fails() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let from = Address::generate(&test_env.env);
+    let user = Address::generate(&test_env.env);
+    let xlm_sac = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone())
+        .address();
+
+    let result = test_env.client.try_deposit_for(&from, &user, &xlm_sac, &200);
+    assert!(result == Err(Ok(VaultError::AssetNotSupported)));
+}
+
+#[test]
+fn test_deposit_for_multiple_funders() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let from1 = Address::generate(&test_env.env);
+    let from2 = Address::generate(&test_env.env);
+    let user = Address::generate(&test_env.env);
+
+    test_env.token_admin_client.mint(&from1, &500);
+    test_env.token_admin_client.mint(&from2, &500);
+
+    test_env.client.deposit_for(&from1, &user, &test_env.usdc_sac, &200);
+    test_env.client.deposit_for(&from2, &user, &test_env.usdc_sac, &300);
+
+    let account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(account.balance, 500);
+    assert_eq!(account.total_deposited, 500);
+
+    assert_eq!(test_env.token_client.balance(&from1), 300);
+    assert_eq!(test_env.token_client.balance(&from2), 200);
+}
+
+#[test]
+fn test_deposit_for_user_can_withdraw() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let from = Address::generate(&test_env.env);
+    let user = Address::generate(&test_env.env);
+
+    test_env.token_admin_client.mint(&from, &500);
+    test_env.client.deposit_for(&from, &user, &test_env.usdc_sac, &300);
+
+    // user can withdraw the deposited funds
+    test_env.client.withdraw(&user, &test_env.usdc_sac, &100);
+    assert_eq!(test_env.client.get_balance(&user, &test_env.usdc_sac), 200);
+    assert_eq!(test_env.token_client.balance(&user), 100);
+}
+
+#[test]
+fn test_deposit_for_user_can_create_task() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let from = Address::generate(&test_env.env);
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    let name = soroban_sdk::String::from_str(&test_env.env, "MyOrchestrator");
+
+    test_env.token_admin_client.mint(&from, &500);
+    test_env.client.deposit_for(&from, &user, &test_env.usdc_sac, &300);
+    test_env
+        .client
+        .register_orchestrator(&user, &orchestrator, &name);
+
+    let task_id = test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &200);
+    let task = test_env.client.get_task(&task_id).unwrap();
+    assert_eq!(task.user, user);
+    assert_eq!(task.plan_cost, 200);
+}
+
 // 3. Withdraw Tests
 
 #[test]

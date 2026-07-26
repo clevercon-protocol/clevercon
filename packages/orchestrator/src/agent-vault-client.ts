@@ -167,6 +167,23 @@ export async function buildDepositXdr(
 }
 
 /**
+ * Build an unsigned `deposit_for` XDR for the funder to sign in Freighter.
+ * Transfers `amountUsdc` from the funder's wallet into `recipientAddress`'s vault balance.
+ */
+export async function buildDepositForXdr(
+  funderAddress: string,
+  recipientAddress: string,
+  amountUsdc: number,
+): Promise<string | null> {
+  if (!VAULT_ACTIVE) return null;
+  return buildUnsignedXdr(funderAddress, 'deposit_for', [
+    new Address(funderAddress).toScVal(),
+    new Address(recipientAddress).toScVal(),
+    nativeToScVal(usdcToStroops(amountUsdc), { type: 'i128' }),
+  ]);
+}
+
+/**
  * Build an unsigned `withdraw` XDR for the user to sign in Freighter.
  * Fails on-chain if `amountUsdc` exceeds the user's available (unlocked) balance.
  */
