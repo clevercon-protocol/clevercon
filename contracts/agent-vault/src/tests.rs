@@ -1,7 +1,7 @@
-use crate::{AgentVault, AgentVaultClient, DataKey, VaultError};
+use crate::{AgentVault, AgentVaultClient, DataKey, InitEvent, VaultError};
 use soroban_sdk::testutils::storage::Persistent as _;
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
-use soroban_sdk::{token, Address, Env};
+use soroban_sdk::{token, Address, Env, IntoVal, Symbol};
 
 struct TestEnv {
     env: Env,
@@ -70,6 +70,20 @@ fn test_init() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
 
+    // Verify InitEvent emission
+    let events = test_env.env.events().all();
+    assert_eq!(events.events().len(), 1);
+    let event = events.events().last().unwrap();
+    assert_eq!(event.0, test_env.contract_id);
+    assert_eq!(
+        event.1,
+        (
+            Symbol::new(&test_env.env, "InitEvent"),
+            test_env.admin.clone()
+        )
+            .into_val(&test_env.env)
+    );
+
     // Verify admin and USDC SAC are stored in instance storage
     test_env.env.as_contract(&test_env.contract_id, || {
         let stored_admin: Address = test_env
@@ -96,10 +110,15 @@ fn test_init() {
 fn test_init_twice_panics() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let events_after_first = test_env.env.events().all().events().len();
+
     let result = test_env
         .client
         .try_init(&test_env.admin, &test_env.usdc_sac);
     assert!(result == Err(Ok(VaultError::AlreadyInitialized)));
+
+    let events_after_second = test_env.env.events().all().events().len();
+    assert_eq!(events_after_first, events_after_second);
 }
 
 // 2. Deposit Tests
@@ -1578,7 +1597,7 @@ fn test_pause_emits_pause_event() {
     test_env.client.pause(&test_env.admin);
 
     let events = test_env.env.events().all();
-    assert_eq!(events.events().len(), 1);
+    assert_eq!(events.events().len(), 2);
 }
 
 #[test]
@@ -1600,7 +1619,7 @@ fn test_unpause_emits_unpause_event() {
     test_env.client.unpause(&test_env.admin);
 
     let events = test_env.env.events().all();
-    assert_eq!(events.events().len(), 1);
+    assert_eq!(events.events().len(), 3);
 }
 
 #[test]
@@ -2132,7 +2151,7 @@ fn test_update_admin_emits_event() {
     t.client.update_admin(&t.admin, &new_admin);
 
     let events = t.env.events().all();
-    assert_eq!(events.events().len(), 1);
+    assert_eq!(events.events().len(), 2);
 }
 
 /// Chained rotation: new admin can rotate again.

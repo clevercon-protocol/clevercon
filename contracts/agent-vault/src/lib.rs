@@ -25,6 +25,13 @@ use soroban_sdk::{
 // Events
 
 #[contractevent]
+pub struct InitEvent {
+    #[topic]
+    pub admin: Address,
+    pub usdc_sac: Address,
+}
+
+#[contractevent]
 pub struct DepositEvent {
     #[topic]
     pub user: Address,
@@ -308,6 +315,11 @@ impl AgentVault {
             admin,
             usdc_sac
         );
+        InitEvent {
+            admin: admin.clone(),
+            usdc_sac: usdc_sac.clone(),
+        }
+        .publish(&env);
         Ok(())
     }
 
