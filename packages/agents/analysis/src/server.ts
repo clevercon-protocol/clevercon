@@ -7,14 +7,17 @@ import { stellar } from '@stellar/mpp/charge/server';
 import { USDC_SAC_TESTNET, STELLAR_TESTNET } from '@stellar/mpp';
 import { analyzeWithClaude } from './analyze.js';
 import { registerSelf } from './register.js';
+import { validateEnvOrExit } from '@clevercon/common';
+
+if (!process.env.VITEST) {
+  validateEnvOrExit('analysis', {
+    REGISTRY_URL: { type: 'url' },
+    ANALYSIS_AGENT_SECRET_KEY: { type: 'stellarSecret' },
+  });
+}
 
 const PORT = parseInt(process.env.ANALYSIS_AGENT_PORT || process.env.PORT || '4004');
 const SECRET_KEY = process.env.ANALYSIS_AGENT_SECRET_KEY!;
-
-if (!SECRET_KEY) {
-  console.error('[AnalysisBot] ANALYSIS_AGENT_SECRET_KEY not set');
-  process.exit(1);
-}
 
 const keypair = Keypair.fromSecret(SECRET_KEY);
 const PAY_TO = keypair.publicKey();

@@ -5,8 +5,12 @@ import { loadAgents, findAgent, upsertAgent, removeAgent } from './store.js';
 import { updateReputation } from './reputation.js';
 import { matchCapabilities } from './search.js';
 import { validateRegistration } from './validate.js';
-import { logger } from '@clevercon/common';
+import { logger, validateEnvOrExit } from '@clevercon/common';
 import type { AgentManifest, AgentFeedback, AgentRecord } from '@clevercon/common';
+
+if (!process.env.VITEST) {
+  validateEnvOrExit('registry', {});
+}
 
 const app = express();
 const PORT = parseInt(process.env.REGISTRY_PORT || process.env.PORT || '4000', 10);
