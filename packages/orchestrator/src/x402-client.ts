@@ -37,17 +37,22 @@ export interface X402Result {
  * @param action    Instruction string for the agent
  * @param context   Output from previous steps to pass as context
  * @param secretKey Secret key to sign payments (defaults to ORCHESTRATOR_SECRET_KEY)
+ * @param signal    Optional AbortSignal — when aborted, the call is cancelled immediately
  */
 export async function makeX402Payment(
   endpoint: string,
   action: string,
   context?: string,
   secretKey?: string,
+  signal?: AbortSignal,
 ): Promise<X402Result> {
   const key = secretKey ?? process.env.ORCHESTRATOR_SECRET_KEY!;
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    // Bail early if the outer step timeout has already fired
+    if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+
     // Fresh signer + scheme on every attempt — avoids stale sequence numbers
     const payingFetch = buildPayingFetch(key);
 
@@ -56,6 +61,7 @@ export async function makeX402Payment(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: action, context: context ?? '' }),
+        signal,
       });
 
       if (!response.ok) {
@@ -86,6 +92,9 @@ export async function makeX402Payment(
       return { output, tx_hash };
     } catch (err: any) {
       lastError = err;
+      // Short-circuit retries once the step timeout has fired — no point
+      // backing off when every subsequent fetch will abort immediately.
+      if (signal?.aborted) break;
       if (attempt < MAX_ATTEMPTS) {
         const backoffMs = 2000 * attempt;
         console.warn(
