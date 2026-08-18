@@ -9,17 +9,21 @@ import { ExactStellarScheme } from '@x402/stellar/exact/server';
 import { getBlockchainNews, getTechNews, getAINews } from './news.js';
 import { scrapeUrl } from './scraper.js';
 import { registerSelf } from './register.js';
+import { validateEnvOrExit } from '@clevercon/common';
+
+if (!process.env.VITEST) {
+  validateEnvOrExit('web-intel', {
+    REGISTRY_URL: { type: 'url' },
+    WEB_INTEL_SECRET_KEY: { type: 'stellarSecret' },
+    ANTHROPIC_API_KEY: { optional: true, description: 'only used for optional Claude summarisation' },
+  });
+}
 
 const PORT = parseInt(process.env.WEB_INTEL_PORT || process.env.PORT || '4002');
 const SECRET_KEY = process.env.WEB_INTEL_SECRET_KEY!;
 const FACILITATOR_URL = process.env.X402_FACILITATOR_URL || 'https://www.x402.org/facilitator';
 const NETWORK = (process.env.STELLAR_NETWORK || 'stellar:testnet') as `${string}:${string}`;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-
-if (!SECRET_KEY) {
-  console.error('[WebIntelligence] WEB_INTEL_SECRET_KEY not set');
-  process.exit(1);
-}
 
 const keypair = Keypair.fromSecret(SECRET_KEY);
 const PAY_TO = keypair.publicKey();

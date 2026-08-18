@@ -56,8 +56,18 @@ import {
   getAllTaskResults,
 } from './task-results.js';
 import { getMetrics, seedMetrics, taskStarted, taskCompleted, taskFailed } from './metrics.js';
+import { validateEnvOrExit } from '@clevercon/common';
 
 // ── Config ───────────────────────────────────────────────────────────────────
+
+if (!process.env.VITEST) {
+  validateEnvOrExit('orchestrator', {
+    REGISTRY_URL: { type: 'url' },
+    ORCHESTRATOR_SECRET_KEY: { type: 'stellarSecret' },
+    ANTHROPIC_API_KEY: { optional: process.env.LLM_PROVIDER === 'mock' },
+    AGENT_VAULT_CONTRACT_ID: { optional: true, description: 'vault calls become safe no-ops when unset' },
+  });
+}
 
 const PORT = parseInt(process.env.ORCHESTRATOR_PORT || process.env.PORT || '3000');
 const REGISTRY_URL = process.env.REGISTRY_URL || 'http://localhost:4000';
@@ -65,11 +75,6 @@ const BUDGET_DEFAULT = parseFloat(process.env.DEFAULT_BUDGET || '1.0');
 const SECRET_KEY = process.env.ORCHESTRATOR_SECRET_KEY;
 // How long to wait for user to approve a plan before auto-approving (ms)
 const APPROVAL_TIMEOUT_MS = parseInt(process.env.PLAN_APPROVAL_TIMEOUT_MS || '60000');
-
-if (!SECRET_KEY && !process.env.VITEST) {
-  console.error('[Orchestrator] ORCHESTRATOR_SECRET_KEY not set');
-  process.exit(1);
-}
 
 const keypair = Keypair.fromSecret(SECRET_KEY || Keypair.random().secret());
 const ORCHESTRATOR_ADDRESS = keypair.publicKey();

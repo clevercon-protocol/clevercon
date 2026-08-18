@@ -15,16 +15,19 @@ import {
 import { getCacheStats } from './cache.js';
 import { getCryptoQuote, getCryptoCandles } from './x402-consumer.js';
 import { registerSelf } from './register.js';
+import { validateEnvOrExit } from '@clevercon/common';
+
+if (!process.env.VITEST) {
+  validateEnvOrExit('stellar-oracle', {
+    REGISTRY_URL: { type: 'url' },
+    STELLAR_ORACLE_SECRET_KEY: { type: 'stellarSecret' },
+  });
+}
 
 const PORT = parseInt(process.env.STELLAR_ORACLE_PORT || process.env.PORT || '4001');
 const SECRET_KEY = process.env.STELLAR_ORACLE_SECRET_KEY!;
 const FACILITATOR_URL = process.env.X402_FACILITATOR_URL || 'https://www.x402.org/facilitator';
 const NETWORK = (process.env.STELLAR_NETWORK || 'stellar:testnet') as `${string}:${string}`;
-
-if (!SECRET_KEY) {
-  console.error('[StellarOracle] STELLAR_ORACLE_SECRET_KEY not set');
-  process.exit(1);
-}
 
 const keypair = Keypair.fromSecret(SECRET_KEY);
 const PAY_TO = keypair.publicKey();
