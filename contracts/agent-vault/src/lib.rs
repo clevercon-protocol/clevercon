@@ -34,6 +34,17 @@ pub struct DepositEvent {
 }
 
 #[contractevent]
+pub struct DepositForEvent {
+    #[topic]
+    pub from: Address,
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub asset: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
 pub struct WithdrawEvent {
     #[topic]
     pub user: Address,
@@ -453,6 +464,60 @@ impl AgentVault {
         log!(
             &env,
             "deposit user={} asset={} amount={} new_balance={}",
+            user,
+            asset,
+            amount,
+            asset_account.balance
+        );
+        Ok(())
+    }
+
+    /// Deposit supported tokens from an external wallet into another user's vault balance.
+    /// The caller (`from`) is the funder — their wallet is debited. The deposit is
+    /// credited to `user`'s vault account for the given asset.
+    pub fn deposit_for(
+        env: Env,
+        from: Address,
+        user: Address,
+        asset: Address,
+        amount: i128,
+    ) -> Result<(), VaultError> {
+        from.require_auth();
+        Self::require_not_paused(&env)?;
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+        if !Self::is_supported_asset(env.clone(), asset.clone()) {
+            return Err(VaultError::AssetNotSupported);
+        }
+
+        Self::extend_instance_ttl(&env);
+        let token_client = token::Client::new(&env, &asset);
+        token_client.transfer(&from, env.current_contract_address(), &amount);
+
+        let config = Self::get_or_create_config(&env, &user);
+        let config_key = DataKey::UserConfig(user.clone());
+        env.storage().persistent().set(&config_key, &config);
+        Self::extend_persistent_ttl(&env, &config_key);
+
+        let mut asset_account = Self::get_or_create_asset_account(&env, &user, &asset);
+        asset_account.balance += amount;
+        asset_account.total_deposited += amount;
+        let asset_key = DataKey::UserAsset(user.clone(), asset.clone());
+        env.storage().persistent().set(&asset_key, &asset_account);
+        Self::extend_persistent_ttl(&env, &asset_key);
+
+        DepositForEvent {
+            from: from.clone(),
+            user: user.clone(),
+            asset: asset.clone(),
+            amount,
+        }
+        .publish(&env);
+        log!(
+            &env,
+            "deposit_for from={} user={} asset={} amount={} new_balance={}",
+            from,
             user,
             asset,
             amount,

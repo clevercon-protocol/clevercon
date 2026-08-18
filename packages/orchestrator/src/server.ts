@@ -650,6 +650,26 @@ app.post('/api/vault/deposit-xdr', async (req, res) => {
   }
 });
 
+// POST /api/vault/deposit-for-xdr — build unsigned deposit_for XDR (third-party funding)
+app.post('/api/vault/deposit-for-xdr', async (req, res) => {
+  const { funder_address, recipient_address, amount } = req.body as {
+    funder_address?: string;
+    recipient_address?: string;
+    amount?: number;
+  };
+  if (!funder_address || !recipient_address || !amount || amount <= 0) {
+    return res.status(400).json({ error: 'funder_address, recipient_address, and amount required' });
+  }
+  try {
+    const { buildDepositForXdr } = await import('./agent-vault-client.js');
+    const xdr = await buildDepositForXdr(funder_address, recipient_address, amount);
+    if (!xdr) return res.status(503).json({ error: 'AgentVault contract not configured' });
+    res.json({ xdr });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/vault/withdraw-xdr — build unsigned withdraw XDR
 app.post('/api/vault/withdraw-xdr', async (req, res) => {
   const { user_address, amount } = req.body as { user_address?: string; amount?: number };

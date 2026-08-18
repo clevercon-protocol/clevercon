@@ -36,6 +36,21 @@ export async function buildDepositXdr(userAddress: string, amount: number): Prom
   return data.xdr;
 }
 
+export async function buildDepositForXdr(
+  funderAddress: string,
+  recipientAddress: string,
+  amount: number,
+): Promise<string> {
+  const res = await fetch(`${BASE}/api/vault/deposit-for-xdr`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ funder_address: funderAddress, recipient_address: recipientAddress, amount }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? 'Failed to build deposit_for XDR');
+  return data.xdr;
+}
+
 export async function buildWithdrawXdr(userAddress: string, amount: number): Promise<string> {
   const res = await fetch(`${BASE}/api/vault/withdraw-xdr`, {
     method: 'POST',
