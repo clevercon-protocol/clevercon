@@ -41,11 +41,11 @@ if (!CONTRACT_ACTIVE) {
 // ── Soroban helpers ───────────────────────────────────────────────────────────
 
 function usdcToStroops(usdc: number): bigint {
-  return BigInt(Math.round(usdc * 10_000_000));
+  return BigInt(Math.round(usdc * Number(STROOPS_PER_USDC)));
 }
 
 function stroopsToUsdc(stroops: bigint): number {
-  return Number(stroops) / 10_000_000;
+  return Number(stroops) / Number(STROOPS_PER_USDC);
 }
 
 async function invokeContract(method: string, args: any[]): Promise<any> {

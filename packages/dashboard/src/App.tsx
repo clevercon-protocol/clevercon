@@ -20,6 +20,7 @@ import { TaskHistory } from './components/TaskHistory';
 import { BotDetailsModal } from './components/BotDetailsModal';
 import { QueueReviewModal, type QueueConfirmItem } from './components/QueueReviewModal';
 import { ToastContainer } from './components/Toast';
+import ServiceHealth from './components/ServiceHealth';
 import { WalletProvider, useWallet } from './contexts/WalletProvider';
 import { OrchestratorProvider, useOrchestrator } from './contexts/OrchestratorProvider';
 import { ToastProvider, useToast } from './contexts/ToastContext';
@@ -330,7 +331,7 @@ function Dashboard() {
               <span className="text-purple-600 text-xs">USDC</span>
             </button>
           )}
-
+	  <ServiceHealth />	
           <div className="flex-1" />
 
           {/* Nav */}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Layers, Wallet, Shield, Zap, Globe, ExternalLink, ChevronRight, Download } from 'lucide-react';
+import { Layers, Wallet, Shield, Zap, Globe, ChevronRight, Download } from 'lucide-react';
 import { useWallet, type ISupportedWallet } from '../contexts/WalletProvider';
 
 function WalletCard({

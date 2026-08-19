@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Refocused the docs on what CleverCon does: delegate a budget to AI agents on
+  Stellar, with funds held in a non-custodial vault that enforces the limit.
+  Rewrote `README.md`, `docs/architecture.md`, and `ROADMAP.md`.
+
 ### Added
 
+- Roadmap for private spending policies: a spending rule the user sets and the
+  vault enforces on-chain without revealing it, building on the zero-knowledge
+  engine at [CipherMit](https://github.com/Bosun-Josh121/ciphermit).
 - `LICENSE` (MIT), `CONTRIBUTING.md`, `SECURITY.md`, `ROADMAP.md`, and this
   changelog.
 - `docs/architecture.md` and `docs/development.md`.

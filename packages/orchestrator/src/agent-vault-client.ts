@@ -37,10 +37,6 @@ function usdcToStroops(usdc: number): bigint {
   return BigInt(Math.round(usdc * STROOPS_PER_USDC));
 }
 
-function stroopsToUsdc(stroops: bigint): number {
-  return Number(stroops) / STROOPS_PER_USDC;
-}
-
 function rpc() {
   return new SorobanRpc.Server(RPC_URL, { allowHttp: false });
 }

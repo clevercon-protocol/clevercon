@@ -4,6 +4,7 @@ import cors from 'cors';
 import { loadAgents, findAgent, upsertAgent, removeAgent } from './store.js';
 import { updateReputation } from './reputation.js';
 import { matchCapabilities } from './search.js';
+import { validateRegistration } from './validate.js';
 import { logger } from '@clevercon/common';
 import type { AgentManifest, AgentFeedback, AgentRecord } from '@clevercon/common';
 
@@ -17,11 +18,10 @@ app.use(express.json());
 app.post('/register', (req, res) => {
   const body = req.body as Partial<AgentManifest> & { registered_by?: string };
 
-  // Validate required fields
+  // Validate required top-level fields are present
   const required = [
     'agent_id',
     'name',
-    'description',
     'capabilities',
     'pricing',
     'endpoint',
@@ -30,7 +30,18 @@ app.post('/register', (req, res) => {
   ];
   const missing = required.filter((f) => !(f in body));
   if (missing.length > 0) {
-    return res.status(400).json({ error: `Missing fields: ${missing.join(', ')}` });
+    return res
+      .status(400)
+      .json({ error: `Missing fields: ${missing.join(', ')}`, fields: missing });
+  }
+
+  // Validate field values
+  const invalidFields = validateRegistration(body as Record<string, unknown>);
+  if (invalidFields.length > 0) {
+    return res.status(400).json({
+      error: `Invalid field values: ${invalidFields.join(', ')}`,
+      fields: invalidFields,
+    });
   }
 
   const now = new Date().toISOString();
@@ -59,12 +70,13 @@ app.post('/register', (req, res) => {
   return res.json(record);
 });
 
-// GET /agents — discover agents with optional filters
+// GET /agents — discover agents with optional filters and pagination
 app.get('/agents', (req, res) => {
   let agents = loadAgents();
 
-  const { capabilities, min_reputation, payment_model, status } = req.query;
+  const { capabilities, min_reputation, payment_model, status, limit, offset } = req.query;
 
+  // Apply filters
   if (capabilities) {
     const caps = (capabilities as string).split(',').map((c) => c.trim());
     agents = matchCapabilities(agents, caps);
@@ -83,6 +95,42 @@ app.get('/agents', (req, res) => {
     agents = agents.filter((a) => a.status === status);
   }
 
+  // Order by reputation (highest first) for stable pagination
+  agents.sort((a, b) => b.reputation.score - a.reputation.score);
+
+  const total = agents.length;
+
+  // Check if pagination is requested
+  const hasPagination = limit !== undefined || offset !== undefined;
+
+  if (hasPagination) {
+    // Parse and clamp limit (default: 20, max: 100, min: 1)
+    const DEFAULT_LIMIT = 20;
+    const MAX_LIMIT = 100;
+    const parsedLimit = limit ? parseInt(limit as string, 10) : DEFAULT_LIMIT;
+    // Use default only for NaN or absent, clamp numeric zero to 1
+    const clampedLimit = Math.max(
+      1,
+      Math.min(MAX_LIMIT, Number.isNaN(parsedLimit) ? DEFAULT_LIMIT : parsedLimit),
+    );
+
+    // Parse and clamp offset (default: 0, min: 0)
+    // Guard against non-numeric values (e.g. "abc") that would produce NaN
+    const parsedOffset = offset ? parseInt(offset as string, 10) || 0 : 0;
+    const clampedOffset = Math.max(0, parsedOffset);
+
+    // Apply pagination
+    const paginatedAgents = agents.slice(clampedOffset, clampedOffset + clampedLimit);
+
+    return res.json({
+      agents: paginatedAgents,
+      total,
+      limit: clampedLimit,
+      offset: clampedOffset,
+    });
+  }
+
+  // Backward compatibility: return bare array when no pagination params
   return res.json(agents);
 });
 
@@ -207,6 +255,12 @@ app.get('/.well-known/x402', (_req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  logger.info(`Service Registry running on http://localhost:${PORT}`);
-});
+// Export app for integration tests (supertest imports this without calling listen)
+export { app };
+
+// Only bind the port when this module is the entry-point, not during tests
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    logger.info(`Service Registry running on http://localhost:${PORT}`);
+  });
+}

@@ -1,10 +1,13 @@
 /**
  * Vault Ledger — persists per-user vault transactions.
  * Tracks deposits, withdrawals, and agent payments with real amounts and tx hashes.
+ *
+ * Uses atomic rename writes to prevent corruption on process crash.
  */
 
 import fs from 'fs';
 import path from 'path';
+import { writeJsonSafe } from '@clevercon/common';
 
 const __dirname = path.dirname(path.resolve(process.argv[1]));
 const DATA_DIR = path.join(__dirname, '..', '..', '..', 'data');
@@ -40,9 +43,8 @@ function load(): Ledger {
 }
 
 function save(ledger: Ledger): void {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
   const trimmed = ledger.slice(-2000);
-  fs.writeFileSync(LEDGER_PATH, JSON.stringify(trimmed, null, 2), 'utf8');
+  writeJsonSafe(LEDGER_PATH, trimmed);
   cache = trimmed;
 }
 

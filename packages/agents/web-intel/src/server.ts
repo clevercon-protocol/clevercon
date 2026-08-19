@@ -78,7 +78,7 @@ app.use(
 // ── Paid endpoint ─────────────────────────────────────────────────
 app.post('/query', async (req, res) => {
   try {
-    const { query = '', context = '' } = req.body;
+    const { query = '' } = req.body;
     const q = query.toLowerCase();
 
     // Determine which news categories to fetch

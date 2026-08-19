@@ -2,10 +2,13 @@
  * Activity store — persists per-user orchestrator activity in data/activity-log.json.
  *
  * Events are appended in order. The API returns the most recent N for a user.
+ *
+ * Uses atomic rename writes to prevent corruption on process crash.
  */
 
 import fs from 'fs';
 import path from 'path';
+import { writeJsonSafe } from '@clevercon/common';
 
 const __dirname = path.dirname(path.resolve(process.argv[1]));
 const DATA_DIR = path.join(__dirname, '..', '..', '..', 'data');
@@ -51,10 +54,9 @@ function load(): Log {
 }
 
 function save(log: Log): void {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
   // Keep at most 1000 entries globally
   const trimmed = log.slice(-1000);
-  fs.writeFileSync(LOG_PATH, JSON.stringify(trimmed, null, 2), 'utf8');
+  writeJsonSafe(LOG_PATH, trimmed);
   cache = trimmed;
 }
 

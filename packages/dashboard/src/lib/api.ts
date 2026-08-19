@@ -155,3 +155,39 @@ export async function forceCompleteVaultTask(userAddress: string, vaultTaskId: n
   if (!res.ok) throw new Error(data.error ?? 'Force complete failed');
   return data;
 }
+
+
+// Service health checks (ServiceHealth component). Timeout/cancellation is
+// the caller's responsibility via the supplied AbortSignal, so this file
+// doesn't own polling policy.
+export interface AgentRecord {
+  agent_id?: string;
+  name?: string;
+  status?: string;
+}
+
+export async function fetchOrchestratorHealth(signal: AbortSignal): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/health`, { signal });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchRegistryHealth(
+  signal: AbortSignal,
+): Promise<{ ok: boolean; agents: AgentRecord[] }> {
+  try {
+    const res = await fetch(`${BASE}/api/agents`, { signal });
+    if (!res.ok) return { ok: false, agents: [] };
+    const data: unknown = await res.json();
+    const rawAgents = (data as { agents?: unknown })?.agents;
+    const agents: AgentRecord[] = Array.isArray(rawAgents)
+      ? rawAgents.filter((a): a is AgentRecord => a !== null && typeof a === 'object')
+      : [];
+    return { ok: true, agents };
+  } catch {
+    return { ok: false, agents: [] };
+  }
+}
