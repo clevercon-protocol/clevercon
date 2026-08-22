@@ -129,6 +129,33 @@ pub struct DisputeResolvedEvent {
     pub payout_to_orchestrator: i128,
 }
 
+#[contractevent]
+pub struct FeeSetEvent {
+    #[topic]
+    pub admin: Address,
+    pub bps: u32,
+    pub recipient: Option<Address>,
+}
+
+#[contractevent]
+pub struct FeeAccruedEvent {
+    #[topic]
+    pub asset: Address,
+    #[topic]
+    pub recipient: Address,
+    pub fee_amount: i128,
+    pub task_id: u64,
+}
+
+#[contractevent]
+pub struct FeeClaimedEvent {
+    #[topic]
+    pub asset: Address,
+    #[topic]
+    pub recipient: Address,
+    pub amount: i128,
+}
+
 #[contracterror]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum VaultError {
@@ -157,6 +184,8 @@ pub enum VaultError {
     TaskNotDisputed = 23,
     ReleaseConflict = 24,
     TooManyStepReleases = 25,
+    FeeBpsExceedsCap = 26,
+    NoFeesAccrued = 27,
 }
 
 // Storage keys
@@ -196,6 +225,10 @@ pub enum DataKey {
     TaskStepRelease(u64, u64),
     /// Enumerable list of released step IDs for cleanup on task finalization.
     TaskStepIds(u64),
+    /// Protocol fee configuration: basis points and recipient address.
+    FeeConfig,
+    /// Per-asset accrued (but unclaimed) protocol fees: asset → i128.
+    AccruedFees(Address),
 }
 
 // Data structs
@@ -294,10 +327,29 @@ pub enum TaskStatus {
     Completed,
 }
 
+/// Protocol fee configuration stored in instance storage.
+///
+/// `bps` is the fee in basis points (1 bps = 0.01%). The hard cap is 1000
+/// (10%). A zero `bps` or absent `recipient` disables fee collection and
+/// behaves identically to the no-fee path, so the zero-fee invariant is
+/// regression-safe.
+#[contracttype]
+#[derive(Clone)]
+pub struct FeeConfig {
+    /// Fee in basis points. Must be <= `MAX_FEE_BPS`. Zero disables fees.
+    pub bps: u32,
+    /// Address that accrues and can claim the collected fees.
+    /// `None` disables fee collection even if `bps > 0`.
+    pub recipient: Option<Address>,
+}
+
 // Constants
 
 /// Tasks older than this that haven't completed can be force-finalized by anyone.
 const STALE_TASK_THRESHOLD_SECONDS: u64 = 1800; // 30 minutes
+
+/// Hard cap on the configurable protocol fee: 1000 bps = 10%.
+const MAX_FEE_BPS: u32 = 1000;
 
 /// Default cap on concurrent active tasks per user. Normal usage — even an
 /// orchestrator juggling several in-flight plans for one user — sits well
@@ -855,7 +907,46 @@ impl AgentVault {
 
         Self::extend_instance_ttl(&env);
         let token_client = token::Client::new(&env, &asset);
-        token_client.transfer(&env.current_contract_address(), &orchestrator, &amount);
+
+        // ── Protocol fee deduction ──────────────────────────────────────
+        // Fee rounds DOWN (integer division), so the orchestrator always
+        // receives the remainder. No unit of USDC is created or lost:
+        //   orchestrator_payout + fee == amount (exactly).
+        // A zero bps or absent recipient skips the fee path entirely,
+        // making the zero-fee code path byte-for-byte equivalent to the
+        // previous behavior.
+        let fee = Self::compute_fee(&env, amount);
+        let orchestrator_payout = amount.checked_sub(fee).expect("fee arithmetic underflow");
+
+        token_client.transfer(
+            &env.current_contract_address(),
+            &orchestrator,
+            &orchestrator_payout,
+        );
+
+        // Accrue the fee (if any) to the configured recipient's claimable balance.
+        if fee > 0 {
+            if let Some(fee_config) = env
+                .storage()
+                .instance()
+                .get::<_, FeeConfig>(&DataKey::FeeConfig)
+            {
+                if let Some(ref recipient) = fee_config.recipient {
+                    let fee_key = DataKey::AccruedFees(asset.clone());
+                    let current: i128 = env.storage().instance().get(&fee_key).unwrap_or(0i128);
+                    let new_accrued = current.checked_add(fee).expect("fee accrual overflow");
+                    env.storage().instance().set(&fee_key, &new_accrued);
+
+                    FeeAccruedEvent {
+                        asset: asset.clone(),
+                        recipient: recipient.clone(),
+                        fee_amount: fee,
+                        task_id,
+                    }
+                    .publish(&env);
+                }
+            }
+        }
 
         task.spent += amount;
         env.storage().persistent().set(&task_key, &task);
@@ -871,10 +962,12 @@ impl AgentVault {
         .publish(&env);
         log!(
             &env,
-            "release_payment task={} asset={} amount={} total_spent={}",
+            "release_payment task={} asset={} amount={} fee={} orchestrator_payout={} total_spent={}",
             task_id,
             asset,
             amount,
+            fee,
+            orchestrator_payout,
             task.spent
         );
 
@@ -1080,6 +1173,155 @@ impl AgentVault {
             payout_to_orchestrator
         );
         Ok(())
+    }
+
+    // ── Protocol Fee Management ──────────────────────────────────────────
+
+    /// Admin sets the protocol fee in basis points and the recipient address.
+    ///
+    /// - `bps` must be <= `MAX_FEE_BPS` (1000 = 10%).
+    /// - Setting `bps` to 0 **or** passing `recipient = None` effectively
+    ///   disables fee collection; `release_payment` behaves as if no fee
+    ///   config exists.
+    /// - Changing the fee does NOT retroactively alter already-released
+    ///   amounts; only future `release_payment` calls use the new rate.
+    pub fn set_fee(
+        env: Env,
+        admin: Address,
+        bps: u32,
+        recipient: Option<Address>,
+    ) -> Result<(), VaultError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
+        if bps > MAX_FEE_BPS {
+            return Err(VaultError::FeeBpsExceedsCap);
+        }
+
+        let config = FeeConfig {
+            bps,
+            recipient: recipient.clone(),
+        };
+        env.storage().instance().set(&DataKey::FeeConfig, &config);
+        Self::extend_instance_ttl(&env);
+
+        FeeSetEvent {
+            admin: admin.clone(),
+            bps,
+            recipient,
+        }
+        .publish(&env);
+        log!(&env, "set_fee bps={}", bps);
+        Ok(())
+    }
+
+    /// Returns the current fee config `(bps, recipient)`.
+    /// Returns `(0, None)` when no fee has ever been configured.
+    pub fn get_fee(env: Env) -> (u32, Option<Address>) {
+        Self::extend_instance_ttl(&env);
+        match env
+            .storage()
+            .instance()
+            .get::<_, FeeConfig>(&DataKey::FeeConfig)
+        {
+            Some(c) => (c.bps, c.recipient),
+            None => (0, None),
+        }
+    }
+
+    /// Returns the amount of fees accrued (but not yet claimed) for `asset`.
+    pub fn get_accrued_fees(env: Env, asset: Address) -> i128 {
+        Self::extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get::<_, i128>(&DataKey::AccruedFees(asset))
+            .unwrap_or(0)
+    }
+
+    /// Transfers all accrued fees for `asset` to the configured fee recipient.
+    ///
+    /// Only the configured recipient may call this. Fails with
+    /// `NoFeesAccrued` if there is nothing to claim (prevents a no-op
+    /// transfer). Zeroes the accrual after the transfer.
+    pub fn claim_fees(env: Env, recipient: Address, asset: Address) -> Result<i128, VaultError> {
+        recipient.require_auth();
+        Self::require_not_paused(&env)?;
+
+        // Verify the caller is the configured recipient.
+        let fee_config: FeeConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeConfig)
+            .ok_or(VaultError::Unauthorized)?;
+        match &fee_config.recipient {
+            None => return Err(VaultError::Unauthorized),
+            Some(r) if *r != recipient => return Err(VaultError::Unauthorized),
+            Some(_) => {}
+        }
+
+        let fee_key = DataKey::AccruedFees(asset.clone());
+        let accrued: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
+
+        if accrued == 0 {
+            return Err(VaultError::NoFeesAccrued);
+        }
+
+        // Zero the accrual before the transfer (checks-effects-interactions).
+        env.storage().instance().set(&fee_key, &0i128);
+        Self::extend_instance_ttl(&env);
+
+        let token_client = token::Client::new(&env, &asset);
+        token_client.transfer(&env.current_contract_address(), &recipient, &accrued);
+
+        FeeClaimedEvent {
+            asset: asset.clone(),
+            recipient: recipient.clone(),
+            amount: accrued,
+        }
+        .publish(&env);
+        log!(
+            &env,
+            "claim_fees asset={} recipient={} amount={}",
+            asset,
+            recipient,
+            accrued
+        );
+        Ok(accrued)
+    }
+
+    /// Computes the fee to deduct from `amount` based on the current fee
+    /// config. Returns 0 when no fee is configured or the recipient is absent.
+    ///
+    /// Rounding rule: **round down** (integer division). The orchestrator
+    /// always receives the remainder, so no unit of USDC is created or lost.
+    /// Checked arithmetic is used throughout; overflow would require an
+    /// `amount` close to `i128::MAX` which is unreachable in practice but
+    /// is defended explicitly.
+    fn compute_fee(env: &Env, amount: i128) -> i128 {
+        let config = match env
+            .storage()
+            .instance()
+            .get::<_, FeeConfig>(&DataKey::FeeConfig)
+        {
+            Some(c) => c,
+            None => return 0,
+        };
+        // Zero bps or absent recipient → no fee.
+        if config.bps == 0 || config.recipient.is_none() {
+            return 0;
+        }
+        // fee = floor(amount * bps / 10_000)
+        // Use checked multiplication to guard against absurdly large amounts.
+        let numerator = amount
+            .checked_mul(i128::from(config.bps))
+            .expect("fee numerator overflow");
+        numerator / 10_000
     }
 
     /// Uses the live threshold so status queries and force completion cannot drift.

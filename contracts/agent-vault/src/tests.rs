@@ -3452,3 +3452,399 @@ fn test_dispute_resolution_does_not_claw_back_spent() {
     assert_eq!(account.balance, 200); // 500 - plan_cost(300)
     assert_eq!(account.total_spent, 200); // only the released amount is spending
 }
+
+// ── Protocol Fee Tests ────────────────────────────────────────────────────────
+
+// Helper: set up a full task scenario with a funded user+orchestrator ready to
+// call release_payment. Returns (user, orchestrator, task_id).
+fn setup_fee_task(test_env: &TestEnv, plan_cost: i128) -> (Address, Address, u64) {
+    let user = Address::generate(&test_env.env);
+    let orchestrator = Address::generate(&test_env.env);
+    test_env.token_admin_client.mint(&user, &plan_cost);
+    test_env
+        .client
+        .deposit(&user, &test_env.usdc_sac, &plan_cost);
+    test_env.client.register_orchestrator(
+        &user,
+        &orchestrator,
+        &soroban_sdk::String::from_str(&test_env.env, "fee-orchestrator"),
+    );
+    let task_id = test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &plan_cost);
+    (user, orchestrator, task_id)
+}
+
+// 18a. set_fee — basic read-back
+
+#[test]
+fn test_set_fee_and_get_fee() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let recipient = Address::generate(&test_env.env);
+    test_env
+        .client
+        .set_fee(&test_env.admin, &50, &Some(recipient.clone()));
+
+    let (bps, rec) = test_env.client.get_fee();
+    assert_eq!(bps, 50);
+    assert_eq!(rec, Some(recipient));
+}
+
+// 18b. set_fee — default is zero / None
+
+#[test]
+fn test_get_fee_default() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let (bps, rec) = test_env.client.get_fee();
+    assert_eq!(bps, 0);
+    assert_eq!(rec, None);
+}
+
+// 18c. set_fee — exceeds cap is rejected
+
+#[test]
+fn test_set_fee_exceeds_cap() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let result = test_env.client.try_set_fee(&test_env.admin, &1001, &None);
+    assert!(result == Err(Ok(VaultError::FeeBpsExceedsCap)));
+}
+
+// 18d. set_fee — exact cap (1000 bps) is accepted
+
+#[test]
+fn test_set_fee_at_cap() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let recipient = Address::generate(&test_env.env);
+    test_env
+        .client
+        .set_fee(&test_env.admin, &1000, &Some(recipient.clone()));
+    let (bps, _) = test_env.client.get_fee();
+    assert_eq!(bps, 1000);
+}
+
+// 18e. set_fee — non-admin is rejected
+
+#[test]
+fn test_set_fee_unauthorized() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let attacker = Address::generate(&test_env.env);
+    let result = test_env.client.try_set_fee(&attacker, &50, &None);
+    assert!(result == Err(Ok(VaultError::Unauthorized)));
+}
+
+// 18f. release_payment with fee — correct split and accrual
+
+#[test]
+fn test_release_payment_fee_accrual() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let recipient = Address::generate(&test_env.env);
+    // 100 bps = 1%
+    test_env
+        .client
+        .set_fee(&test_env.admin, &100, &Some(recipient.clone()));
+
+    let (_, orchestrator, task_id) = setup_fee_task(&test_env, 10_000);
+    // release 1000; fee = floor(1000 * 100 / 10_000) = 10
+    test_env
+        .client
+        .release_payment(&orchestrator, &task_id, &1, &test_env.usdc_sac, &1000);
+
+    // Orchestrator receives 990
+    assert_eq!(test_env.token_client.balance(&orchestrator), 990);
+    // 10 stays in contract, accrued for recipient
+    assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 10);
+}
+
+// 18g. claim_fees — transfers accrued fees and zeroes the balance
+
+#[test]
+fn test_claim_fees() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let recipient = Address::generate(&test_env.env);
+    test_env
+        .client
+        .set_fee(&test_env.admin, &200, &Some(recipient.clone())); // 2%
+
+    let (_, orchestrator, task_id) = setup_fee_task(&test_env, 5_000);
+    // fee = floor(5000 * 200 / 10_000) = 100
+    test_env
+        .client
+        .release_payment(&orchestrator, &task_id, &1, &test_env.usdc_sac, &5_000);
+
+    assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 100);
+
+    let claimed = test_env.client.claim_fees(&recipient, &test_env.usdc_sac);
+    assert_eq!(claimed, 100);
+    assert_eq!(test_env.token_client.balance(&recipient), 100);
+    // Accrual zeroed after claim
+    assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 0);
+}
+
+// 18h. claim_fees — no-op when nothing accrued returns NoFeesAccrued
+
+#[test]
+fn test_claim_fees_nothing_accrued() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let recipient = Address::generate(&test_env.env);
+    test_env
+        .client
+        .set_fee(&test_env.admin, &100, &Some(recipient.clone()));
+
+    let result = test_env
+        .client
+        .try_claim_fees(&recipient, &test_env.usdc_sac);
+    assert!(result == Err(Ok(VaultError::NoFeesAccrued)));
+}
+
+// 18i. claim_fees — wrong caller is rejected
+
+#[test]
+fn test_claim_fees_wrong_caller() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let recipient = Address::generate(&test_env.env);
+    let attacker = Address::generate(&test_env.env);
+    test_env
+        .client
+        .set_fee(&test_env.admin, &100, &Some(recipient.clone()));
+
+    let (_, orchestrator, task_id) = setup_fee_task(&test_env, 1_000);
+    test_env
+        .client
+        .release_payment(&orchestrator, &task_id, &1, &test_env.usdc_sac, &1_000);
+
+    let result = test_env
+        .client
+        .try_claim_fees(&attacker, &test_env.usdc_sac);
+    assert!(result == Err(Ok(VaultError::Unauthorized)));
+}
+
+// 18j. Zero-fee path — zero bps behaves exactly like no fee configured
+//      (orchestrator receives full amount, no accrual)
+
+#[test]
+fn test_zero_fee_no_deduction() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let recipient = Address::generate(&test_env.env);
+    // Explicitly set 0 bps
+    test_env
+        .client
+        .set_fee(&test_env.admin, &0, &Some(recipient.clone()));
+
+    let (_, orchestrator, task_id) = setup_fee_task(&test_env, 1_000);
+    test_env
+        .client
+        .release_payment(&orchestrator, &task_id, &1, &test_env.usdc_sac, &1_000);
+
+    // Orchestrator receives full amount; nothing accrued
+    assert_eq!(test_env.token_client.balance(&orchestrator), 1_000);
+    assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 0);
+}
+
+// 18k. Zero-fee path — fee set but recipient is None
+
+#[test]
+fn test_fee_no_recipient_no_deduction() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    // bps set but no recipient
+    test_env.client.set_fee(&test_env.admin, &500, &None);
+
+    let (_, orchestrator, task_id) = setup_fee_task(&test_env, 1_000);
+    test_env
+        .client
+        .release_payment(&orchestrator, &task_id, &1, &test_env.usdc_sac, &1_000);
+
+    assert_eq!(test_env.token_client.balance(&orchestrator), 1_000);
+    assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 0);
+}
+
+// 18l. Dust: amount so small fee rounds to 0 — orchestrator gets full amount
+
+#[test]
+fn test_fee_dust_rounds_to_zero() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let recipient = Address::generate(&test_env.env);
+    // 1 bps = 0.01%; on amount=9 the fee = floor(9*1/10_000) = 0
+    test_env
+        .client
+        .set_fee(&test_env.admin, &1, &Some(recipient.clone()));
+
+    let (_, orchestrator, task_id) = setup_fee_task(&test_env, 9);
+    test_env
+        .client
+        .release_payment(&orchestrator, &task_id, &1, &test_env.usdc_sac, &9);
+
+    assert_eq!(test_env.token_client.balance(&orchestrator), 9);
+    assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 0);
+}
+
+// 18m. Recipient equals orchestrator — allowed by spec
+
+#[test]
+fn test_fee_recipient_is_orchestrator() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let (_, orchestrator, task_id) = setup_fee_task(&test_env, 10_000);
+    // Set recipient = orchestrator after task creation (fee config doesn't affect tasks retroactively)
+    test_env
+        .client
+        .set_fee(&test_env.admin, &100, &Some(orchestrator.clone())); // 1%
+
+    test_env
+        .client
+        .release_payment(&orchestrator, &task_id, &1, &test_env.usdc_sac, &10_000);
+
+    // Orchestrator payout = 9900, fee accrued = 100
+    assert_eq!(test_env.token_client.balance(&orchestrator), 9_900);
+    assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 100);
+}
+
+// 18n. Cumulative accrual across multiple releases
+
+#[test]
+fn test_fee_cumulative_accrual() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let recipient = Address::generate(&test_env.env);
+    // 200 bps = 2%
+    test_env
+        .client
+        .set_fee(&test_env.admin, &200, &Some(recipient.clone()));
+
+    let (_, orchestrator, task_id) = setup_fee_task(&test_env, 3_000);
+    // Three releases of 1000 each: fee per release = 20; total = 60
+    for step_id in 1u64..=3 {
+        test_env.client.release_payment(
+            &orchestrator,
+            &task_id,
+            &step_id,
+            &test_env.usdc_sac,
+            &1_000,
+        );
+    }
+
+    assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 60);
+    // Orchestrator received 980 × 3 = 2940
+    assert_eq!(test_env.token_client.balance(&orchestrator), 2_940);
+}
+
+// 18o. Invariant: sum(orchestrator payouts) + sum(fees) + refund == plan_cost
+//      Randomised-style invariant over 5 partial releases + completion.
+
+#[test]
+fn test_fee_accounting_invariant() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let recipient = Address::generate(&test_env.env);
+    let bps: i128 = 150; // 1.5%
+    test_env
+        .client
+        .set_fee(&test_env.admin, &(bps as u32), &Some(recipient.clone()));
+
+    let plan_cost: i128 = 10_000;
+    let (user, orchestrator, task_id) = setup_fee_task(&test_env, plan_cost);
+    let contract_before = test_env.token_client.balance(&test_env.contract_id);
+
+    // Partial release sequence: 1000, 2000, 1500, 2500, 1000 = 8000 total released
+    let releases: [i128; 5] = [1_000, 2_000, 1_500, 2_500, 1_000];
+    let mut total_released = 0i128;
+    let mut expected_fees = 0i128;
+    for (step_id, &r) in releases.iter().enumerate() {
+        test_env.client.release_payment(
+            &orchestrator,
+            &task_id,
+            &((step_id + 1) as u64),
+            &test_env.usdc_sac,
+            &r,
+        );
+        let fee = r * bps / 10_000;
+        expected_fees += fee;
+        total_released += r;
+    }
+
+    test_env.client.complete_task(&orchestrator, &task_id);
+
+    let refund = plan_cost - total_released;
+    let orchestrator_balance = test_env.token_client.balance(&orchestrator);
+    let accrued = test_env.client.get_accrued_fees(&test_env.usdc_sac);
+    let contract_after = test_env.token_client.balance(&test_env.contract_id);
+
+    // orchestrator received total_released - total_fees
+    assert_eq!(orchestrator_balance, total_released - expected_fees);
+    // fees accrued match our expected sum
+    assert_eq!(accrued, expected_fees);
+    // contract balance decreased by exactly total_released - fees (fees stay in contract)
+    assert_eq!(
+        contract_before - contract_after,
+        total_released - expected_fees
+    );
+    // The full invariant: payout + fees + refund == plan_cost
+    assert_eq!(orchestrator_balance + accrued + refund, plan_cost);
+
+    // Verify user got refund back into available balance
+    let account = test_env
+        .client
+        .get_account(&user, &test_env.usdc_sac)
+        .unwrap();
+    assert_eq!(account.balance, plan_cost - total_released);
+}
+
+// 18p. Fee config change does NOT affect already-released amounts
+//      (i.e., changing bps mid-task only affects future release_payment calls)
+
+#[test]
+fn test_fee_change_not_retroactive() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+
+    let recipient = Address::generate(&test_env.env);
+    test_env
+        .client
+        .set_fee(&test_env.admin, &0, &Some(recipient.clone()));
+
+    let (_, orchestrator, task_id) = setup_fee_task(&test_env, 2_000);
+    // First release at 0 bps — no fee
+    test_env
+        .client
+        .release_payment(&orchestrator, &task_id, &1, &test_env.usdc_sac, &1_000);
+    assert_eq!(test_env.token_client.balance(&orchestrator), 1_000);
+
+    // Change fee to 10% mid-task
+    test_env
+        .client
+        .set_fee(&test_env.admin, &1000, &Some(recipient.clone()));
+
+    // Second release at 10% — fee = 100
+    test_env
+        .client
+        .release_payment(&orchestrator, &task_id, &2, &test_env.usdc_sac, &1_000);
+    // Total orchestrator: 1000 (full, no fee) + 900 (after 10% fee) = 1900
+    assert_eq!(test_env.token_client.balance(&orchestrator), 1_900);
+    assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 100);
+}
