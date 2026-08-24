@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { SettlementLedger } from '../settlement-ledger';
+import { SettlementLedger } from '../settlement-ledger.js';
 
 describe('Exactly-Once Settlement & Reconciliation', () => {
   beforeEach(() => {
@@ -32,8 +32,8 @@ describe('Exactly-Once Settlement & Reconciliation', () => {
   });
 
   it('detects discrepancies in step-level reconciliation', () => {
-    const agentPaidTotal = 500;
-    const vaultReleasedTotal = 450; // Deliberate mismatch
+    const agentPaidTotal: number = 500;
+    const vaultReleasedTotal: number = 450; // Deliberate mismatch
 
     const hasMismatch = agentPaidTotal !== vaultReleasedTotal;
     expect(hasMismatch).toBe(true);
