@@ -38,7 +38,7 @@ import { accountExplorerUrl } from '@clevercon/common';
 import { checkFeasibility } from './capability-check.js';
 import { createPlan } from './planner.js';
 import { validatePlan } from './validator.js';
-import { PlanExecutor } from './executor.js';
+import { PlanExecutor, recoverUnfinishedTasks } from './executor.js';
 import { scoreAgents } from './selector.js';
 import {
   createTask as vaultCreateTask,
@@ -862,6 +862,17 @@ app.delete('/api/tasks/history/:task_id', (req, res) => {
   res.json({ success: true });
 });
 
+// POST /api/tasks/recover — recover and resume unfinished tasks after crash/restart
+app.post('/api/tasks/recover', async (_req, res) => {
+  try {
+    const agents = await fetchAgents();
+    const result = await recoverUnfinishedTasks(agents, REGISTRY_URL, keypair);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Preview a task — feasibility + plan only, no vault/execution. Used by QueueReviewModal.
 app.post('/api/tasks/preview', async (req, res) => {
   const { task, prompt, budget } = req.body as {
@@ -1498,6 +1509,18 @@ if (!process.env.VITEST) {
     console.log(`[Orchestrator] Plan approval timeout: ${APPROVAL_TIMEOUT_MS / 1000}s`);
 
     // Ensure the shared orchestrator wallet is funded and has a USDC trustline
-    setupSharedWallet(keypair).catch(() => {});
+    setupSharedWallet(keypair)
+      .then(async () => {
+        // Startup recovery: resume any in-flight / unfinished tasks from previous crash
+        try {
+          const agents = await fetchAgents().catch(() => []);
+          if (agents.length > 0) {
+            await recoverUnfinishedTasks(agents, REGISTRY_URL, keypair);
+          }
+        } catch (err: any) {
+          console.warn(`[Orchestrator] Startup recovery warning: ${err.message}`);
+        }
+      })
+      .catch(() => {});
   });
 }

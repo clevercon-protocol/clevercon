@@ -443,3 +443,42 @@ export async function getAccount(userAddress: string): Promise<VaultAccount | nu
     active_tasks_count: Number(raw.active_tasks_count),
   };
 }
+
+/** On-chain task state returned by get_task on AgentVault contract. */
+export interface OnChainTaskInfo {
+  user: string;
+  orchestrator: string;
+  asset: string;
+  plan_cost: number; // in USDC
+  spent: number; // in USDC
+  completed: boolean;
+  disputed: boolean;
+  created_at: number;
+}
+
+/**
+ * Fetch on-chain task information.
+ * Returns null if the vault is inactive, the task does not exist, or the call fails.
+ */
+export async function getTask(taskId: bigint): Promise<OnChainTaskInfo | null> {
+  if (!VAULT_ACTIVE || !taskId) return null;
+  try {
+    const raw = await callView('get_task', [nativeToScVal(taskId, { type: 'u64' })]);
+    if (!raw) return null;
+    const toUsdc = (v: bigint | number) => Number(v) / STROOPS_PER_USDC;
+    return {
+      user: String(raw.user),
+      orchestrator: String(raw.orchestrator),
+      asset: String(raw.asset),
+      plan_cost: toUsdc(raw.plan_cost),
+      spent: toUsdc(raw.spent),
+      completed: Boolean(raw.completed),
+      disputed: Boolean(raw.disputed),
+      created_at: Number(raw.created_at),
+    };
+  } catch (err: any) {
+    console.warn(`[AgentVault] getTask(${taskId}) view error:`, err?.message);
+    return null;
+  }
+}
+
