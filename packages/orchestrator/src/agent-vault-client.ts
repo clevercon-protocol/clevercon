@@ -1,38 +1,23 @@
 /**
  * AgentVault Soroban contract client (server-side).
  *
- * Mirrors the pattern from budget-contract.ts: simulate → assemble → sign → submit → poll.
+ * Delegates all Soroban interactions to `@clevercon/vault-sdk`, which wraps
+ * every CleverVault entrypoint with typed inputs/outputs, structured errors,
+ * and network config. This file preserves the orchestrator's existing public
+ * API surface so callers (executor.ts, server.ts) require no changes.
  *
  * If AGENT_VAULT_CONTRACT_ID is not set or is a placeholder, functions that
  * require the contract return safe defaults so the system works without it.
  */
 
-import {
-  Keypair,
-  Contract,
-  rpc as SorobanRpc,
-  TransactionBuilder,
-  Networks,
-  BASE_FEE,
-  nativeToScVal,
-  Address,
-  scValToNative,
-  xdr,
-} from '@stellar/stellar-sdk';
-import {
-  errorFromSimulation,
-  errorFromSendResponse,
-  errorFromFailedTransaction,
-  VaultContractError,
-} from './vault-errors.js';
+import { Keypair } from '@stellar/stellar-sdk';
+import { VaultClient, VaultContractError } from '@clevercon/vault-sdk';
 
-export { VaultErrorCode, VaultContractError } from './vault-errors.js';
+export { VaultErrorCode, VaultContractError } from '@clevercon/vault-sdk';
 
 const CONTRACT_ID = process.env.AGENT_VAULT_CONTRACT_ID ?? '';
 const RPC_URL = process.env.STELLAR_RPC_URL || 'https://soroban-testnet.stellar.org';
 const USDC_SAC = process.env.USDC_SAC ?? '';
-const NETWORK_PASSPHRASE = Networks.TESTNET;
-const STROOPS_PER_USDC = 10_000_000;
 
 export const VAULT_ACTIVE = CONTRACT_ID.length > 10 && !CONTRACT_ID.startsWith('C...');
 
@@ -40,217 +25,61 @@ if (!VAULT_ACTIVE) {
   console.warn('[AgentVault] AGENT_VAULT_CONTRACT_ID not set — vault features disabled');
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Singleton SDK client ─────────────────────────────────────────────────────
 
-function usdcToStroops(usdc: number): bigint {
-  return BigInt(Math.round(usdc * STROOPS_PER_USDC));
-}
+const vaultClient = new VaultClient({
+  contractId: CONTRACT_ID,
+  rpcUrl: RPC_URL,
+  network: 'testnet',
+  usdcSac: USDC_SAC,
+});
 
-function usdcSacScVal(): xdr.ScVal {
-  if (!USDC_SAC) {
-    throw new Error('USDC_SAC is required for AgentVault multi-asset calls');
-  }
-  return new Address(USDC_SAC).toScVal();
-}
-
-function rpc() {
-  return new SorobanRpc.Server(RPC_URL, { allowHttp: false });
-}
-
-/**
- * Build + simulate a contract call, returning the assembled (unsigned) XDR.
- * Used for transactions the user must sign in Freighter.
- */
-async function buildUnsignedXdr(
-  sourceAddress: string,
-  method: string,
-  args: xdr.ScVal[],
-): Promise<string> {
-  const server = rpc();
-  const account = await server.getAccount(sourceAddress);
-  const contract = new Contract(CONTRACT_ID);
-
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(contract.call(method, ...args))
-    .setTimeout(300)
-    .build();
-
-  const simulated = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simulated)) {
-    throw errorFromSimulation(simulated);
-  }
-
-  return SorobanRpc.assembleTransaction(tx, simulated).build().toXDR();
-}
-
-/**
- * Sign and submit a transaction using a server-side keypair.
- * Returns tx hash after confirmation.
- */
-async function signAndSubmit(keypair: Keypair, method: string, args: xdr.ScVal[]): Promise<string> {
-  const server = rpc();
-  const account = await server.getAccount(keypair.publicKey());
-  const contract = new Contract(CONTRACT_ID);
-
-  let tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(contract.call(method, ...args))
-    .setTimeout(60)
-    .build();
-
-  const simulated = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simulated)) {
-    throw errorFromSimulation(simulated);
-  }
-
-  tx = SorobanRpc.assembleTransaction(tx, simulated).build();
-  tx.sign(keypair);
-
-  const response = await server.sendTransaction(tx);
-  if (response.status === 'ERROR') {
-    throw errorFromSendResponse(response);
-  }
-
-  return pollForConfirmation(server, response.hash);
-}
-
-async function pollForConfirmation(server: SorobanRpc.Server, hash: string): Promise<string> {
-  for (let i = 0; i < 30; i++) {
-    await new Promise((r) => setTimeout(r, 1000));
-    const result = await server.getTransaction(hash);
-    if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-      return hash;
-    }
-    if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-      throw errorFromFailedTransaction(hash, result);
-    }
-  }
-  throw new Error(`Transaction timed out: ${hash}`);
-}
+const STROOPS_PER_USDC = 10_000_000;
 
 // ── Submit a pre-signed XDR (signed by user in Freighter) ────────────────────
 
 export async function submitSignedXdr(signedXdr: string): Promise<string> {
-  const server = rpc();
-  const tx = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
-  const response = await server.sendTransaction(tx);
-  if (response.status === 'ERROR') {
-    throw errorFromSendResponse(response);
-  }
-  return pollForConfirmation(server, response.hash);
+  return vaultClient.submitSignedXdr(signedXdr);
 }
 
 // ── U3: Orchestrator registration ─────────────────────────────────────────────
 
-/**
- * Build an unsigned register_orchestrator XDR.
- * The user's Freighter wallet signs this so the contract records the mapping.
- * Returns null if the vault contract is not configured.
- */
 export async function buildRegisterOrchestratorXdr(
   userAddress: string,
   orchestratorAddress: string,
   name: string,
 ): Promise<string | null> {
   if (!VAULT_ACTIVE) return null;
-  return buildUnsignedXdr(userAddress, 'register_orchestrator', [
-    new Address(userAddress).toScVal(),
-    new Address(orchestratorAddress).toScVal(),
-    nativeToScVal(name, { type: 'string' }),
-  ]);
+  return vaultClient.buildRegisterOrchestratorXdr(userAddress, orchestratorAddress, name);
 }
 
 // ── U4: Deposit / withdraw XDR builders ──────────────────────────────────────
 
-/**
- * Build an unsigned `deposit` XDR for the user to sign in Freighter.
- * Transfers `amountUsdc` from the user's wallet into their vault balance.
- */
 export async function buildDepositXdr(
   userAddress: string,
   amountUsdc: number,
 ): Promise<string | null> {
   if (!VAULT_ACTIVE) return null;
-  return buildUnsignedXdr(userAddress, 'deposit', [
-    new Address(userAddress).toScVal(),
-    usdcSacScVal(),
-    nativeToScVal(usdcToStroops(amountUsdc), { type: 'i128' }),
-  ]);
+  return vaultClient.buildDepositXdr(userAddress, amountUsdc);
 }
 
-/**
- * Build an unsigned `withdraw` XDR for the user to sign in Freighter.
- * Fails on-chain if `amountUsdc` exceeds the user's available (unlocked) balance.
- */
 export async function buildWithdrawXdr(
   userAddress: string,
   amountUsdc: number,
 ): Promise<string | null> {
   if (!VAULT_ACTIVE) return null;
-  return buildUnsignedXdr(userAddress, 'withdraw', [
-    new Address(userAddress).toScVal(),
-    usdcSacScVal(),
-    nativeToScVal(usdcToStroops(amountUsdc), { type: 'i128' }),
-  ]);
+  return vaultClient.buildWithdrawXdr(userAddress, amountUsdc);
 }
 
 // ── U5: Task lifecycle (signed by orchestrator keypair) ────────────────────────
 
-/**
- * Create a new on-chain task, locking `planCostUsdc` from the user's
- * available balance (the user is resolved on-chain via the orchestrator's
- * registered address). Returns the new `task_id`, or `null` if the vault is
- * inactive or the call fails.
- */
 export async function createTask(
   orchestratorKeypair: Keypair,
   planCostUsdc: number,
 ): Promise<bigint | null> {
   if (!VAULT_ACTIVE) return null;
   try {
-    const server = rpc();
-    const account = await server.getAccount(orchestratorKeypair.publicKey());
-    const contract = new Contract(CONTRACT_ID);
-
-    let tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        contract.call(
-          'create_task',
-          new Address(orchestratorKeypair.publicKey()).toScVal(),
-          usdcSacScVal(),
-          nativeToScVal(usdcToStroops(planCostUsdc), { type: 'i128' }),
-        ),
-      )
-      .setTimeout(60)
-      .build();
-
-    const simulated = await server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(simulated)) {
-      throw errorFromSimulation(simulated);
-    }
-
-    tx = SorobanRpc.assembleTransaction(tx, simulated).build();
-    tx.sign(orchestratorKeypair);
-
-    const response = await server.sendTransaction(tx);
-    if (response.status === 'ERROR') throw errorFromSendResponse(response);
-
-    await pollForConfirmation(server, response.hash);
-
-    // Re-fetch result
-    const result = await server.getTransaction(response.hash);
-    if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS && result.returnValue) {
-      return BigInt(scValToNative(result.returnValue));
-    }
-    return null;
+    return await vaultClient.createTask(orchestratorKeypair, planCostUsdc);
   } catch (err: any) {
     console.error('[AgentVault] createTask error:', err.message);
     return null;
@@ -262,10 +91,7 @@ export async function createTask(
  *
  * Re-throws `VaultContractError` (a genuine contract revert — e.g.
  * `TaskAlreadyCompleted`, `ExceedsPlanCost`) so the caller can branch on
- * `err.code`; its only caller (`executor.ts`) already treats a failed
- * release as fatal to the step either way, so this only sharpens the
- * failure reason, it doesn't change control flow. Non-contract failures
- * (RPC hiccups, etc.) are still swallowed to `null`.
+ * `err.code`. Non-contract failures (RPC hiccups, etc.) are swallowed to `null`.
  */
 export async function releasePayment(
   orchestratorKeypair: Keypair,
@@ -275,14 +101,7 @@ export async function releasePayment(
 ): Promise<string | null> {
   if (!VAULT_ACTIVE || !taskId) return null;
   try {
-    const hash = await signAndSubmit(orchestratorKeypair, 'release_payment', [
-      new Address(orchestratorKeypair.publicKey()).toScVal(),
-      nativeToScVal(taskId, { type: 'u64' }),
-      nativeToScVal(stepId, { type: 'u64' }),
-      usdcSacScVal(),
-      nativeToScVal(usdcToStroops(amountUsdc), { type: 'i128' }),
-    ]);
-    return hash;
+    return await vaultClient.releasePayment(orchestratorKeypair, taskId, stepId, amountUsdc);
   } catch (err: any) {
     console.error('[AgentVault] releasePayment error:', err.message);
     if (err instanceof VaultContractError) throw err;
@@ -290,17 +109,10 @@ export async function releasePayment(
   }
 }
 
-/**
- * Mark a vault task as complete, unlocking its remaining budget back to the
- * user's available balance. No-op if the vault is inactive or `taskId` is falsy.
- */
 export async function completeTask(orchestratorKeypair: Keypair, taskId: bigint): Promise<void> {
   if (!VAULT_ACTIVE || !taskId) return;
   try {
-    await signAndSubmit(orchestratorKeypair, 'complete_task', [
-      new Address(orchestratorKeypair.publicKey()).toScVal(),
-      nativeToScVal(taskId, { type: 'u64' }),
-    ]);
+    await vaultClient.completeTask(orchestratorKeypair, taskId);
   } catch (err: any) {
     console.error('[AgentVault] completeTask error:', err.message);
   }
@@ -308,36 +120,22 @@ export async function completeTask(orchestratorKeypair: Keypair, taskId: bigint)
 
 // ── U7: Cancel task XDR (user signs) + Force-complete (orchestrator signs) ────
 
-/**
- * Build an unsigned cancel_task XDR for the user to sign in Freighter.
- * This cancels an active vault task and refunds unused locked balance.
- */
 export async function buildCancelTaskXdr(
   userAddress: string,
   vaultTaskId: bigint,
 ): Promise<string | null> {
   if (!VAULT_ACTIVE) return null;
-  return buildUnsignedXdr(userAddress, 'cancel_task', [
-    new Address(userAddress).toScVal(),
-    nativeToScVal(vaultTaskId, { type: 'u64' }),
-  ]);
+  return vaultClient.buildCancelTaskXdr(userAddress, vaultTaskId);
 }
 
-/**
- * Force-complete a stale task using the orchestrator keypair.
- * Calls complete_task — safe to call even if already completed.
- */
 export async function forceCompleteTask(
   orchestratorKeypair: Keypair,
   vaultTaskId: bigint,
 ): Promise<string | null> {
   if (!VAULT_ACTIVE) return null;
   try {
-    const hash = await signAndSubmit(orchestratorKeypair, 'complete_task', [
-      new Address(orchestratorKeypair.publicKey()).toScVal(),
-      nativeToScVal(vaultTaskId, { type: 'u64' }),
-    ]);
-    return hash;
+    await vaultClient.completeTask(orchestratorKeypair, vaultTaskId);
+    return 'ok';
   } catch (err: any) {
     console.error('[AgentVault] forceCompleteTask error:', err.message);
     return null;
@@ -346,55 +144,19 @@ export async function forceCompleteTask(
 
 // ── Read-only views ───────────────────────────────────────────────────────────
 
-async function callView(method: string, args: xdr.ScVal[]): Promise<any> {
-  const server = rpc();
-  // Use a throwaway keypair as source for read-only calls
-  const dummy = Keypair.random();
-  const contract = new Contract(CONTRACT_ID);
-
-  // For view calls we need an existing account — use the contract itself or skip
-  // Use the orchestrator's address if available; fall back to simulating with no source
-  const tx = new TransactionBuilder(
-    {
-      accountId: () => dummy.publicKey(),
-      sequenceNumber: () => '0',
-      incrementSequenceNumber: () => {},
-    } as any,
-    { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE },
-  )
-    .addOperation(contract.call(method, ...args))
-    .setTimeout(30)
-    .build();
-
-  const simulated = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simulated)) return null;
-  if (!('result' in simulated) || !simulated.result) return null;
-  return scValToNative(simulated.result.retval);
-}
-
-/** Total vault balance for `userAddress` (available + locked), in stroops. Returns `0n` if the vault is inactive or the call fails. */
 export async function getBalance(userAddress: string): Promise<bigint> {
   if (!VAULT_ACTIVE) return 0n;
   try {
-    const result = await callView('get_balance', [
-      new Address(userAddress).toScVal(),
-      usdcSacScVal(),
-    ]);
-    return result !== null ? BigInt(result) : 0n;
+    return await vaultClient.getBalance(userAddress);
   } catch {
     return 0n;
   }
 }
 
-/** Available (unlocked) vault balance for `userAddress`, in stroops. Returns `0n` if the vault is inactive or the call fails. */
 export async function getAvailable(userAddress: string): Promise<bigint> {
   if (!VAULT_ACTIVE) return 0n;
   try {
-    const result = await callView('get_available', [
-      new Address(userAddress).toScVal(),
-      usdcSacScVal(),
-    ]);
-    return result !== null ? BigInt(result) : 0n;
+    return await vaultClient.getAvailable(userAddress);
   } catch {
     return 0n;
   }
@@ -402,28 +164,18 @@ export async function getAvailable(userAddress: string): Promise<bigint> {
 
 /** A user's vault account, with all amounts converted from stroops to USDC. */
 export interface VaultAccount {
-  balance: number; // USDC
-  available: number; // USDC (balance - locked)
-  locked: number; // USDC
-  total_deposited: number; // USDC
-  total_spent: number; // USDC
+  balance: number;
+  available: number;
+  locked: number;
+  total_deposited: number;
+  total_spent: number;
   active_tasks_count: number;
 }
 
-/**
- * Fetch a user's full vault account.
- *
- * Returns a zeroed {@link VaultAccount} if the user has no on-chain account
- * yet (the contract's `Option::None` case), or `null` if the vault is
- * inactive. RPC errors propagate so callers can distinguish "no account" from
- * "couldn't reach the network".
- */
 export async function getAccount(userAddress: string): Promise<VaultAccount | null> {
   if (!VAULT_ACTIVE) return null;
-  // Let exceptions propagate — caller distinguishes RPC errors from "no account"
-  const raw = await callView('get_account', [new Address(userAddress).toScVal(), usdcSacScVal()]);
-  // Option::None from the contract → account doesn't exist yet → zero balance
-  if (raw === null || raw === undefined) {
+  const raw = await vaultClient.getAccount(userAddress);
+  if (!raw) {
     return {
       balance: 0,
       available: 0,
@@ -440,6 +192,6 @@ export async function getAccount(userAddress: string): Promise<VaultAccount | nu
     locked: toUsdc(raw.locked),
     total_deposited: toUsdc(raw.total_deposited),
     total_spent: toUsdc(raw.total_spent),
-    active_tasks_count: Number(raw.active_tasks_count),
+    active_tasks_count: raw.active_tasks_count,
   };
 }
