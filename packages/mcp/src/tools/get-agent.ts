@@ -35,7 +35,17 @@ export async function getAgentHandler(
     const agentId = id.trim();
 
     // Call registry to get agent details
-    const response = await fetch(`${config.registry_url}/agents/${encodeURIComponent(agentId)}`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    
+    let response;
+    try {
+      response = await fetch(`${config.registry_url}/agents/${encodeURIComponent(agentId)}`, {
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (response.status === 404) {
       return {

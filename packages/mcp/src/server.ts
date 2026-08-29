@@ -18,6 +18,8 @@ import {
   McpError,
   ErrorCode,
 } from '@modelcontextprotocol/sdk/types.js';
+import { pathToFileURL } from 'url';
+import { resolve } from 'path';
 import { config } from 'dotenv';
 
 // Load environment variables
@@ -134,7 +136,7 @@ class CleverConMCPServer {
 }
 
 // Start the server
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const server = new CleverConMCPServer();
   server.run().catch((error) => {
     console.error('Failed to start server:', error);

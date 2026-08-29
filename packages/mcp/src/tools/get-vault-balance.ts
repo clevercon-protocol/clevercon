@@ -82,23 +82,8 @@ export async function getVaultBalanceHandler(
       const simulation = await server.simulateTransaction(balanceTx);
 
       if (SorobanRpc.Api.isSimulationError(simulation)) {
-        // Vault doesn't exist for this address
-        const result: VaultBalance = {
-          address: stellarAddress,
-          balance_usdc: 0,
-          locked_usdc: 0,
-          available_usdc: 0,
-          vault_exists: false,
-        };
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
+        // Simulation failed - could be various reasons, propagate the error
+        throw new Error(`Contract simulation failed: ${simulation.error || 'Unknown error'}`);
       }
 
       // Parse the balance result (assuming it returns balance in stroops)
@@ -143,24 +128,30 @@ export async function getVaultBalanceHandler(
         ],
       };
 
-    } catch {
-      // Handle contract-specific errors
-      const result: VaultBalance = {
-        address: stellarAddress,
-        balance_usdc: 0,
-        locked_usdc: 0,
-        available_usdc: 0,
-        vault_exists: false,
-      };
+    } catch (contractError) {
+      // Handle contract-specific errors or RPC failures
+      if (contractError instanceof Error && contractError.message.includes('simulation failed')) {
+        // This could indicate the vault doesn't exist for this address
+        const result: VaultBalance = {
+          address: stellarAddress,
+          balance_usdc: 0,
+          locked_usdc: 0,
+          available_usdc: 0,
+          vault_exists: false,
+        };
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+      
+      // For other errors, propagate them
+      throw contractError;
     }
 
   } catch (error) {

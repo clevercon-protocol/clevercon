@@ -64,9 +64,18 @@ export async function estimateCostHandler(
       capability: searchCapability,
     });
 
-    const response = await fetch(
-      `${config.registry_url}/search?${searchParams.toString()}`
-    );
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    
+    let response;
+    try {
+      response = await fetch(
+        `${config.registry_url}/search?${searchParams.toString()}`,
+        { signal: controller.signal }
+      );
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       throw new Error(

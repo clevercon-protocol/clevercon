@@ -136,7 +136,14 @@ async function testSearchAgents() {
     // Even if it returns an error due to registry not being available, 
     // the tool should handle it gracefully
     if (response.error) {
-      console.log('⚠️ Tool returned server error (registry may not be available):', response.error.message);
+      // Check if it's an expected network error
+      if (response.error.message && response.error.message.includes('Registry search failed')) {
+        console.log('⚠️ Tool returned expected network error (registry unavailable):', response.error.message);
+        return true;
+      } else {
+        // Unexpected error - fail the test
+        throw new Error(`Unexpected tool error: ${response.error.message || JSON.stringify(response.error)}`);
+      }
     } else {
       console.log('✅ search_agents tool responded successfully');
     }
@@ -172,7 +179,14 @@ async function testEstimateCost() {
     }
 
     if (response.error) {
-      console.log('⚠️ Tool returned server error (registry may not be available):', response.error.message);
+      // Check if it's an expected network error
+      if (response.error.message && response.error.message.includes('Registry search failed')) {
+        console.log('⚠️ Tool returned expected network error (registry unavailable):', response.error.message);
+        return true;
+      } else {
+        // Unexpected error - fail the test
+        throw new Error(`Unexpected tool error: ${response.error.message || JSON.stringify(response.error)}`);
+      }
     } else {
       console.log('✅ estimate_cost tool responded successfully');
     }

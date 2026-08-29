@@ -181,24 +181,27 @@ Here's a smoke test transcript you can run:
 # Start the server
 npm run dev
 
-# In another terminal, test with MCP client or simulate requests
-echo '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | node dist/server.js
+# Test with our smoke test script (includes MCP handshake)
+npm test
 ```
 
 Expected response should list all 6 tools: `search_agents`, `get_agent`, `get_vault_balance`, `build_deposit`, `build_release`, and `estimate_cost`.
 
+**Note**: Direct JSON-RPC requests require proper MCP initialization handshake first.
+
 ### Test Individual Tools
 
+Use the smoke test script which properly handles MCP initialization:
+
 ```bash
-# Test search agents
-echo '{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search_agents", "arguments": {"capability": "web-scraping"}}}' | node dist/server.js
-
-# Test get vault balance  
-echo '{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "get_vault_balance", "arguments": {"address": "GBXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"}}}' | node dist/server.js
-
-# Test cost estimation
-echo '{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "estimate_cost", "arguments": {"capability": "data-analysis"}}}' | node dist/server.js
+npm test
 ```
+
+This tests:
+- Tool discovery via `tools/list`
+- Agent search functionality
+- Cost estimation functionality
+- Proper error handling for network failures
 
 ## Security Model
 

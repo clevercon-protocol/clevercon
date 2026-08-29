@@ -60,21 +60,30 @@ export async function searchAgentsHandler(
     }
 
     // Call registry search endpoint
-    const response = await fetch(
-      `${config.registry_url}/search?${searchParams.toString()}`
-    );
-
-    if (!response.ok) {
-      throw new Error(
-        `Registry search failed: ${response.status} ${response.statusText}`
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    
+    let response;
+    try {
+      response = await fetch(
+        `${config.registry_url}/search?${searchParams.toString()}`,
+        { signal: controller.signal }
       );
+    } finally {
+      clearTimeout(timeoutId);
     }
 
-    const data = await response.json();
-    const agents: AgentRecord[] = Array.isArray(data) ? data : data.agents || [];
+      if (!response.ok) {
+        throw new Error(
+          `Registry search failed: ${response.status} ${response.statusText}`
+        );
+      }
 
-    // Apply limit
-    const limitedAgents = agents.slice(0, limit as number);
+      const data = await response.json();
+      const agents: AgentRecord[] = Array.isArray(data) ? data : data.agents || [];
+
+      // Apply limit
+      const limitedAgents = agents.slice(0, limit as number);
 
     // Format results
     const results = limitedAgents.map((agent) => ({
