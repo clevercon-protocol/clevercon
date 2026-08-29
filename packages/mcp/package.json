@@ -1,0 +1,26 @@
+{
+  "name": "@clevercon/mcp",
+  "version": "1.0.0",
+  "description": "Stellar MCP server exposing agent discovery, vault views, and payment helpers",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "clevercon-mcp": "dist/server.js"
+  },
+  "scripts": {
+    "dev": "npx tsx src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@clevercon/common": "*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@stellar/stellar-sdk": "^14.6.1",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "tsx": "^4.7.0"
+  }
+}
