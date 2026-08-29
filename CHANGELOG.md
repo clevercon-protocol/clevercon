@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Private spending-policy commitments (`#122`).** `AgentVault` can now bind a
+  private policy commitment to a task at lock time and gate every release for
+  that task on a zero-knowledge proof:
+  - `create_task_with_policy(orchestrator, asset, plan_cost, commitment)` —
+    creates a task exactly like `create_task` but records a 32-byte policy
+    `commitment` (an all-zero commitment is rejected). `create_task` is
+    unchanged; a task created through it never carries a commitment.
+  - `release_payment_proved(orchestrator, task_id, step_id, asset, amount,
+    payee, nullifier, proof)` — the only way to release a committed task.
+    Checks budget **before** contacting the verifier, rejects a reused
+    `nullifier` as a replay, then calls the configured verifier contract with
+    `(commitment, payee, amount, nullifier)`; only an explicit `true` releases
+    funds (to `payee`), writing the nullifier and `spent` before the transfer.
+    A missing verifier, a `false` result, or a verifier trap all fail closed
+    with no fund movement and without burning the nullifier.
+  - `set_policy_verifier(admin, verifier)` / `get_policy_verifier()` —
+    admin-set, mutable at any time (mirrors `set_dispute_resolver`); every
+    change emits `PolicyVerifierSetEvent`.
+  - `get_task_policy(task_id)` — returns the task's commitment, if any.
+  - Mutual exclusion: `release_payment` rejects a committed task
+    (`PolicyProofRequired`) and `release_payment_proved` rejects an
+    uncommitted one (`NoPolicyCommitment`), decided by one field on the task
+    record so the two paths can never both or neither apply.
+  - New events `PolicyCommittedEvent` and `ReleaseProvedEvent` (carries the
+    `nullifier`; the proof bytes are never logged or emitted). New errors
+    `InvalidCommitment`, `PolicyVerifierNotSet`, `PolicyProofRequired`,
+    `NoPolicyCommitment`, `PolicyProofRejected`, `NullifierAlreadyUsed`.
+  - Per-task nullifier records are pruned on task finalization, mirroring the
+    existing per-step release records. `CONTRACT_VERSION` bumped to `6`
+    (`TaskInfo` gained a `policy_commitment` field).
+
 ### Changed
 
 - **Breaking:** `AgentVault::release_payment` now requires a caller-supplied
