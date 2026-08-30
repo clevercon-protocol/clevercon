@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `@clevercon/agent-sdk` (`packages/agent-sdk`): shared scaffolding for
+  specialist agents — `createAgent` wires the manifest, health, and paid task
+  endpoints; x402 and MPP payment middleware factories (`withX402`, `withMpp`);
+  self-registration with retry/backoff and heartbeat; graceful deregistration on
+  SIGTERM; and a `reportFeedback` helper. Includes an example agent that
+  reproduces `stellar-oracle` (parity-tested), a minimal MPP example, and a
+  README quickstart. None of the five existing agents are changed.
 - Roadmap for private spending policies: a spending rule the user sets and the
   vault enforces on-chain without revealing it, building on the zero-knowledge
   engine at [CipherMit](https://github.com/Bosun-Josh121/ciphermit).
