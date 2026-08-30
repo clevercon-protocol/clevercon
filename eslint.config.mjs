@@ -9,6 +9,7 @@ export default tseslint.config(
       '**/node_modules/**',
       'packages/dashboard/**',
       'packages/orchestrator/public/**',
+      'packages/mcp/test-server.mjs',
       'data/**',
       'logs/**',
       '.local/**',
