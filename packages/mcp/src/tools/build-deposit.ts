@@ -1,6 +1,6 @@
 /**
  * build_deposit MCP tool
- * 
+ *
  * Builds unsigned XDR for a vault deposit transaction.
  * Returns XDR that must be signed by the client's wallet.
  */
@@ -54,12 +54,12 @@ interface DepositXdrResult {
 
 export async function buildDepositHandler(
   args: Record<string, unknown>,
-  config: { 
+  config: {
     soroban_rpc_url: string;
     network_passphrase: string;
     vault_contract_id: string;
     usdc_sac: string;
-  }
+  },
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   try {
     const { address, amount, asset = 'USDC' } = args;
@@ -109,11 +109,14 @@ export async function buildDepositHandler(
       fee: BASE_FEE,
       networkPassphrase: config.network_passphrase,
     })
-      .addOperation(contract.call('deposit', 
-        new Address(stellarAddress).toScVal(),
-        new Address(config.usdc_sac).toScVal(),
-        nativeToScVal(amountStroops, { type: 'i128' })
-      ))
+      .addOperation(
+        contract.call(
+          'deposit',
+          new Address(stellarAddress).toScVal(),
+          new Address(config.usdc_sac).toScVal(),
+          nativeToScVal(amountStroops, { type: 'i128' }),
+        ),
+      )
       .setTimeout(300)
       .build();
 
@@ -146,7 +149,6 @@ export async function buildDepositHandler(
         },
       ],
     };
-
   } catch (error) {
     const result: DepositXdrResult = {
       success: false,
