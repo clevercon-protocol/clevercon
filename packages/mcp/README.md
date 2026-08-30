@@ -77,18 +77,16 @@ Add this to your Claude Desktop `config.json`:
 
 ### `search_agents`
 
-Search for agents by capability and optional category.
+Search for agents by capability. Backed by the registry's `GET /agents?capabilities=<cap>` route.
 
 **Parameters:**
 - `capability` (required): Capability to search for
-- `category` (optional): Category filter
 - `limit` (optional): Maximum results (default: 10)
 
 **Example:**
 ```json
 {
   "capability": "web-scraping",
-  "category": "Data and Oracles",
   "limit": 5
 }
 ```

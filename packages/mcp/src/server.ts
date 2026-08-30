@@ -2,10 +2,10 @@
 
 /**
  * CleverCon MCP Server
- * 
+ *
  * Exposes CleverCon's agent discovery, vault views, and payment helpers
  * as MCP tools for AI agents and other MCP-compatible clients.
- * 
+ *
  * The server is keyless by design - payment tools return unsigned XDR
  * that must be signed by the client's wallet.
  */
@@ -45,7 +45,8 @@ function getConfig(): ServerConfig {
   return {
     registry_url: process.env.REGISTRY_URL || 'http://localhost:3001',
     soroban_rpc_url: process.env.STELLAR_RPC_URL || 'https://soroban-testnet.stellar.org',
-    network_passphrase: process.env.STELLAR_NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015',
+    network_passphrase:
+      process.env.STELLAR_NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015',
     vault_contract_id: process.env.AGENT_VAULT_CONTRACT_ID || '',
     usdc_sac: process.env.USDC_SAC || '',
   };
@@ -66,7 +67,7 @@ class CleverConMCPServer {
         capabilities: {
           tools: {},
         },
-      }
+      },
     );
 
     this.setupHandlers();
@@ -93,36 +94,33 @@ class CleverConMCPServer {
         switch (name) {
           case 'search_agents':
             return await searchAgentsHandler(args || {}, this.config);
-            
+
           case 'get_agent':
             return await getAgentHandler(args || {}, this.config);
-            
+
           case 'get_vault_balance':
             return await getVaultBalanceHandler(args || {}, this.config);
-            
+
           case 'build_deposit':
             return await buildDepositHandler(args || {}, this.config);
-            
+
           case 'build_release':
             return await buildReleaseHandler(args || {}, this.config);
-            
+
           case 'estimate_cost':
             return await estimateCostHandler(args || {}, this.config);
-            
+
           default:
-            throw new McpError(
-              ErrorCode.MethodNotFound,
-              `Unknown tool: ${name}`
-            );
+            throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
       } catch (error) {
         if (error instanceof McpError) {
           throw error;
         }
-        
+
         throw new McpError(
           ErrorCode.InternalError,
-          `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`
+          `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     });

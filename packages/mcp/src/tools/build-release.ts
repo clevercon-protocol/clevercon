@@ -1,6 +1,6 @@
 /**
  * build_release MCP tool
- * 
+ *
  * Builds unsigned XDR for a vault payment release transaction.
  * Returns XDR that must be signed by the orchestrator's wallet.
  */
@@ -29,7 +29,7 @@ export const buildReleaseSchema = {
         description: 'Task ID (will be converted to u64)',
       },
       step_id: {
-        type: 'string', 
+        type: 'string',
         description: 'Step ID (will be converted to u64)',
       },
       amount: {
@@ -64,12 +64,12 @@ interface ReleaseXdrResult {
 
 export async function buildReleaseHandler(
   args: Record<string, unknown>,
-  config: { 
+  config: {
     soroban_rpc_url: string;
     network_passphrase: string;
     vault_contract_id: string;
     usdc_sac: string;
-  }
+  },
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   try {
     const { orchestrator_address, task_id, step_id, amount, asset = 'USDC' } = args;
@@ -133,13 +133,16 @@ export async function buildReleaseHandler(
       fee: BASE_FEE,
       networkPassphrase: config.network_passphrase,
     })
-      .addOperation(contract.call('release_payment',
-        new Address(stellarAddress).toScVal(),
-        nativeToScVal(taskIdNum, { type: 'u64' }),
-        nativeToScVal(stepIdNum, { type: 'u64' }),
-        new Address(config.usdc_sac).toScVal(),
-        nativeToScVal(amountStroops, { type: 'i128' })
-      ))
+      .addOperation(
+        contract.call(
+          'release_payment',
+          new Address(stellarAddress).toScVal(),
+          nativeToScVal(taskIdNum, { type: 'u64' }),
+          nativeToScVal(stepIdNum, { type: 'u64' }),
+          new Address(config.usdc_sac).toScVal(),
+          nativeToScVal(amountStroops, { type: 'i128' }),
+        ),
+      )
       .setTimeout(300)
       .build();
 
@@ -174,7 +177,6 @@ export async function buildReleaseHandler(
         },
       ],
     };
-
   } catch (error) {
     const result: ReleaseXdrResult = {
       success: false,

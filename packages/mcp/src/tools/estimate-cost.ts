@@ -1,6 +1,6 @@
 /**
  * estimate_cost MCP tool
- * 
+ *
  * Provides advisory pricing for a capability by looking at registry manifests.
  */
 
@@ -48,7 +48,7 @@ interface CostEstimate {
 
 export async function estimateCostHandler(
   args: Record<string, unknown>,
-  config: { registry_url: string }
+  config: { registry_url: string },
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   try {
     const { capability } = args;
@@ -59,28 +59,25 @@ export async function estimateCostHandler(
 
     const searchCapability = capability.trim();
 
-    // Search for agents with this capability
+    // Search for agents with this capability via `GET /agents?capabilities=<cap>`.
     const searchParams = new URLSearchParams({
-      capability: searchCapability,
+      capabilities: searchCapability,
     });
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-    
+
     let response;
     try {
-      response = await fetch(
-        `${config.registry_url}/search?${searchParams.toString()}`,
-        { signal: controller.signal }
-      );
+      response = await fetch(`${config.registry_url}/agents?${searchParams.toString()}`, {
+        signal: controller.signal,
+      });
     } finally {
       clearTimeout(timeoutId);
     }
 
     if (!response.ok) {
-      throw new Error(
-        `Registry search failed: ${response.status} ${response.statusText}`
-      );
+      throw new Error(`Registry search failed: ${response.status} ${response.statusText}`);
     }
 
     const data = await response.json();
@@ -111,7 +108,7 @@ export async function estimateCostHandler(
     }
 
     // Extract pricing information
-    const agentPrices = agents.map(agent => ({
+    const agentPrices = agents.map((agent) => ({
       agent_id: agent.agent_id,
       name: agent.name,
       price_per_call: agent.pricing.price_per_call,
@@ -120,15 +117,16 @@ export async function estimateCostHandler(
     }));
 
     // Calculate pricing statistics
-    const prices = agentPrices.map(a => a.price_per_call);
+    const prices = agentPrices.map((a) => a.price_per_call);
     const sortedPrices = [...prices].sort((a, b) => a - b);
-    
+
     const minPrice = Math.min(...prices);
     const maxPrice = Math.max(...prices);
     const avgPrice = prices.reduce((sum, price) => sum + price, 0) / prices.length;
-    const medianPrice = sortedPrices.length % 2 === 0
-      ? (sortedPrices[sortedPrices.length / 2 - 1] + sortedPrices[sortedPrices.length / 2]) / 2
-      : sortedPrices[Math.floor(sortedPrices.length / 2)];
+    const medianPrice =
+      sortedPrices.length % 2 === 0
+        ? (sortedPrices[sortedPrices.length / 2 - 1] + sortedPrices[sortedPrices.length / 2]) / 2
+        : sortedPrices[Math.floor(sortedPrices.length / 2)];
 
     // Find recommended agent (best reputation-to-price ratio)
     let recommendedAgent = agentPrices[0];
@@ -153,7 +151,7 @@ export async function estimateCostHandler(
         median_price: Math.round(medianPrice * 1000000) / 1000000,
         currency: 'USDC',
       },
-      agent_prices: agentPrices.map(agent => ({
+      agent_prices: agentPrices.map((agent) => ({
         ...agent,
         price_per_call: Math.round(agent.price_per_call * 1000000) / 1000000,
       })),
@@ -173,17 +171,20 @@ export async function estimateCostHandler(
         },
       ],
     };
-
   } catch (error) {
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify({
-            error: 'Cost estimation failed',
-            message: error instanceof Error ? error.message : String(error),
-            capability: args.capability,
-          }, null, 2),
+          text: JSON.stringify(
+            {
+              error: 'Cost estimation failed',
+              message: error instanceof Error ? error.message : String(error),
+              capability: args.capability,
+            },
+            null,
+            2,
+          ),
         },
       ],
     };

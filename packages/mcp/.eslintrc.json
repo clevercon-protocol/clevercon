@@ -1,3 +1,0 @@
-{
-  "ignorePatterns": ["test-server.mjs", "dist/"]
-}

@@ -15,7 +15,7 @@ const __dirname = dirname(__filename);
 function sendMCPRequest(request) {
   return new Promise((resolve, reject) => {
     const server = spawn('node', [join(__dirname, 'dist/server.js')], {
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     let response = '';
@@ -35,8 +35,8 @@ function sendMCPRequest(request) {
           // Parse JSON-RPC responses (may be multiple)
           const lines = response.trim().split('\n');
           const jsonResponses = lines
-            .filter(line => line.trim())
-            .map(line => {
+            .filter((line) => line.trim())
+            .map((line) => {
               try {
                 return JSON.parse(line);
               } catch {
@@ -65,17 +65,17 @@ function sendMCPRequest(request) {
 
 async function testListTools() {
   console.log('Testing tool listing...');
-  
+
   const request = {
     jsonrpc: '2.0',
     id: 1,
-    method: 'tools/list'
+    method: 'tools/list',
   };
 
   try {
     const responses = await sendMCPRequest(request);
-    const response = responses.find(r => r.id === 1);
-    
+    const response = responses.find((r) => r.id === 1);
+
     if (!response) {
       throw new Error('No response received for tools/list');
     }
@@ -87,15 +87,15 @@ async function testListTools() {
     const tools = response.result?.tools || [];
     const expectedTools = [
       'search_agents',
-      'get_agent', 
+      'get_agent',
       'get_vault_balance',
       'build_deposit',
       'build_release',
-      'estimate_cost'
+      'estimate_cost',
     ];
 
-    const actualToolNames = tools.map(t => t.name);
-    
+    const actualToolNames = tools.map((t) => t.name);
+
     for (const expected of expectedTools) {
       if (!actualToolNames.includes(expected)) {
         throw new Error(`Missing tool: ${expected}`);
@@ -112,7 +112,7 @@ async function testListTools() {
 
 async function testSearchAgents() {
   console.log('Testing search_agents tool...');
-  
+
   const request = {
     jsonrpc: '2.0',
     id: 2,
@@ -120,34 +120,39 @@ async function testSearchAgents() {
     params: {
       name: 'search_agents',
       arguments: {
-        capability: 'test-capability'
-      }
-    }
+        capability: 'test-capability',
+      },
+    },
   };
 
   try {
     const responses = await sendMCPRequest(request);
-    const response = responses.find(r => r.id === 2);
-    
+    const response = responses.find((r) => r.id === 2);
+
     if (!response) {
       throw new Error('No response received for search_agents');
     }
 
-    // Even if it returns an error due to registry not being available, 
+    // Even if it returns an error due to registry not being available,
     // the tool should handle it gracefully
     if (response.error) {
       // Check if it's an expected network error
       if (response.error.message && response.error.message.includes('Registry search failed')) {
-        console.log('⚠️ Tool returned expected network error (registry unavailable):', response.error.message);
+        console.log(
+          '⚠️ Tool returned expected network error (registry unavailable):',
+          response.error.message,
+        );
         return true;
       } else {
         // Unexpected error - fail the test
-        throw new Error(`Unexpected tool error: ${response.error.message || JSON.stringify(response.error)}`);
+        throw new Error(
+          `Unexpected tool error: ${response.error.message || JSON.stringify(response.error)}`,
+        );
       }
     } else {
       console.log('✅ search_agents tool responded successfully');
     }
-    
+
     return true;
   } catch (error) {
     console.error('❌ search_agents test failed:', error.message);
@@ -157,7 +162,7 @@ async function testSearchAgents() {
 
 async function testEstimateCost() {
   console.log('Testing estimate_cost tool...');
-  
+
   const request = {
     jsonrpc: '2.0',
     id: 3,
@@ -165,15 +170,15 @@ async function testEstimateCost() {
     params: {
       name: 'estimate_cost',
       arguments: {
-        capability: 'data-analysis'
-      }
-    }
+        capability: 'data-analysis',
+      },
+    },
   };
 
   try {
     const responses = await sendMCPRequest(request);
-    const response = responses.find(r => r.id === 3);
-    
+    const response = responses.find((r) => r.id === 3);
+
     if (!response) {
       throw new Error('No response received for estimate_cost');
     }
@@ -181,16 +186,21 @@ async function testEstimateCost() {
     if (response.error) {
       // Check if it's an expected network error
       if (response.error.message && response.error.message.includes('Registry search failed')) {
-        console.log('⚠️ Tool returned expected network error (registry unavailable):', response.error.message);
+        console.log(
+          '⚠️ Tool returned expected network error (registry unavailable):',
+          response.error.message,
+        );
         return true;
       } else {
         // Unexpected error - fail the test
-        throw new Error(`Unexpected tool error: ${response.error.message || JSON.stringify(response.error)}`);
+        throw new Error(
+          `Unexpected tool error: ${response.error.message || JSON.stringify(response.error)}`,
+        );
       }
     } else {
       console.log('✅ estimate_cost tool responded successfully');
     }
-    
+
     return true;
   } catch (error) {
     console.error('❌ estimate_cost test failed:', error.message);
@@ -200,23 +210,19 @@ async function testEstimateCost() {
 
 async function runTests() {
   console.log('🚀 Running CleverCon MCP Server tests...\n');
-  
-  const tests = [
-    testListTools,
-    testSearchAgents,
-    testEstimateCost
-  ];
+
+  const tests = [testListTools, testSearchAgents, testEstimateCost];
 
   let passed = 0;
-  
+
   for (const test of tests) {
     const success = await test();
     if (success) passed++;
     console.log('');
   }
-  
+
   console.log(`📊 Tests completed: ${passed}/${tests.length} passed`);
-  
+
   if (passed === tests.length) {
     console.log('🎉 All tests passed! MCP server is working correctly.');
     process.exit(0);
@@ -226,7 +232,7 @@ async function runTests() {
   }
 }
 
-runTests().catch(error => {
+runTests().catch((error) => {
   console.error('💥 Test runner failed:', error);
   process.exit(1);
 });
