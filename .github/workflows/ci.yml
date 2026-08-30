@@ -53,7 +53,7 @@ jobs:
         # budget-guardian is unused legacy code (see docs/architecture.md) and
         # its pinned soroban-sdk dev-dependencies currently fail to build with
         # the `testutils` feature, so it's excluded from CI for now.
-        contract: [agent-vault]
+        contract: [agent-vault, policy-verifier]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
