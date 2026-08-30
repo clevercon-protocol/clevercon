@@ -42,6 +42,12 @@ export enum VaultErrorCode {
   TooManyStepReleases = 25,
   FeeBpsExceedsCap = 26,
   NoFeesAccrued = 27,
+  InvalidCommitment = 28,
+  PolicyVerifierNotSet = 29,
+  PolicyProofRequired = 30,
+  NoPolicyCommitment = 31,
+  PolicyProofRejected = 32,
+  NullifierAlreadyUsed = 33,
 }
 
 /**
