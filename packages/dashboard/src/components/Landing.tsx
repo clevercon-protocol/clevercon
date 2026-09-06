@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  Shield, Store, Boxes, Github, ArrowRight, Wallet, Lock, Eye, Zap,
+  Shield, Store, Boxes, Github, ArrowRight, Wallet, Eye, Zap,
   Layers, CheckCircle2, ExternalLink, Sparkles,
+  Search, Workflow, UserCheck, EyeOff, Fingerprint,
 } from 'lucide-react';
 
 // Update these with real handles as they go live. Entries with an empty url are
@@ -73,11 +74,21 @@ const CATEGORIES = [
   'Risk & Compliance', 'Human Services', 'Business Services',
 ];
 
-const STEPS = [
-  { icon: Wallet, title: 'Connect and fund', body: 'Connect a Stellar wallet and deposit USDC into CleverVault, a non-custodial contract.' },
-  { icon: Zap, title: 'Set a budget', body: 'Give your agent a spending limit. The contract caps the total and refunds the rest.' },
-  { icon: Store, title: 'Hire services', body: 'The agent pays services in the marketplace per step, in real USDC, as work completes.' },
-  { icon: Lock, title: 'Stay in control', body: 'The platform never holds your money, and your spending rules stay private.' },
+// CleverCon adapts to how much coordination a job needs. The rail is constant;
+// planning is optional and only kicks in for genuinely multi-service work.
+const USAGE_MODES = [
+  {
+    icon: UserCheck, title: 'Pay a provider you chose',
+    body: 'Already know who you want? Point CleverCon at that service, set your rules, and it makes a single bounded, private payment. No planning, no matchmaking.',
+  },
+  {
+    icon: Search, title: 'Find and pay one service',
+    body: 'Describe what you need and the open registry returns matching providers by capability, price, and reputation. Pick one, or take the top-ranked, and pay.',
+  },
+  {
+    icon: Workflow, title: 'Compose a multi-service job',
+    body: 'For work that spans services, gather data, analyze it, write a report, a delegate plans the steps, hires a provider for each, and pays in sequence. Optional, and only when the job needs it.',
+  },
 ];
 
 type OfferStatus = 'live' | 'dev' | 'planned';
@@ -94,6 +105,88 @@ const STATUS: Record<OfferStatus, { label: string; cls: string }> = {
   dev: { label: 'In development', cls: 'bg-violet-500/10 text-violet-300 border-violet-500/25' },
   planned: { label: 'Planned', cls: 'bg-white/5 text-slate-400 border-white/10' },
 };
+
+/** Interactive, mock demo of a private spending policy. No backend, illustrative only. */
+function PrivacyDemo() {
+  const [cap, setCap] = useState(true);
+  const [allow, setAllow] = useState(true);
+  const [weekly, setWeekly] = useState(true);
+  const [paid, setPaid] = useState(false);
+
+  const rules = [
+    cap ? 'Max $100 per payment' : null,
+    allow ? 'Only 5 approved providers' : null,
+    weekly ? 'Max $500 per week' : null,
+  ].filter(Boolean) as string[];
+
+  // Deterministic pseudo-commitment from the active rules (for demonstration).
+  const commitment = (() => {
+    const s = rules.join('|') + '::salt';
+    let h = 5381 >>> 0;
+    for (let i = 0; i < s.length; i++) h = (((h << 5) + h) ^ s.charCodeAt(i)) >>> 0;
+    const hex = h.toString(16).padStart(8, '0');
+    return '0x' + (hex + hex + hex + hex + hex).slice(0, 40);
+  })();
+
+  const Toggle = ({ on, set, label }: { on: boolean; set: (v: boolean) => void; label: string }) => (
+    <button
+      onClick={() => { set(!on); setPaid(false); }}
+      className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm text-left transition-colors ${on ? 'border-violet-500/40 bg-violet-500/10 text-slate-100' : 'border-white/10 bg-white/[0.02] text-slate-500'}`}
+    >
+      <span className={`w-4 h-4 rounded flex items-center justify-center shrink-0 ${on ? 'bg-violet-500' : 'bg-white/10'}`}>
+        {on && <CheckCircle2 size={12} className="text-white" />}
+      </span>
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="grid lg:grid-cols-2 gap-5">
+      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6 text-left">
+        <p className="text-xs uppercase tracking-wider text-slate-500 font-medium">Your private policy</p>
+        <p className="mt-1 text-sm text-slate-400">Toggle the rules the vault should enforce.</p>
+        <div className="mt-4 grid gap-2">
+          <Toggle on={cap} set={setCap} label="Max $100 per payment" />
+          <Toggle on={allow} set={setAllow} label="Only 5 approved providers" />
+          <Toggle on={weekly} set={setWeekly} label="Max $500 per week" />
+        </div>
+        <div className="mt-4 rounded-lg border border-white/10 bg-black/30 p-3">
+          <p className="text-[11px] uppercase tracking-wider text-slate-500">Committed on-chain (a hash)</p>
+          <p className="mt-1 font-mono text-xs text-violet-300 break-all">{rules.length ? commitment : 'set at least one rule'}</p>
+        </div>
+        <button
+          onClick={() => setPaid(true)}
+          disabled={!rules.length}
+          className="mt-4 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 px-4 py-2 text-sm font-semibold text-white transition-all"
+        >
+          <Zap size={14} /> Simulate a $60 payment
+        </button>
+      </div>
+
+      <div className="grid gap-5">
+        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.03] p-5 text-left">
+          <div className="flex items-center gap-2 text-emerald-300 text-sm font-medium"><Eye size={15} /> What you see</div>
+          <ul className="mt-3 space-y-1.5 text-sm text-slate-300">
+            {rules.length ? rules.map((r) => (
+              <li key={r} className="flex items-center gap-2"><CheckCircle2 size={13} className="text-emerald-400" /> {r}</li>
+            )) : <li className="text-slate-500">No rules set.</li>}
+          </ul>
+          {paid && <p className="mt-3 text-sm text-emerald-300">Paid $60 to Chainlens. Within policy.</p>}
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5 text-left">
+          <div className="flex items-center gap-2 text-slate-400 text-sm font-medium"><EyeOff size={15} /> What the public ledger sees</div>
+          <ul className="mt-3 space-y-1.5 text-sm text-slate-500 font-mono">
+            <li>budget: ••••••</li>
+            <li>payees: ••••••</li>
+            <li>limits: ••••••</li>
+            <li className="text-slate-400 break-all">policy: {rules.length ? commitment.slice(0, 18) + '…' : '—'}</li>
+          </ul>
+          {paid && <p className="mt-3 text-sm text-slate-300 flex items-start gap-1.5"><Fingerprint size={14} className="text-violet-400 mt-0.5 shrink-0" /> Proof verified. Payment allowed. Your rules stayed hidden.</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function Landing({ onLaunch }: { onLaunch: () => void }) {
   const [scrolled, setScrolled] = useState(false);
@@ -288,15 +381,17 @@ export function Landing({ onLaunch }: { onLaunch: () => void }) {
         </div>
       </section>
 
-      {/* How it works */}
+      {/* How you use it */}
       <section id="how" className="px-5 py-20 border-t border-white/5">
         <div className="max-w-6xl mx-auto">
           <Reveal className="text-center max-w-2xl mx-auto">
-            <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">How it works</h2>
-            <p className="mt-3 text-slate-400">From wallet to autonomous spending, in four steps.</p>
+            <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight text-balance">How you use it</h2>
+            <p className="mt-3 text-slate-400">
+              The rail is always the same: bounded, private, per-step spending. How much coordination sits on top is up to the job.
+            </p>
           </Reveal>
-          <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
-            {STEPS.map((s, i) => (
+          <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {USAGE_MODES.map((s, i) => (
               <Reveal key={s.title} delay={i * 80}>
                 <div className="h-full rounded-2xl border border-white/10 bg-white/[0.02] p-6">
                   <div className="flex items-center justify-between">
@@ -311,6 +406,19 @@ export function Landing({ onLaunch }: { onLaunch: () => void }) {
               </Reveal>
             ))}
           </div>
+          <Reveal delay={120}>
+            <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.02] p-6 flex items-start gap-4">
+              <div className="w-10 h-10 shrink-0 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+                <Shield size={17} className="text-emerald-300" />
+              </div>
+              <p className="text-sm text-slate-400 leading-relaxed">
+                <span className="text-white font-medium">Whatever does the spending is just a delegate.</span> CleverCon's
+                orchestrator, your own agent via the SDK, or an MCP client, it makes no difference. The rail is what makes
+                delegation safe: even a compromised or careless delegate cannot spend outside the budget and private rules you set.
+                That, not the planning, is the point.
+              </p>
+            </div>
+          </Reveal>
         </div>
       </section>
 
@@ -336,6 +444,21 @@ export function Landing({ onLaunch }: { onLaunch: () => void }) {
               </a>. Bringing it into CleverVault is the core of the roadmap.
             </p>
           </Reveal>
+
+          <Reveal delay={100}>
+            <p className="mt-6 text-sm text-slate-400 leading-relaxed">
+              Concretely: a trading firm funds an agent to buy research data and sets rules, only five approved providers,
+              at most $100 a purchase, $500 a week. Without privacy, rivals read its budget, its providers (its edge), and
+              when it ramps up before a trade. With CleverCon, the chain shows only that a payment was allowed. Try it:
+            </p>
+          </Reveal>
+        </div>
+
+        <div className="max-w-5xl mx-auto mt-8">
+          <Reveal delay={140}><PrivacyDemo /></Reveal>
+          <p className="mt-4 text-center text-xs text-slate-600">
+            Interactive illustration. Values are mock; the commitment hash and proof are shown for demonstration only.
+          </p>
         </div>
       </section>
 

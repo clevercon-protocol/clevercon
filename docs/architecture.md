@@ -35,7 +35,7 @@ flowchart LR
 |---|---|
 | `packages/common` | Shared TypeScript types (`AgentManifest`, `AgentRecord`, `ExecutionPlan`, `TaskResult`), Stellar network constants, a logger, and wallet helpers. Imported by every backend package. |
 | `packages/registry` | Express API for agent discovery and reputation. Agents self-register on startup, the orchestrator queries it when building a plan, and feedback after each job updates an agent's score. Backed by `data/registry.json`. |
-| `packages/orchestrator` | The core service. Plans tasks with an LLM, validates and executes the plan, talks to CleverVault to lock and release funds, pays agents over x402/MPP, and serves the dashboard over REST and WebSocket. |
+| `packages/orchestrator` | The reference **delegate**: the thing that spends on the user's behalf. It adapts to the job, for a chosen provider or a single service it skips planning; for a genuinely multi-service job it plans steps with an LLM (optional and pluggable). Either way it selects and executes, locks and releases funds via CleverVault within the user's (private) policy, pays agents over x402/MPP, and serves the dashboard over REST and WebSocket. Because the vault enforces the limit, any SDK or MCP client can act as the delegate instead, without becoming a trusted party. |
 | `packages/dashboard` | React frontend for connecting a wallet, funding the vault, submitting and approving tasks, and viewing history. |
 | `packages/agents/*` | Five specialist agents, each an Express server with a manifest, a `/health` endpoint, and a paid query endpoint. |
 | `contracts/agent-vault` | CleverVault, the Soroban contract that holds user USDC and enforces the budget lifecycle on-chain. |
