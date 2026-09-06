@@ -1,0 +1,47 @@
+# Local-first infrastructure for CleverCon development.
+# Brings up the stateful dependencies (Postgres + Redis) that the API, indexer,
+# and workers use. Free to run locally; contracts live on Stellar testnet.
+#
+#   docker compose up -d      # start Postgres + Redis
+#   docker compose down       # stop (add -v to wipe data)
+#
+# Application services (api/indexer/workers) are added here as their code lands
+# in Phase 1; for now they run via `npm run dev` against these dependencies.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: clevercon-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-clevercon}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clevercon}
+      POSTGRES_DB: ${POSTGRES_DB:-clevercon}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - clevercon_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-clevercon} -d ${POSTGRES_DB:-clevercon}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: clevercon-redis
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - clevercon_redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  clevercon_pgdata:
+  clevercon_redisdata:
