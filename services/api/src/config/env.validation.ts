@@ -11,6 +11,7 @@ export const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url().optional(),
   JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
+  JWT_ACCESS_TTL: z.string().default('15m'),
   LOG_LEVEL: z.string().default('info'),
 });
 
