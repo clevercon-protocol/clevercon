@@ -26,6 +26,49 @@ export const demoCategories = [
   'Business Services',
 ];
 
+export interface DemoDispute {
+  id: string;
+  task: string;
+  parties: string;
+  amountUsdc: number;
+  status: 'open' | 'resolved';
+}
+
+export const demoPlatform = { users: 128, activeServices: 24, feeBps: 30, tvlUsdc: 9840 };
+
+export const demoDisputes: DemoDispute[] = [
+  {
+    id: 'd-204',
+    task: 'Risk brief on wallet X',
+    parties: 'GBUY…4K2 vs Risk Screen',
+    amountUsdc: 25,
+    status: 'open',
+  },
+  {
+    id: 'd-198',
+    task: 'Tokenomics report',
+    parties: 'GA7M…H3D vs Reporter',
+    amountUsdc: 12,
+    status: 'resolved',
+  },
+];
+
+export interface DemoApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  lastUsed: string;
+  created: string;
+}
+
+export const demoUsage = { callsToday: 1240, callsWeek: 8930, keys: 3 };
+
+export const demoApiKeys: DemoApiKey[] = [
+  { id: 'k-1', name: 'prod-agent', prefix: 'cc_A1b2C3', lastUsed: '3m ago', created: '2026-08-20' },
+  { id: 'k-2', name: 'ci', prefix: 'cc_D4e5F6', lastUsed: '2h ago', created: '2026-08-22' },
+  { id: 'k-3', name: 'local-dev', prefix: 'cc_G7h8I9', lastUsed: '1d ago', created: '2026-09-01' },
+];
+
 export interface DemoJob {
   id: string;
   service: string;

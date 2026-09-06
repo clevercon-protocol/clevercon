@@ -7,7 +7,8 @@ import { Landing } from './pages/Landing';
 import { Connect } from './pages/Connect';
 import { Buyer } from './pages/Buyer';
 import { Provider } from './pages/Provider';
-import { Admin, Developer } from './pages/consoles';
+import { Admin } from './pages/Admin';
+import { Developer } from './pages/Developer';
 import { Placeholder } from './pages/Placeholder';
 
 export function App() {
