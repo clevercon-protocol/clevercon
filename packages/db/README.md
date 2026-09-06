@@ -19,10 +19,13 @@ Or step by step:
 ```bash
 npm run db:up          # docker compose: Postgres + Redis
 npm run db:generate    # prisma generate
-npm run db:migrate     # prisma migrate dev
+npm run db:push        # sync schema to the local DB (no migration files; used by setup)
 npm run db:seed        # demo user + sample services (no keys needed)
 npm run db:studio      # browse the data
 ```
+
+`db:push` is for fast local dev. Authored, reproducible migrations come later via
+`npm run db:migrate` (prisma migrate dev) and `migrate:deploy` in production.
 
 ## Model overview
 

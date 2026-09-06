@@ -9,6 +9,7 @@
   },
   "scripts": {
     "generate": "prisma generate",
+    "push": "prisma db push",
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
     "studio": "prisma studio",
