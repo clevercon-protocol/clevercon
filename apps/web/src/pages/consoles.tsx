@@ -1,11 +1,5 @@
 import { Placeholder } from './Placeholder';
 
-export const Buyer = () => (
-  <Placeholder
-    title="Buyer console"
-    blurb="Fund a vault, set private policies, and hire services — pay a chosen provider, find-and-pay one service, or compose a multi-service job."
-  />
-);
 export const Provider = () => (
   <Placeholder
     title="Provider console"

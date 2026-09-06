@@ -16,5 +16,5 @@ npm run dev -w @clevercon/web     # http://localhost:5173 (demo mode)
 npm run build -w @clevercon/web   # typecheck + production build
 ```
 
-Status: scaffold — role-aware routing, demo sign-in, placeholder consoles. Buyer
+Status: scaffold. Role-aware routing, demo sign-in, placeholder consoles. Buyer
 flow (vault, adaptive hire, marketplace) is next. See .local/PROGRESS.md.

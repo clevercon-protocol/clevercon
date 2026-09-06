@@ -29,7 +29,7 @@ export function useWalletAuth() {
         return;
       }
       throw new Error(
-        'Full-mode wallet sign-in is not wired yet — run in demo mode (VITE_BACKEND=demo).',
+        'Full-mode wallet sign-in is not wired yet. Run in demo mode (VITE_BACKEND=demo).',
       );
     } catch (e) {
       setError((e as Error).message);
