@@ -1,0 +1,439 @@
+// CleverCon data model.
+//
+// Postgres is the queryable, reconciled MIRROR of on-chain state; the chain
+// (CleverVault / policy-verifier / registry) remains the source of truth for
+// money. Amounts are stored as Decimal(20,7) in USDC units (7 dp = stroops
+// precision). Conversions to/from on-chain stroops happen at the edges.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Identity & auth ──────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  wallets   Wallet[]
+  roles     UserRole[]
+  sessions  Session[]
+  apiKeys   ApiKey[]
+  tasks     Task[]     @relation("BuyerTasks")
+  services  Service[]  @relation("ProviderServices")
+  policies  Policy[]
+  webhooks  Webhook[]
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+model Wallet {
+  id        String   @id @default(cuid())
+  userId    String
+  address   String   @unique // Stellar G... address
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("wallets")
+}
+
+enum Role {
+  BUYER
+  PROVIDER
+  ADMIN
+  DEVELOPER
+}
+
+model UserRole {
+  userId String
+  role   Role
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, role])
+  @@map("user_roles")
+}
+
+// Short-lived nonce for wallet sign-in (SEP-10-style challenge/response).
+model AuthChallenge {
+  id         String    @id @default(cuid())
+  address    String
+  nonce      String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([address])
+  @@map("auth_challenges")
+}
+
+// Refresh-token-backed session (access JWTs are stateless).
+model Session {
+  id               String    @id @default(cuid())
+  userId           String
+  refreshTokenHash String    @unique
+  userAgent        String?
+  ip               String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+// Programmatic access for developers (SDK/MCP). Hashed at rest, scoped.
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  name       String
+  prefix     String    @unique // shown to the user; the rest is secret
+  keyHash    String
+  scopes     String[]  @default([])
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("api_keys")
+}
+
+// ── Vault (on-chain mirror) ──────────────────────────────────────────────────
+
+model VaultAccount {
+  id             String   @id @default(cuid())
+  address        String // Stellar G... address (may or may not map to a User)
+  asset          String // asset contract id (e.g. USDC SAC)
+  balance        Decimal  @default(0) @db.Decimal(20, 7)
+  locked         Decimal  @default(0) @db.Decimal(20, 7)
+  totalDeposited Decimal  @default(0) @db.Decimal(20, 7)
+  totalSpent     Decimal  @default(0) @db.Decimal(20, 7)
+  activeTasks    Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  @@unique([address, asset])
+  @@map("vault_accounts")
+}
+
+// ── Marketplace / providers ──────────────────────────────────────────────────
+
+enum ServiceStatus {
+  ACTIVE
+  INACTIVE
+  NEW
+}
+
+enum PricingModel {
+  X402
+  MPP
+}
+
+model Service {
+  id             String        @id @default(cuid())
+  providerId     String? // the User (provider) who owns it, if registered here
+  agentId        String        @unique // registry agent_id
+  name           String
+  description    String
+  category       String?
+  capabilities   String[]      @default([])
+  pricingModel   PricingModel
+  pricePerCall   Decimal       @db.Decimal(20, 7)
+  currency       String        @default("USDC")
+  endpoint       String
+  stellarAddress String
+  healthCheck    String?
+  manifestHash   String? // hash mirrored from the on-chain registry
+  status         ServiceStatus @default(NEW)
+  registeredAt   DateTime      @default(now())
+  lastSeen       DateTime?
+  updatedAt      DateTime      @updatedAt
+
+  provider   User?              @relation("ProviderServices", fields: [providerId], references: [id])
+  reputation ServiceReputation?
+  steps      TaskStep[]
+
+  @@index([providerId])
+  @@index([category])
+  @@map("services")
+}
+
+model ServiceReputation {
+  serviceId      String   @id
+  score          Float    @default(0)
+  totalJobs      Int      @default(0)
+  successfulJobs Int      @default(0)
+  failedJobs     Int      @default(0)
+  avgQuality     Float    @default(0)
+  avgLatencyMs   Int      @default(0)
+  lastUpdated    DateTime @updatedAt
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@map("service_reputation")
+}
+
+// ── Tasks & execution ────────────────────────────────────────────────────────
+
+enum TaskMode {
+  DIRECT // pay a chosen provider
+  SEARCH // find and pay one service
+  COMPOSE // multi-service job
+}
+
+enum TaskStatus {
+  DRAFT
+  PENDING
+  RUNNING
+  COMPLETED
+  CANCELLED
+  DISPUTED
+  FAILED
+}
+
+enum StepStatus {
+  PENDING
+  RUNNING
+  AWAITING_APPROVAL
+  RELEASED
+  FAILED
+  SKIPPED
+}
+
+model Task {
+  id          String     @id @default(cuid())
+  buyerId     String
+  title       String
+  description String?
+  mode        TaskMode
+  budget      Decimal    @db.Decimal(20, 7)
+  asset       String
+  status      TaskStatus @default(DRAFT)
+  vaultTaskId BigInt? // on-chain task id once locked
+  policyId    String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  buyer    User       @relation("BuyerTasks", fields: [buyerId], references: [id])
+  policy   Policy?    @relation(fields: [policyId], references: [id])
+  steps    TaskStep[]
+  payments Payment[]
+  disputes Dispute[]
+
+  @@index([buyerId])
+  @@index([status])
+  @@map("tasks")
+}
+
+model TaskStep {
+  id            String     @id @default(cuid())
+  taskId        String
+  index         Int
+  serviceId     String?
+  action        String
+  dependsOn     Int[]      @default([])
+  estimatedCost Decimal    @db.Decimal(20, 7)
+  status        StepStatus @default(PENDING)
+  output        String?
+  error         String?
+  qualityRating Float?
+  latencyMs     Int?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  task     Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  service  Service?  @relation(fields: [serviceId], references: [id])
+  payments Payment[]
+
+  @@unique([taskId, index])
+  @@index([taskId])
+  @@map("task_steps")
+}
+
+// ── Payments & settlement ────────────────────────────────────────────────────
+
+enum PaymentMethod {
+  X402
+  MPP
+  VAULT_RELEASE
+}
+
+enum PaymentStatus {
+  PENDING
+  SUBMITTED
+  CONFIRMED
+  FAILED
+}
+
+model Payment {
+  id             String        @id @default(cuid())
+  taskId         String?
+  stepId         String?
+  fromAddress    String
+  toAddress      String
+  asset          String
+  amount         Decimal       @db.Decimal(20, 7)
+  method         PaymentMethod
+  status         PaymentStatus @default(PENDING)
+  txHash         String?
+  idempotencyKey String        @unique // prevents double-spend on retries
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  task       Task?       @relation(fields: [taskId], references: [id])
+  step       TaskStep?   @relation(fields: [stepId], references: [id])
+  settlement Settlement?
+
+  @@index([taskId])
+  @@index([txHash])
+  @@map("payments")
+}
+
+model Settlement {
+  id         String   @id @default(cuid())
+  paymentId  String   @unique
+  reconciled Boolean  @default(false)
+  ledger     BigInt?
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@map("settlements")
+}
+
+// ── Privacy (policies & proofs) ──────────────────────────────────────────────
+
+model Policy {
+  id          String   @id @default(cuid())
+  userId      String
+  commitment  String // 32-byte commitment hash (hex)
+  isPrivate   Boolean  @default(true)
+  // Plaintext rule is NOT stored server-side unless the user explicitly opts in.
+  ruleSummary Json?
+  createdAt   DateTime @default(now())
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tasks  Task[]
+  proofs Proof[]
+
+  @@index([userId])
+  @@map("policies")
+}
+
+enum ProofStatus {
+  REQUESTED
+  GENERATING
+  READY
+  VERIFIED
+  REJECTED
+  FAILED
+}
+
+model Proof {
+  id        String      @id @default(cuid())
+  policyId  String?
+  taskId    String?
+  stepId    String?
+  status    ProofStatus @default(REQUESTED)
+  nullifier String?     @unique
+  proofRef  String? // storage reference to the proof blob
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  policy Policy? @relation(fields: [policyId], references: [id])
+
+  @@index([taskId])
+  @@map("proofs")
+}
+
+// ── Disputes ─────────────────────────────────────────────────────────────────
+
+enum DisputeStatus {
+  OPEN
+  RESOLVED
+  REJECTED
+}
+
+model Dispute {
+  id               String        @id @default(cuid())
+  taskId           String
+  raisedBy         String // wallet address
+  status           DisputeStatus @default(OPEN)
+  reason           String?
+  resolution       String?
+  refundToUser     Decimal?      @db.Decimal(20, 7)
+  payoutToProvider Decimal?      @db.Decimal(20, 7)
+  createdAt        DateTime      @default(now())
+  resolvedAt       DateTime?
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([status])
+  @@map("disputes")
+}
+
+// ── Chain indexer ────────────────────────────────────────────────────────────
+
+model ChainEvent {
+  id         String   @id @default(cuid())
+  contractId String
+  type       String
+  ledger     BigInt
+  txHash     String
+  cursor     String   @unique // dedupe + resume point
+  payload    Json
+  createdAt  DateTime @default(now())
+
+  @@index([contractId, type])
+  @@index([ledger])
+  @@map("chain_events")
+}
+
+// ── Webhooks & audit ─────────────────────────────────────────────────────────
+
+model Webhook {
+  id        String   @id @default(cuid())
+  userId    String
+  url       String
+  events    String[] @default([])
+  secret    String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("webhooks")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  target    String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([action])
+  @@map("audit_logs")
+}

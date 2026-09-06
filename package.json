@@ -34,7 +34,14 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:up": "docker compose up -d postgres redis",
+    "db:down": "docker compose down",
+    "db:generate": "npm run generate -w @clevercon/db",
+    "db:migrate": "npm run migrate -w @clevercon/db",
+    "db:seed": "npm run seed -w @clevercon/db",
+    "db:studio": "npm run studio -w @clevercon/db",
+    "setup": "cp -n .env.example .env || true && npm run db:up && npm run db:generate && npm run db:migrate && npm run db:seed"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
