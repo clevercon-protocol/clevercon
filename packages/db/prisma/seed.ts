@@ -3,6 +3,7 @@
  * testnet setup, so any contributor can run the app immediately in demo mode.
  * Idempotent: safe to run repeatedly.
  */
+import 'dotenv/config';
 import { PrismaClient, Role, PricingModel, ServiceStatus } from '@prisma/client';
 
 const prisma = new PrismaClient();

@@ -27,6 +27,20 @@ npm run db:studio      # browse the data
 `db:push` is for fast local dev. Authored, reproducible migrations come later via
 `npm run db:migrate` (prisma migrate dev) and `migrate:deploy` in production.
 
+## No Docker? Use an existing local Postgres
+
+`npm run setup` tolerates a missing Docker daemon. If you already have Postgres
+running, point `DATABASE_URL` in `.env` at it and run `npm run db:generate &&
+npm run db:push && npm run db:seed`. A unix-socket URL with a dedicated schema
+works without creating a database, e.g.:
+
+```
+DATABASE_URL=postgresql://<user>@localhost/<db>?host=/var/run/postgresql&schema=clevercon
+```
+
+The package builds to `dist` (consumed by services at runtime); `postinstall`
+runs `db:generate` + `db:build` so the client and JS output are always present.
+
 ## Model overview
 
 Identity/auth (`users`, `wallets`, `user_roles`, `auth_challenges`, `sessions`,

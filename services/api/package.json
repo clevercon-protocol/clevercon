@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nest start --watch -b swc",
     "build": "nest build -b swc",
-    "start": "node dist/main.js",
+    "start": "node dist/src/main.js",
     "test": "vitest run"
   },
   "dependencies": {
@@ -24,6 +24,7 @@
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
+    "@swc/cli": "^0.5.0",
     "@swc/core": "^1.7.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0",

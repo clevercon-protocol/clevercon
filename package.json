@@ -38,13 +38,14 @@
     "test": "vitest run",
     "db:up": "docker compose up -d postgres redis",
     "db:down": "docker compose down",
-    "db:generate": "npm run generate -w @clevercon/db",
-    "db:push": "npm run push -w @clevercon/db",
-    "db:migrate": "npm run migrate -w @clevercon/db",
-    "db:seed": "npm run seed -w @clevercon/db",
-    "db:studio": "npm run studio -w @clevercon/db",
-    "setup": "cp -n .env.example .env || true && npm run db:up && npm run db:generate && npm run db:push && npm run db:seed",
-    "postinstall": "npm run db:generate"
+    "db:generate": "prisma generate --schema packages/db/prisma/schema.prisma",
+    "db:build": "tsc -p packages/db/tsconfig.json",
+    "db:push": "prisma db push --schema packages/db/prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema packages/db/prisma/schema.prisma",
+    "db:studio": "prisma studio --schema packages/db/prisma/schema.prisma",
+    "db:seed": "tsx packages/db/prisma/seed.ts",
+    "setup": "cp -n .env.example .env || true && (npm run db:up || echo 'Docker unavailable — using an existing local Postgres (set DATABASE_URL in .env)') && npm run db:generate && npm run db:push && npm run db:seed",
+    "postinstall": "npm run db:generate && npm run db:build"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

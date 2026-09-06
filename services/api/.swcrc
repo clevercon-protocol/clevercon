@@ -1,0 +1,10 @@
+{
+  "$schema": "https://swc.rs/schema.json",
+  "jsc": {
+    "target": "es2022",
+    "parser": { "syntax": "typescript", "decorators": true },
+    "transform": { "legacyDecorator": true, "decoratorMetadata": true },
+    "keepClassNames": true
+  },
+  "module": { "type": "es6" }
+}
