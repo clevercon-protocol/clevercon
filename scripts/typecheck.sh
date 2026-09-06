@@ -4,7 +4,7 @@
 # own frontend tooling and is out of scope for backend hardening.
 set -e
 
-for dir in packages/common packages/db packages/agent-sdk packages/mcp packages/registry packages/orchestrator services/api packages/agents/*/; do
+for dir in packages/common packages/db packages/agent-sdk packages/mcp packages/registry packages/orchestrator services/api services/indexer packages/agents/*/; do
   dir="${dir%/}"
   if [ -f "$dir/tsconfig.json" ]; then
     echo "==> typecheck $dir"

@@ -406,6 +406,15 @@ model ChainEvent {
   @@map("chain_events")
 }
 
+// Resume state for the event indexer (one row per logical stream).
+model IndexerState {
+  key       String   @id
+  cursor    String?
+  updatedAt DateTime @updatedAt
+
+  @@map("indexer_state")
+}
+
 // ── Webhooks & audit ─────────────────────────────────────────────────────────
 
 model Webhook {
