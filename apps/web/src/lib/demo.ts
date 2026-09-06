@@ -26,6 +26,57 @@ export const demoCategories = [
   'Business Services',
 ];
 
+export interface DemoJob {
+  id: string;
+  service: string;
+  buyer: string;
+  amountUsdc: number;
+  status: 'pending' | 'completed' | 'disputed';
+  when: string;
+}
+
+export const demoEarnings = {
+  totalUsdc: 1284.5,
+  thisWeekUsdc: 96.2,
+  jobs: 143,
+  rating: 4.6,
+};
+
+export const demoJobs: DemoJob[] = [
+  {
+    id: 'j-1042',
+    service: 'Stellar Oracle',
+    buyer: 'GBUY…4K2',
+    amountUsdc: 0.05,
+    status: 'completed',
+    when: '2m ago',
+  },
+  {
+    id: 'j-1041',
+    service: 'Web Intel',
+    buyer: 'GXR9…7QP',
+    amountUsdc: 0.1,
+    status: 'pending',
+    when: '11m ago',
+  },
+  {
+    id: 'j-1039',
+    service: 'Analysis',
+    buyer: 'GA7M…H3D',
+    amountUsdc: 0.15,
+    status: 'completed',
+    when: '38m ago',
+  },
+  {
+    id: 'j-1036',
+    service: 'Reporter',
+    buyer: 'GDQC…AM2',
+    amountUsdc: 0.12,
+    status: 'disputed',
+    when: '1h ago',
+  },
+];
+
 export const demoServices: DemoService[] = [
   {
     id: 'stellar-oracle',

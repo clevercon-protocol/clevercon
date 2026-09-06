@@ -1,11 +1,5 @@
 import { Placeholder } from './Placeholder';
 
-export const Provider = () => (
-  <Placeholder
-    title="Provider console"
-    blurb="Register services, handle incoming jobs, track earnings and reputation."
-  />
-);
 export const Admin = () => (
   <Placeholder title="Admin console" blurb="Disputes, fees, users, and platform monitoring." />
 );
