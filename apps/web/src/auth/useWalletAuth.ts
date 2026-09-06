@@ -1,13 +1,25 @@
 import { useState } from 'react';
 import { isDemo } from '../config';
 import { useSession, type Role } from '../store/session';
+import { apiPost } from '../lib/api';
+import { connectWallet, signTransaction } from '../lib/wallet';
 
 const DEMO_ADDRESS = 'GDEMOBUYERPROVIDER0000000000000000000000000000000000000DEMO';
 
+interface ChallengeResp {
+  transaction: string;
+  networkPassphrase: string;
+}
+interface VerifyResp {
+  accessToken: string;
+  refreshToken: string;
+  roles: Role[];
+}
+
 /**
- * Sign-in flow. Demo mode (the default, and what the free Vercel deploy uses)
- * sets a mock session with no backend. Full mode connects a real wallet and
- * runs the /auth challenge/verify flow (wired in a later increment).
+ * Sign-in flow. Demo mode (default, and what the free Vercel deploy uses) sets a
+ * mock session with no backend. Full mode connects a real wallet and runs the
+ * SEP-10 flow against /auth: challenge -> signTransaction -> verify.
  */
 export function useWalletAuth() {
   const setSession = useSession((s) => s.setSession);
@@ -28,9 +40,16 @@ export function useWalletAuth() {
         });
         return;
       }
-      throw new Error(
-        'Full-mode wallet sign-in is not wired yet. Run in demo mode (VITE_BACKEND=demo).',
-      );
+      const { address } = await connectWallet();
+      const challenge = await apiPost<ChallengeResp>('/auth/challenge', { address });
+      const signed = await signTransaction(challenge.transaction, challenge.networkPassphrase);
+      const bundle = await apiPost<VerifyResp>('/auth/verify', { transaction: signed });
+      setSession({
+        address,
+        roles: bundle.roles,
+        accessToken: bundle.accessToken,
+        refreshToken: bundle.refreshToken,
+      });
     } catch (e) {
       setError((e as Error).message);
     } finally {
