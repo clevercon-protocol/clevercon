@@ -8,7 +8,8 @@ import { ApiKeysModule } from './api-keys/api-keys.module.js';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
+    // Load the root .env whether the app runs from repo root or from services/api.
+    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv, envFilePath: ['.env', '../../.env'] }),
     PrismaModule,
     HealthModule,
     AuthModule,

@@ -6,6 +6,8 @@ import type { AppEnv } from './config/env.validation.js';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
+  // Allow the SPA (dev on :5173, and the deployed origin) to call the API.
+  app.enableCors({ origin: true, credentials: true });
   app.enableShutdownHooks();
   const config = app.get(ConfigService<AppEnv, true>);
   const port = config.get('API_PORT', { infer: true });
