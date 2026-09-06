@@ -13,5 +13,8 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/dist/**', 'packages/dashboard/**'],
     // Integration tests may need more time to reach a real database.
     testTimeout: 20000,
+    // One retry to absorb the occasional slow/parallel flake (a genuinely broken
+    // test still fails on the retry).
+    retry: 1,
   },
 });

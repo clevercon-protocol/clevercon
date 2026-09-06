@@ -12,6 +12,12 @@ export const envSchema = z.object({
   REDIS_URL: z.string().url().optional(),
   JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
   JWT_ACCESS_TTL: z.string().default('15m'),
+  // SEP-10 wallet auth. If SERVER_SIGNING_KEY is unset, an ephemeral key is used
+  // (dev only; challenges do not survive a restart).
+  SERVER_SIGNING_KEY: z.string().optional(),
+  NETWORK_PASSPHRASE: z.string().default('Test SDF Network ; September 2015'),
+  HOME_DOMAIN: z.string().default('localhost'),
+  WEB_AUTH_DOMAIN: z.string().default('localhost'),
   LOG_LEVEL: z.string().default('info'),
 });
 

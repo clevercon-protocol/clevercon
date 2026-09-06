@@ -1,13 +1,10 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { StrKey, TransactionBuilder, WebAuth } from '@stellar/stellar-sdk';
 import { Role } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { generateNonce, randomToken, sha256 } from './crypto.util.js';
-import {
-  buildChallengeMessage,
-  isValidStellarAddress,
-  verifyStellarSignature,
-} from './signature.util.js';
+import { randomToken, sha256 } from './crypto.util.js';
+import { AUTH_CONFIG, type AuthConfig } from './auth.config.js';
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -28,41 +25,76 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
+    @Inject(AUTH_CONFIG) private readonly auth: AuthConfig,
   ) {}
 
-  /** Step 1: issue a nonce + message for the wallet to sign. */
-  async createChallenge(address: string): Promise<{ message: string; nonce: string }> {
-    if (!isValidStellarAddress(address)) throw new BadRequestException('Invalid Stellar address');
-    const nonce = generateNonce();
+  /** Step 1: build a SEP-10 challenge transaction for the wallet to sign. */
+  async createChallenge(
+    address: string,
+  ): Promise<{ transaction: string; networkPassphrase: string }> {
+    if (!StrKey.isValidEd25519PublicKey(address))
+      throw new BadRequestException('Invalid Stellar address');
+    const transaction = WebAuth.buildChallengeTx(
+      this.auth.serverKeypair,
+      address,
+      this.auth.homeDomain,
+      300,
+      this.auth.networkPassphrase,
+      this.auth.webAuthDomain,
+    );
+    const txHash = TransactionBuilder.fromXDR(transaction, this.auth.networkPassphrase)
+      .hash()
+      .toString('hex');
     await this.prisma.authChallenge.create({
-      data: { address, nonce, expiresAt: new Date(Date.now() + CHALLENGE_TTL_MS) },
+      data: { address, nonce: txHash, expiresAt: new Date(Date.now() + CHALLENGE_TTL_MS) },
     });
-    return { message: buildChallengeMessage(address, nonce), nonce };
+    return { transaction, networkPassphrase: this.auth.networkPassphrase };
   }
 
-  /** Step 2: verify the signature, upsert the user, and issue tokens. */
-  async verifyChallenge(
-    address: string,
-    nonce: string,
-    signature: string,
-    meta?: SessionMeta,
-  ): Promise<TokenBundle> {
-    const challenge = await this.prisma.authChallenge.findUnique({ where: { nonce } });
-    if (!challenge || challenge.address !== address)
+  /** Step 2: verify the signed challenge (SEP-10), upsert the user, issue tokens. */
+  async verifyChallenge(signedXdr: string, meta?: SessionMeta): Promise<TokenBundle> {
+    const serverId = this.auth.serverKeypair.publicKey();
+    let clientAccountID: string;
+    try {
+      const read = WebAuth.readChallengeTx(
+        signedXdr,
+        serverId,
+        this.auth.networkPassphrase,
+        this.auth.homeDomain,
+        this.auth.webAuthDomain,
+      );
+      clientAccountID = read.clientAccountID;
+      WebAuth.verifyChallengeTxSigners(
+        signedXdr,
+        serverId,
+        this.auth.networkPassphrase,
+        [clientAccountID],
+        this.auth.homeDomain,
+        this.auth.webAuthDomain,
+      );
+    } catch {
+      throw new UnauthorizedException('Invalid challenge signature');
+    }
+
+    // Replay protection: the tx hash is stable across signing; match a stored,
+    // unconsumed, unexpired challenge and consume it.
+    const txHash = TransactionBuilder.fromXDR(signedXdr, this.auth.networkPassphrase)
+      .hash()
+      .toString('hex');
+    const challenge = await this.prisma.authChallenge.findUnique({ where: { nonce: txHash } });
+    if (!challenge || challenge.address !== clientAccountID)
       throw new UnauthorizedException('Unknown challenge');
     if (challenge.consumedAt) throw new UnauthorizedException('Challenge already used');
     if (challenge.expiresAt < new Date()) throw new UnauthorizedException('Challenge expired');
-
-    const message = buildChallengeMessage(address, nonce);
-    if (!verifyStellarSignature(address, message, signature)) {
-      throw new UnauthorizedException('Signature verification failed');
-    }
-    await this.prisma.authChallenge.update({ where: { nonce }, data: { consumedAt: new Date() } });
+    await this.prisma.authChallenge.update({
+      where: { nonce: txHash },
+      data: { consumedAt: new Date() },
+    });
 
     const wallet = await this.prisma.wallet.upsert({
-      where: { address },
+      where: { address: clientAccountID },
       update: {},
-      create: { address, isPrimary: true, user: { create: {} } },
+      create: { address: clientAccountID, isPrimary: true, user: { create: {} } },
       include: { user: { include: { roles: true } } },
     });
 
@@ -74,7 +106,6 @@ export class AuthService {
     return this.issueTokens(wallet.userId, roles, meta);
   }
 
-  /** Rotate a refresh token: revoke the old session, mint a new pair. */
   async refresh(refreshToken: string, meta?: SessionMeta): Promise<TokenBundle> {
     const session = await this.prisma.session.findUnique({
       where: { refreshTokenHash: sha256(refreshToken) },

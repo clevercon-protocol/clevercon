@@ -5,7 +5,7 @@ import { parseBody } from './validate.js';
 import type { HttpRequest } from './types.js';
 
 const challengeSchema = z.object({ address: z.string() });
-const verifySchema = z.object({ address: z.string(), nonce: z.string(), signature: z.string() });
+const verifySchema = z.object({ transaction: z.string() });
 const refreshSchema = z.object({ refreshToken: z.string() });
 
 function metaOf(req: HttpRequest) {
@@ -24,11 +24,11 @@ export class AuthController {
     return this.auth.createChallenge(address);
   }
 
-  /** Verify the signed challenge and receive access + refresh tokens. */
+  /** Verify the signed challenge transaction and receive access + refresh tokens. */
   @Post('verify')
   verify(@Body() body: unknown, @Req() req: HttpRequest) {
-    const { address, nonce, signature } = parseBody(verifySchema, body);
-    return this.auth.verifyChallenge(address, nonce, signature, metaOf(req));
+    const { transaction } = parseBody(verifySchema, body);
+    return this.auth.verifyChallenge(transaction, metaOf(req));
   }
 
   /** Rotate tokens using a valid refresh token. */
