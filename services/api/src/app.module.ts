@@ -9,6 +9,7 @@ import { UsersModule } from './users/users.module.js';
 import { ServicesModule } from './services/services.module.js';
 import { VaultModule } from './vault/vault.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
+import { ProviderModule } from './provider/provider.module.js';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { TasksModule } from './tasks/tasks.module.js';
     ServicesModule,
     VaultModule,
     TasksModule,
+    ProviderModule,
   ],
 })
 export class AppModule {}
