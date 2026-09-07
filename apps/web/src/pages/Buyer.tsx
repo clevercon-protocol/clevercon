@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Wallet, Search, UserCheck, Workflow, Star, ListChecks } from 'lucide-react';
 import { demoCategories } from '../lib/demo';
 import { getServices } from '../lib/services';
-import { getVault } from '../lib/vault';
+import { getVault, getVaultStatus, depositToVault, withdrawFromVault } from '../lib/vault';
 import { getTasks, createTask, type HireMode } from '../lib/tasks';
 
 type Mode = 'direct' | 'search' | 'compose';
@@ -31,12 +31,29 @@ const MODES: { id: Mode; icon: typeof UserCheck; label: string; blurb: string }[
 ];
 
 function VaultCard() {
+  const qc = useQueryClient();
   const { data: vault, isLoading, error } = useQuery({ queryKey: ['vault'], queryFn: getVault });
+  const { data: status } = useQuery({ queryKey: ['vault-status'], queryFn: getVaultStatus });
+  const [amount, setAmount] = useState('');
   const rows: [string, number][] = [
     ['Balance', vault?.balance ?? 0],
     ['Available', vault?.available ?? 0],
     ['Locked', vault?.locked ?? 0],
   ];
+
+  const move = useMutation({
+    mutationFn: (kind: 'deposit' | 'withdraw') =>
+      kind === 'deposit' ? depositToVault(Number(amount)) : withdrawFromVault(Number(amount)),
+    onSuccess: () => {
+      setAmount('');
+      qc.invalidateQueries({ queryKey: ['vault'] });
+    },
+  });
+
+  const amountNum = Number(amount);
+  const canMove = amount !== '' && Number.isFinite(amountNum) && amountNum > 0 && !move.isPending;
+  const enabled = status?.depositsEnabled ?? false;
+
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
       <div className="flex items-center gap-2 text-slate-300">
@@ -55,13 +72,46 @@ function VaultCard() {
           </div>
         ))}
       </div>
-      <button
-        disabled
-        title="Connect a wallet in full mode to deposit"
-        className="mt-4 w-full rounded-xl bg-white/10 px-4 py-2 text-sm text-slate-400 cursor-not-allowed"
-      >
-        Deposit (demo)
-      </button>
+
+      {enabled ? (
+        <div className="mt-4">
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            inputMode="decimal"
+            placeholder="Amount (USDC)"
+            className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
+          />
+          <div className="mt-2 flex gap-2">
+            <button
+              onClick={() => canMove && move.mutate('deposit')}
+              disabled={!canMove}
+              className="flex-1 rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {move.isPending ? 'Signing…' : 'Deposit'}
+            </button>
+            <button
+              onClick={() => canMove && move.mutate('withdraw')}
+              disabled={!canMove}
+              className="flex-1 rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Withdraw
+            </button>
+          </div>
+          {move.error && (
+            <p className="mt-2 text-sm text-red-400">Transaction failed or rejected.</p>
+          )}
+          {move.isSuccess && (
+            <p className="mt-2 text-sm text-emerald-300">
+              Submitted. Your balance updates once the deposit is indexed.
+            </p>
+          )}
+        </div>
+      ) : (
+        <p className="mt-4 text-center text-xs text-slate-500">
+          On-chain deposits are not enabled in this environment.
+        </p>
+      )}
     </div>
   );
 }

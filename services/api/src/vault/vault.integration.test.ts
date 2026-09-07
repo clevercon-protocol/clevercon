@@ -20,8 +20,11 @@ describe.skipIf(!DB)('Vault + Tasks (integration, real Postgres)', () => {
     prisma = new PrismaClient();
     await prisma.$connect();
     const { VaultService } = await import('./vault.service.js');
+    const { VaultContractService } = await import('./vault-contract.service.js');
     const { TasksService } = await import('../tasks/tasks.service.js');
-    vault = new VaultService(prisma);
+    // Inactive vault contract (no id configured): getForUser never touches it.
+    const contract = new VaultContractService({ get: () => undefined } as never);
+    vault = new VaultService(prisma, contract);
     tasks = new TasksService(prisma);
   });
 

@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { VaultContractService } from './vault-contract.service.js';
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -10,7 +11,47 @@ function n(d: Prisma.Decimal): number {
 
 @Injectable()
 export class VaultService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly contract: VaultContractService,
+  ) {}
+
+  /** Whether on-chain deposit/withdraw is available in this environment. */
+  get depositsEnabled(): boolean {
+    return this.contract.active;
+  }
+
+  private async primaryAddress(userId: string): Promise<string> {
+    const wallets = await this.prisma.wallet.findMany({
+      where: { userId },
+      orderBy: { isPrimary: 'desc' },
+      select: { address: true },
+    });
+    if (wallets.length === 0) throw new NotFoundException('No wallet on this account');
+    return wallets[0].address;
+  }
+
+  /** Build an unsigned deposit XDR for the caller's wallet to sign. */
+  async buildDeposit(userId: string, amountUsdc: number) {
+    if (amountUsdc <= 0) throw new BadRequestException('Amount must be positive');
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildDepositXdr(address, amountUsdc);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build an unsigned withdraw XDR for the caller's wallet to sign. */
+  async buildWithdraw(userId: string, amountUsdc: number) {
+    if (amountUsdc <= 0) throw new BadRequestException('Amount must be positive');
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildWithdrawXdr(address, amountUsdc);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Submit a wallet-signed vault XDR; returns the on-chain tx hash. */
+  async submit(signedXdr: string) {
+    const txHash = await this.contract.submitSignedXdr(signedXdr);
+    return { txHash };
+  }
 
   /**
    * Aggregate the vault position for a user across every wallet they control.

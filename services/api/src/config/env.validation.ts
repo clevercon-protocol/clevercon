@@ -19,6 +19,12 @@ export const envSchema = z.object({
   HOME_DOMAIN: z.string().default('localhost'),
   WEB_AUTH_DOMAIN: z.string().default('localhost'),
   LOG_LEVEL: z.string().default('info'),
+  // CleverVault (Soroban). Optional: when the contract id is unset or a
+  // placeholder the vault client stays inactive and deposit/withdraw report
+  // "not configured" instead of touching the chain.
+  AGENT_VAULT_CONTRACT_ID: z.string().optional(),
+  STELLAR_RPC_URL: z.string().url().default('https://soroban-testnet.stellar.org'),
+  USDC_SAC: z.string().optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
