@@ -8,7 +8,7 @@ import { DemoBanner } from './DemoBanner';
 // place you acquire the role); the rest appear only once the role is held.
 const NAV: { to: string; label: string; role: Role; selfServe?: boolean }[] = [
   { to: '/app', label: 'Buyer', role: 'BUYER' },
-  { to: '/provider', label: 'Provider', role: 'PROVIDER' },
+  { to: '/provider', label: 'Provider', role: 'PROVIDER', selfServe: true },
   { to: '/admin', label: 'Admin', role: 'ADMIN' },
   { to: '/developers', label: 'Developer', role: 'DEVELOPER', selfServe: true },
 ];

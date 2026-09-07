@@ -1,5 +1,5 @@
 import { isDemo } from '../config';
-import { apiFetch } from './api';
+import { apiFetch, apiPost } from './api';
 import { demoEarnings, demoServices, demoJobs } from './demo';
 
 export interface ProviderServiceItem {
@@ -58,6 +58,40 @@ export async function getProviderServices(): Promise<ProviderServiceItem[]> {
     status: s.status,
     rating: s.reputation?.score ?? 0,
   }));
+}
+
+export interface RegisterServiceInput {
+  name: string;
+  description: string;
+  category?: string;
+  capabilities?: string[];
+  pricingModel: 'X402' | 'MPP';
+  pricePerCall: number;
+  endpoint: string;
+  stellarAddress: string;
+}
+
+/** Register a service (grants PROVIDER). Demo returns a local stand-in. */
+export async function registerService(input: RegisterServiceInput): Promise<ProviderServiceItem> {
+  if (isDemo()) {
+    return {
+      id: 'svc-' + Date.now(),
+      name: input.name,
+      category: input.category ?? null,
+      pricePerCall: input.pricePerCall,
+      status: 'ACTIVE',
+      rating: 0,
+    };
+  }
+  const s = await apiPost<ApiProviderService>('/provider/services', input);
+  return {
+    id: s.id,
+    name: s.name,
+    category: s.category,
+    pricePerCall: s.pricePerCall,
+    status: s.status,
+    rating: s.reputation?.score ?? 0,
+  };
 }
 
 /** The provider's earnings and recent jobs: demo data in demo mode, live API otherwise. */

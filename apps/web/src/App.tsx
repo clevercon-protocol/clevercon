@@ -39,7 +39,9 @@ export function App() {
             <Route
               path="/provider"
               element={
-                <RequireAuth role="PROVIDER">
+                // Self-serve: any signed-in user can register a service here,
+                // which grants the PROVIDER role.
+                <RequireAuth>
                   <Provider />
                 </RequireAuth>
               }

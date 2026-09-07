@@ -103,6 +103,29 @@ describe.skipIf(!DB)('Provider (integration, real Postgres)', () => {
     expect(e.recent[0].service).toBe('mine');
   });
 
+  it('registers a service, grants PROVIDER, and makes it visible to the owner', async () => {
+    const me = await prisma.user.create({ data: {} });
+    const svc = await provider.registerService(me.id, {
+      name: 'My Oracle',
+      description: 'live data',
+      category: 'Data & Oracles',
+      pricingModel: 'X402',
+      pricePerCall: 0.03,
+      endpoint: 'https://oracle.example.com',
+      stellarAddress: 'GPROVIDERADDR',
+    });
+    expect(svc.status).toBe('ACTIVE');
+    expect(svc.agentId).toMatch(/^my-oracle-/);
+    expect(svc.reputation).toEqual({ score: 0, totalJobs: 0 });
+
+    const roles = await prisma.userRole.findMany({ where: { userId: me.id } });
+    expect(roles.map((r: { role: string }) => r.role)).toEqual(['PROVIDER']);
+
+    const mine = await provider.listServices(me.id);
+    expect(mine.total).toBe(1);
+    expect(mine.items[0].name).toBe('My Oracle');
+  });
+
   it('returns zeros for a provider with no services', async () => {
     const me = await prisma.user.create({ data: {} });
     const e = await provider.earnings(me.id);

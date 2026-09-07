@@ -1,9 +1,31 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, PaymentStatus } from '@clevercon/db';
+import { Prisma, PaymentStatus, PricingModel, Role, ServiceStatus } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 const ZERO = new Prisma.Decimal(0);
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+export interface RegisterServiceParams {
+  name: string;
+  description: string;
+  category?: string;
+  capabilities?: string[];
+  pricingModel: PricingModel;
+  pricePerCall: number;
+  endpoint: string;
+  stellarAddress: string;
+}
+
+/** Stable, URL-safe id from a display name plus a short random suffix. */
+function toAgentId(name: string): string {
+  const slug =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'service';
+  return `${slug}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 type ServiceWithRep = Prisma.ServiceGetPayload<{ include: { reputation: true } }>;
 
@@ -25,6 +47,40 @@ function serializeService(s: ServiceWithRep) {
 @Injectable()
 export class ProviderService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Register a service under the current user and grant them the PROVIDER role,
+   * atomically (self-serve onboarding, mirrors API-key -> DEVELOPER). The
+   * service goes live immediately with a fresh (zeroed) reputation row.
+   */
+  async registerService(userId: string, params: RegisterServiceParams) {
+    const created = await this.prisma.$transaction(async (tx) => {
+      const service = await tx.service.create({
+        data: {
+          providerId: userId,
+          agentId: toAgentId(params.name),
+          name: params.name,
+          description: params.description,
+          category: params.category,
+          capabilities: params.capabilities ?? [],
+          pricingModel: params.pricingModel,
+          pricePerCall: new Prisma.Decimal(params.pricePerCall),
+          endpoint: params.endpoint,
+          stellarAddress: params.stellarAddress,
+          status: ServiceStatus.ACTIVE,
+          reputation: { create: {} },
+        },
+        include: { reputation: true },
+      });
+      await tx.userRole.upsert({
+        where: { userId_role: { userId, role: Role.PROVIDER } },
+        create: { userId, role: Role.PROVIDER },
+        update: {},
+      });
+      return service;
+    });
+    return serializeService(created);
+  }
 
   /** Services owned by the current provider. */
   async listServices(userId: string) {
