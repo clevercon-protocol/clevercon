@@ -1,5 +1,5 @@
 import { isDemo } from '../config';
-import { apiFetch } from './api';
+import { apiFetch, apiPost } from './api';
 
 export interface Task {
   id: string;
@@ -54,4 +54,32 @@ export async function getTasks(): Promise<Task[]> {
   if (isDemo()) return demoTasks;
   const res = await apiFetch<{ items: Task[] }>('/tasks');
   return res.items;
+}
+
+export type HireMode = 'DIRECT' | 'SEARCH' | 'COMPOSE';
+
+export interface CreateTaskInput {
+  title: string;
+  mode: HireMode;
+  budget: number;
+  serviceId?: string;
+  description?: string;
+}
+
+/** Create a task (hire). In demo mode this returns a local stand-in. */
+export async function createTask(input: CreateTaskInput): Promise<Task> {
+  if (isDemo()) {
+    return {
+      id: 't-' + Date.now(),
+      title: input.title,
+      mode: input.mode,
+      status: 'DRAFT',
+      budget: input.budget,
+      spent: 0,
+      stepCount: input.mode === 'DIRECT' ? 1 : 0,
+      completedSteps: 0,
+      createdAt: new Date().toISOString(),
+    };
+  }
+  return apiPost<Task>('/tasks', input);
 }

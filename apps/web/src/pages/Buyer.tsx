@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Wallet, Search, UserCheck, Workflow, Star, ListChecks } from 'lucide-react';
 import { demoCategories } from '../lib/demo';
 import { getServices } from '../lib/services';
 import { getVault } from '../lib/vault';
-import { getTasks } from '../lib/tasks';
+import { getTasks, createTask, type HireMode } from '../lib/tasks';
 
 type Mode = 'direct' | 'search' | 'compose';
 
@@ -66,8 +66,40 @@ function VaultCard() {
 }
 
 function HirePanel() {
+  const qc = useQueryClient();
   const [mode, setMode] = useState<Mode>('direct');
+  const [title, setTitle] = useState('');
+  const [budget, setBudget] = useState('');
+  const [serviceId, setServiceId] = useState('');
   const active = MODES.find((m) => m.id === mode)!;
+
+  const { data: services = [] } = useQuery({ queryKey: ['services'], queryFn: getServices });
+
+  const hire = useMutation({
+    mutationFn: () =>
+      createTask({
+        title: title.trim(),
+        mode: mode.toUpperCase() as HireMode,
+        budget: Number(budget),
+        serviceId: mode === 'direct' ? serviceId || undefined : undefined,
+      }),
+    onSuccess: () => {
+      setTitle('');
+      setBudget('');
+      setServiceId('');
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+
+  const budgetNum = Number(budget);
+  const canSubmit =
+    title.trim().length > 0 &&
+    budget !== '' &&
+    Number.isFinite(budgetNum) &&
+    budgetNum > 0 &&
+    (mode !== 'direct' || serviceId !== '') &&
+    !hire.isPending;
+
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
       <h2 className="font-semibold text-slate-300">Hire a service</h2>
@@ -84,12 +116,55 @@ function HirePanel() {
         ))}
       </div>
       <p className="mt-4 text-sm text-slate-400">{active.blurb}</p>
-      <button
-        disabled
-        className="mt-4 rounded-xl bg-white/10 px-4 py-2 text-sm text-slate-400 cursor-not-allowed"
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (canSubmit) hire.mutate();
+        }}
+        className="mt-4 space-y-3"
       >
-        Start (demo)
-      </button>
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder={mode === 'direct' ? 'What is this payment for?' : 'Describe the job'}
+          className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
+        />
+        {mode === 'direct' && (
+          <select
+            value={serviceId}
+            onChange={(e) => setServiceId(e.target.value)}
+            className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm"
+          >
+            <option value="">Choose a provider…</option>
+            {services.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} (${s.pricePerCall}/call)
+              </option>
+            ))}
+          </select>
+        )}
+        <input
+          value={budget}
+          onChange={(e) => setBudget(e.target.value)}
+          inputMode="decimal"
+          placeholder="Budget (USDC)"
+          className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
+        />
+        <button
+          type="submit"
+          disabled={!canSubmit}
+          className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {hire.isPending ? 'Creating…' : 'Create job'}
+        </button>
+        {hire.error && <p className="text-sm text-red-400">Could not create the job.</p>}
+        {hire.isSuccess && (
+          <p className="text-sm text-emerald-300">
+            Job created as a draft. It appears in Your jobs below.
+          </p>
+        )}
+      </form>
     </div>
   );
 }

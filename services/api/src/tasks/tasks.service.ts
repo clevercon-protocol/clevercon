@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, PaymentStatus, StepStatus, TaskStatus } from '@clevercon/db';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma, PaymentStatus, StepStatus, TaskMode, TaskStatus } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 type TaskRow = Prisma.TaskGetPayload<{
@@ -10,6 +10,14 @@ export interface ListTasksParams {
   status?: TaskStatus;
   limit?: number;
   offset?: number;
+}
+
+export interface CreateTaskParams {
+  title: string;
+  mode: TaskMode;
+  budget: number;
+  serviceId?: string;
+  description?: string;
 }
 
 function spentOf(t: TaskRow): number {
@@ -40,6 +48,53 @@ function serialize(t: TaskRow) {
 @Injectable()
 export class TasksService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Create a task for the current buyer. The task starts in DRAFT; no money
+   * moves here. For a DIRECT hire against a known service we seed the single
+   * step so its estimated cost is visible; SEARCH/COMPOSE plan their steps
+   * later (in the worker layer). Execution and settlement are wired separately.
+   */
+  async create(userId: string, params: CreateTaskParams) {
+    const data: Prisma.TaskCreateInput = {
+      buyer: { connect: { id: userId } },
+      title: params.title,
+      description: params.description,
+      mode: params.mode,
+      budget: new Prisma.Decimal(params.budget),
+      asset: 'USDC',
+      status: TaskStatus.DRAFT,
+    };
+
+    if (params.mode === TaskMode.DIRECT) {
+      if (!params.serviceId) {
+        throw new BadRequestException('A direct hire needs a serviceId');
+      }
+      const service = await this.prisma.service.findUnique({ where: { id: params.serviceId } });
+      if (!service) throw new BadRequestException('Unknown service');
+      data.steps = {
+        create: [
+          {
+            index: 0,
+            action: `Pay ${service.name}`,
+            service: { connect: { id: service.id } },
+            estimatedCost: service.pricePerCall,
+            status: StepStatus.PENDING,
+          },
+        ],
+      };
+    } else if (params.serviceId) {
+      // A starting service is optional for search/compose; ignore if absent.
+      const service = await this.prisma.service.findUnique({ where: { id: params.serviceId } });
+      if (!service) throw new BadRequestException('Unknown service');
+    }
+
+    const created = await this.prisma.task.create({
+      data,
+      include: { steps: { select: { id: true, status: true } }, payments: true },
+    });
+    return serialize(created);
+  }
 
   /** The current user's tasks, newest first. */
   async listForUser(userId: string, params: ListTasksParams) {

@@ -1,6 +1,6 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
-import { TaskStatus } from '@clevercon/db';
+import { TaskMode, TaskStatus } from '@clevercon/db';
 import { TasksService } from './tasks.service.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
@@ -13,11 +13,24 @@ const listQuery = z.object({
   offset: z.coerce.number().int().nonnegative().optional(),
 });
 
+const createSchema = z.object({
+  title: z.string().min(1).max(200),
+  mode: z.nativeEnum(TaskMode),
+  budget: z.number().positive(),
+  serviceId: z.string().optional(),
+  description: z.string().max(2000).optional(),
+});
+
 /** The current session's tasks (buyer-scoped). */
 @Controller('tasks')
 @UseGuards(JwtAuthGuard)
 export class TasksController {
   constructor(private readonly tasks: TasksService) {}
+
+  @Post()
+  create(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    return this.tasks.create(user.userId, parseBody(createSchema, body));
+  }
 
   @Get()
   list(@CurrentUser() user: AuthUser, @Query() query: unknown) {

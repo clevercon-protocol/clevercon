@@ -33,6 +33,7 @@ describe.skipIf(!DB)('Vault + Tasks (integration, real Postgres)', () => {
     await prisma.payment.deleteMany();
     await prisma.task.deleteMany();
     await prisma.vaultAccount.deleteMany();
+    await prisma.service.deleteMany();
     await prisma.user.deleteMany();
   });
 
@@ -131,5 +132,47 @@ describe.skipIf(!DB)('Vault + Tasks (integration, real Postgres)', () => {
     const one = await tasks.getForUser(buyer.id, task.id);
     expect(one.id).toBe(task.id);
     await expect(tasks.getForUser(other.id, task.id)).rejects.toThrow();
+  });
+
+  it('creates a DIRECT task with a seeded step and rejects a bad direct hire', async () => {
+    const buyer = await prisma.user.create({ data: {} });
+    const service = await prisma.service.create({
+      data: {
+        agentId: 'svc-a',
+        name: 'Svc A',
+        description: 'x',
+        capabilities: ['x'],
+        pricingModel: 'X402',
+        pricePerCall: '0.05',
+        endpoint: 'http://localhost',
+        stellarAddress: 'GSVC',
+        status: 'ACTIVE',
+      },
+    });
+
+    const created = await tasks.create(buyer.id, {
+      title: 'Pay Svc A',
+      mode: 'DIRECT',
+      budget: 1,
+      serviceId: service.id,
+    });
+    expect(created.status).toBe('DRAFT');
+    expect(created.stepCount).toBe(1);
+    expect(created.spent).toBe(0);
+
+    // DIRECT with no service, and with an unknown service, must be rejected.
+    await expect(
+      tasks.create(buyer.id, { title: 'x', mode: 'DIRECT', budget: 1 }),
+    ).rejects.toThrow();
+    await expect(
+      tasks.create(buyer.id, { title: 'x', mode: 'DIRECT', budget: 1, serviceId: 'nope' }),
+    ).rejects.toThrow();
+
+    // COMPOSE needs no service and seeds no steps.
+    const compose = await tasks.create(buyer.id, { title: 'Big job', mode: 'COMPOSE', budget: 5 });
+    expect(compose.stepCount).toBe(0);
+
+    const list = await tasks.listForUser(buyer.id, {});
+    expect(list.total).toBe(2);
   });
 });
