@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Wallet, Search, UserCheck, Workflow, Star } from 'lucide-react';
-import { demoVault, demoCategories } from '../lib/demo';
+import { Wallet, Search, UserCheck, Workflow, Star, ListChecks } from 'lucide-react';
+import { demoCategories } from '../lib/demo';
 import { getServices } from '../lib/services';
+import { getVault } from '../lib/vault';
+import { getTasks } from '../lib/tasks';
 
 type Mode = 'direct' | 'search' | 'compose';
 
@@ -28,10 +30,11 @@ const MODES: { id: Mode; icon: typeof UserCheck; label: string; blurb: string }[
 ];
 
 function VaultCard() {
+  const { data: vault, isLoading, error } = useQuery({ queryKey: ['vault'], queryFn: getVault });
   const rows: [string, number][] = [
-    ['Balance', demoVault.balanceUsdc],
-    ['Available', demoVault.availableUsdc],
-    ['Locked', demoVault.lockedUsdc],
+    ['Balance', vault?.balance ?? 0],
+    ['Available', vault?.available ?? 0],
+    ['Locked', vault?.locked ?? 0],
   ];
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
@@ -39,13 +42,14 @@ function VaultCard() {
         <Wallet size={18} className="text-violet-300" />
         <h2 className="font-semibold">Your vault</h2>
       </div>
+      {error && <p className="mt-3 text-sm text-red-400">Could not load your vault.</p>}
       <div className="mt-4 grid grid-cols-3 gap-3">
         {rows.map(([label, v]) => (
           <div
             key={label}
             className="rounded-xl border border-white/10 bg-white/[0.02] p-3 text-center"
           >
-            <div className="text-lg font-bold">${v.toFixed(2)}</div>
+            <div className="text-lg font-bold">{isLoading ? '…' : `$${v.toFixed(2)}`}</div>
             <div className="text-xs text-slate-500">{label} USDC</div>
           </div>
         ))}
@@ -86,6 +90,56 @@ function HirePanel() {
       >
         Start (demo)
       </button>
+    </div>
+  );
+}
+
+const STATUS_TINT: Record<string, string> = {
+  RUNNING: 'text-sky-300',
+  PENDING: 'text-amber-300',
+  COMPLETED: 'text-emerald-300',
+  DRAFT: 'text-slate-400',
+  CANCELLED: 'text-slate-500',
+  DISPUTED: 'text-red-300',
+  FAILED: 'text-red-400',
+};
+
+function TasksCard() {
+  const {
+    data: tasks = [],
+    isLoading,
+    error,
+  } = useQuery({ queryKey: ['tasks'], queryFn: getTasks });
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+      <div className="flex items-center gap-2 text-slate-300">
+        <ListChecks size={18} className="text-violet-300" />
+        <h2 className="font-semibold">Your jobs</h2>
+      </div>
+      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading jobs…</p>}
+      {error && <p className="mt-4 text-sm text-red-400">Could not load your jobs.</p>}
+      {!isLoading && !error && tasks.length === 0 && (
+        <p className="mt-4 text-sm text-slate-500">No jobs yet. Hire a service to get started.</p>
+      )}
+      <div className="mt-4 space-y-2">
+        {tasks.map((t) => (
+          <div
+            key={t.id}
+            className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3"
+          >
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{t.title}</div>
+              <div className="text-xs text-slate-500">
+                {t.mode} · {t.completedSteps}/{t.stepCount} steps · ${t.spent.toFixed(2)} of $
+                {t.budget.toFixed(2)}
+              </div>
+            </div>
+            <span className={`ml-3 shrink-0 text-xs ${STATUS_TINT[t.status] ?? 'text-slate-400'}`}>
+              {t.status}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -171,6 +225,7 @@ export function Buyer() {
         <VaultCard />
         <HirePanel />
       </div>
+      <TasksCard />
       <Marketplace />
     </section>
   );

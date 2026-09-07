@@ -7,6 +7,8 @@ import { AuthModule } from './auth/auth.module.js';
 import { ApiKeysModule } from './api-keys/api-keys.module.js';
 import { UsersModule } from './users/users.module.js';
 import { ServicesModule } from './services/services.module.js';
+import { VaultModule } from './vault/vault.module.js';
+import { TasksModule } from './tasks/tasks.module.js';
 
 @Module({
   imports: [
@@ -22,6 +24,8 @@ import { ServicesModule } from './services/services.module.js';
     ApiKeysModule,
     UsersModule,
     ServicesModule,
+    VaultModule,
+    TasksModule,
   ],
 })
 export class AppModule {}

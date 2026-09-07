@@ -48,6 +48,10 @@ describe.skipIf(!DB)('Services + Users (integration, real Postgres)', () => {
   });
 
   beforeEach(async () => {
+    // FK-safe reset: clear dependents before the rows they reference.
+    await prisma.payment.deleteMany();
+    await prisma.task.deleteMany();
+    await prisma.vaultAccount.deleteMany();
     await prisma.service.deleteMany();
     await prisma.user.deleteMany();
   });
