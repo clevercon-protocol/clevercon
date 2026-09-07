@@ -27,7 +27,13 @@ describe.skipIf(!DB)('ApiKeyService (integration, real Postgres)', () => {
   });
 
   beforeEach(async () => {
-    await prisma.user.deleteMany(); // cascades api_keys
+    // FK-safe reset: clear dependents (possibly left by other integration
+    // files in a shared-DB run) before deleting users. api_keys cascade.
+    await prisma.payment.deleteMany();
+    await prisma.task.deleteMany();
+    await prisma.vaultAccount.deleteMany();
+    await prisma.service.deleteMany();
+    await prisma.user.deleteMany();
     const user = await prisma.user.create({ data: {} });
     userId = user.id;
   });
@@ -44,6 +50,13 @@ describe.skipIf(!DB)('ApiKeyService (integration, real Postgres)', () => {
     // lastUsedAt is bumped on verify
     const row = await prisma.apiKey.findUnique({ where: { id: created.id } });
     expect(row.lastUsedAt).not.toBeNull();
+  });
+
+  it('grants the DEVELOPER role on key creation (idempotently)', async () => {
+    await service.create(userId, 'k1');
+    await service.create(userId, 'k2');
+    const roles = await prisma.userRole.findMany({ where: { userId } });
+    expect(roles.map((r: { role: string }) => r.role)).toEqual(['DEVELOPER']);
   });
 
   it('rejects a wrong secret and a malformed key', async () => {

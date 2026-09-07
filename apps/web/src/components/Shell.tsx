@@ -4,11 +4,13 @@ import { useSession, type Role } from '../store/session';
 import { useWalletAuth } from '../auth/useWalletAuth';
 import { DemoBanner } from './DemoBanner';
 
-const NAV: { to: string; label: string; role: Role }[] = [
+// `selfServe` links are shown to any signed-in user (the console itself is the
+// place you acquire the role); the rest appear only once the role is held.
+const NAV: { to: string; label: string; role: Role; selfServe?: boolean }[] = [
   { to: '/app', label: 'Buyer', role: 'BUYER' },
   { to: '/provider', label: 'Provider', role: 'PROVIDER' },
   { to: '/admin', label: 'Admin', role: 'ADMIN' },
-  { to: '/developers', label: 'Developer', role: 'DEVELOPER' },
+  { to: '/developers', label: 'Developer', role: 'DEVELOPER', selfServe: true },
 ];
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -26,7 +28,7 @@ export function Shell({ children }: { children: ReactNode }) {
             CleverCon
           </Link>
           <div className="flex items-center gap-4 text-sm">
-            {NAV.filter((n) => roles.includes(n.role)).map((n) => (
+            {NAV.filter((n) => roles.includes(n.role) || (n.selfServe && session)).map((n) => (
               <Link
                 key={n.to}
                 to={n.to}

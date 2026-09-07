@@ -46,7 +46,9 @@ export function App() {
             <Route
               path="/developers"
               element={
-                <RequireAuth role="DEVELOPER">
+                // Self-serve: any signed-in user can get API access here.
+                // Creating a key grants the DEVELOPER role.
+                <RequireAuth>
                   <Developer />
                 </RequireAuth>
               }

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Role } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { safeEqualHex, sha256 } from '../auth/crypto.util.js';
 import { generateApiKey, parseApiKey } from './api-key.util.js';
@@ -13,11 +14,23 @@ export interface ApiKeyIdentity {
 export class ApiKeyService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Create a key. The full secret is returned once and never stored. */
+  /**
+   * Create a key. The full secret is returned once and never stored. Creating a
+   * key also grants the caller the DEVELOPER role (self-serve API access), done
+   * atomically with the key so the two can never diverge.
+   */
   async create(userId: string, name: string, scopes: string[] = []) {
     const { key, prefix, secret } = generateApiKey();
-    const record = await this.prisma.apiKey.create({
-      data: { userId, name, prefix, keyHash: sha256(secret), scopes },
+    const record = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.apiKey.create({
+        data: { userId, name, prefix, keyHash: sha256(secret), scopes },
+      });
+      await tx.userRole.upsert({
+        where: { userId_role: { userId, role: Role.DEVELOPER } },
+        create: { userId, role: Role.DEVELOPER },
+        update: {},
+      });
+      return created;
     });
     return { id: record.id, name, prefix, scopes, key };
   }

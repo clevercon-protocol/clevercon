@@ -45,6 +45,12 @@ describe.skipIf(!DB)('AuthService SEP-10 (integration, real Postgres)', () => {
 
   beforeEach(async () => {
     await prisma.authChallenge.deleteMany();
+    // FK-safe reset: clear dependents (possibly left by other integration files
+    // in a shared-DB run) before deleting users.
+    await prisma.payment.deleteMany();
+    await prisma.task.deleteMany();
+    await prisma.vaultAccount.deleteMany();
+    await prisma.service.deleteMany();
     await prisma.user.deleteMany();
   });
 
