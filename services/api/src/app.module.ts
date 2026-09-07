@@ -5,15 +5,23 @@ import { PrismaModule } from './prisma/prisma.module.js';
 import { HealthModule } from './health/health.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { ApiKeysModule } from './api-keys/api-keys.module.js';
+import { UsersModule } from './users/users.module.js';
+import { ServicesModule } from './services/services.module.js';
 
 @Module({
   imports: [
     // Load the root .env whether the app runs from repo root or from services/api.
-    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv, envFilePath: ['.env', '../../.env'] }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validate: validateEnv,
+      envFilePath: ['.env', '../../.env'],
+    }),
     PrismaModule,
     HealthModule,
     AuthModule,
     ApiKeysModule,
+    UsersModule,
+    ServicesModule,
   ],
 })
 export class AppModule {}

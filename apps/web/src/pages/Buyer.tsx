@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Wallet, Search, UserCheck, Workflow, Star } from 'lucide-react';
-import { demoVault, demoServices, demoCategories } from '../lib/demo';
+import { demoVault, demoCategories } from '../lib/demo';
+import { getServices } from '../lib/services';
 
 type Mode = 'direct' | 'search' | 'compose';
 
@@ -91,15 +93,21 @@ function HirePanel() {
 function Marketplace() {
   const [q, setQ] = useState('');
   const [cat, setCat] = useState<string>('All');
+  const {
+    data: services = [],
+    isLoading,
+    error,
+  } = useQuery({ queryKey: ['services'], queryFn: getServices });
+
   const results = useMemo(() => {
-    return demoServices.filter(
+    return services.filter(
       (s) =>
         (cat === 'All' || s.category === cat) &&
         (q === '' ||
           s.name.toLowerCase().includes(q.toLowerCase()) ||
           s.description.toLowerCase().includes(q.toLowerCase())),
     );
-  }, [q, cat]);
+  }, [services, q, cat]);
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
@@ -122,13 +130,15 @@ function Marketplace() {
           ))}
         </select>
       </div>
+      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading services…</p>}
+      {error && <p className="mt-4 text-sm text-red-400">Could not load services.</p>}
       <div className="mt-4 grid sm:grid-cols-2 gap-3">
         {results.map((s) => (
           <div key={s.id} className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
             <div className="flex items-center justify-between">
               <span className="font-medium">{s.name}</span>
               <span className="inline-flex items-center gap-1 text-xs text-amber-300">
-                <Star size={12} /> {s.rating}
+                <Star size={12} /> {s.rating.toFixed(1)}
               </span>
             </div>
             <p className="mt-1 text-sm text-slate-400">{s.description}</p>
@@ -140,7 +150,9 @@ function Marketplace() {
             </div>
           </div>
         ))}
-        {results.length === 0 && <p className="text-sm text-slate-500">No services match.</p>}
+        {!isLoading && !error && results.length === 0 && (
+          <p className="text-sm text-slate-500">No services match.</p>
+        )}
       </div>
     </div>
   );

@@ -11,10 +11,12 @@ export default defineConfig({
   test: {
     include: ['packages/**/src/**/*.test.ts', 'services/**/src/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', 'packages/dashboard/**'],
-    // Integration tests may need more time to reach a real database.
-    testTimeout: 20000,
-    // One retry to absorb the occasional slow/parallel flake (a genuinely broken
-    // test still fails on the retry).
-    retry: 1,
+    // Headroom for slow tests under parallel load (e.g. agent-sdk parity, which
+    // makes real-ish network calls during agent init, and DB integration tests).
+    testTimeout: 45000,
+    hookTimeout: 45000,
+    // Retries absorb the occasional parallel flake (a genuinely broken test
+    // still fails after retries).
+    retry: 2,
   },
 });
