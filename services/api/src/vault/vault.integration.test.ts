@@ -131,6 +131,11 @@ describe.skipIf(!DB)('Vault + Tasks (integration, real Postgres)', () => {
 
     const one = await tasks.getForUser(buyer.id, task.id);
     expect(one.id).toBe(task.id);
+    // detail view exposes ordered steps and confirmed-first receipts
+    expect(one.steps).toHaveLength(2);
+    expect(one.steps[0].index).toBe(0);
+    expect(one.receipts).toHaveLength(2);
+    expect(one.receipts.map((r: { status: string }) => r.status)).toContain('CONFIRMED');
     await expect(tasks.getForUser(other.id, task.id)).rejects.toThrow();
   });
 

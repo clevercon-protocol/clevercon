@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Wallet, Search, UserCheck, Workflow, Star, ListChecks } from 'lucide-react';
 import { demoCategories } from '../lib/demo';
@@ -198,9 +199,10 @@ function TasksCard() {
       )}
       <div className="mt-4 space-y-2">
         {tasks.map((t) => (
-          <div
+          <Link
             key={t.id}
-            className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3"
+            to={`/app/tasks/${t.id}`}
+            className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3 hover:border-violet-500/40 hover:bg-white/[0.04]"
           >
             <div className="min-w-0">
               <div className="truncate text-sm font-medium">{t.title}</div>
@@ -212,7 +214,7 @@ function TasksCard() {
             <span className={`ml-3 shrink-0 text-xs ${STATUS_TINT[t.status] ?? 'text-slate-400'}`}>
               {t.status}
             </span>
-          </div>
+          </Link>
         ))}
       </div>
     </div>

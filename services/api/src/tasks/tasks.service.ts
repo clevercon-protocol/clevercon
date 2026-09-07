@@ -116,12 +116,53 @@ export class TasksService {
     return { items: rows.map(serialize), total, limit: take, offset: skip };
   }
 
+  /** Full detail for one task: summary plus its steps and payment receipts. */
   async getForUser(userId: string, id: string) {
     const t = await this.prisma.task.findFirst({
       where: { id, buyerId: userId },
-      include: { steps: { select: { id: true, status: true } }, payments: true },
+      include: {
+        steps: { orderBy: { index: 'asc' }, include: { service: { select: { name: true } } } },
+        payments: { orderBy: { createdAt: 'desc' } },
+      },
     });
     if (!t) throw new NotFoundException('Task not found');
-    return serialize(t);
+    const spent = Number(
+      t.payments
+        .filter((p) => p.status === PaymentStatus.CONFIRMED)
+        .reduce((acc, p) => acc.add(p.amount), new Prisma.Decimal(0)),
+    );
+    return {
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      mode: t.mode,
+      status: t.status,
+      budget: Number(t.budget),
+      spent,
+      asset: t.asset,
+      stepCount: t.steps.length,
+      completedSteps: t.steps.filter((s) => s.status === StepStatus.RELEASED).length,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+      steps: t.steps.map((s) => ({
+        index: s.index,
+        action: s.action,
+        status: s.status,
+        estimatedCost: Number(s.estimatedCost),
+        service: s.service?.name ?? null,
+        latencyMs: s.latencyMs,
+        error: s.error,
+      })),
+      receipts: t.payments.map((p) => ({
+        id: p.id,
+        amount: Number(p.amount),
+        asset: p.asset,
+        status: p.status,
+        method: p.method,
+        toAddress: p.toAddress,
+        txHash: p.txHash,
+        createdAt: p.createdAt,
+      })),
+    };
   }
 }

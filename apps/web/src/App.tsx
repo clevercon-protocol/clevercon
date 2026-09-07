@@ -6,6 +6,7 @@ import { RequireAuth } from './components/RequireAuth';
 import { Landing } from './pages/Landing';
 import { Connect } from './pages/Connect';
 import { Buyer } from './pages/Buyer';
+import { TaskDetail } from './pages/TaskDetail';
 import { Provider } from './pages/Provider';
 import { Admin } from './pages/Admin';
 import { Developer } from './pages/Developer';
@@ -24,6 +25,14 @@ export function App() {
               element={
                 <RequireAuth role="BUYER">
                   <Buyer />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/app/tasks/:id"
+              element={
+                <RequireAuth role="BUYER">
+                  <TaskDetail />
                 </RequireAuth>
               }
             />

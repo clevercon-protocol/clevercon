@@ -56,6 +56,70 @@ export async function getTasks(): Promise<Task[]> {
   return res.items;
 }
 
+export interface TaskStepView {
+  index: number;
+  action: string;
+  status: string;
+  estimatedCost: number;
+  service: string | null;
+  latencyMs: number | null;
+  error: string | null;
+}
+
+export interface Receipt {
+  id: string;
+  amount: number;
+  asset: string;
+  status: string;
+  method: string;
+  toAddress: string;
+  txHash: string | null;
+  createdAt: string;
+}
+
+export interface TaskDetail extends Task {
+  description: string | null;
+  steps: TaskStepView[];
+  receipts: Receipt[];
+}
+
+/** One task's full detail (steps + receipts): demo synthesises from local data. */
+export async function getTask(id: string): Promise<TaskDetail> {
+  if (isDemo()) {
+    const base = demoTasks.find((t) => t.id === id) ?? demoTasks[0];
+    return {
+      ...base,
+      id,
+      description: null,
+      steps: Array.from({ length: base.stepCount }, (_, i) => ({
+        index: i,
+        action: `Step ${i + 1}`,
+        status: i < base.completedSteps ? 'RELEASED' : 'PENDING',
+        estimatedCost: base.budget / Math.max(base.stepCount, 1),
+        service: 'Stellar Oracle',
+        latencyMs: i < base.completedSteps ? 820 : null,
+        error: null,
+      })),
+      receipts:
+        base.spent > 0
+          ? [
+              {
+                id: 'r-1',
+                amount: base.spent,
+                asset: 'USDC',
+                status: 'CONFIRMED',
+                method: 'X402',
+                toAddress: 'GSTELLARORACLE000DEMO',
+                txHash: 'demo-tx-hash',
+                createdAt: base.createdAt,
+              },
+            ]
+          : [],
+    };
+  }
+  return apiFetch<TaskDetail>(`/tasks/${id}`);
+}
+
 export type HireMode = 'DIRECT' | 'SEARCH' | 'COMPOSE';
 
 export interface CreateTaskInput {
