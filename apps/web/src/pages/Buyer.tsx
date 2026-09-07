@@ -265,7 +265,11 @@ function Marketplace() {
       {error && <p className="mt-4 text-sm text-red-400">Could not load services.</p>}
       <div className="mt-4 grid sm:grid-cols-2 gap-3">
         {results.map((s) => (
-          <div key={s.id} className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+          <Link
+            key={s.id}
+            to={`/app/marketplace/${s.id}`}
+            className="rounded-xl border border-white/10 bg-white/[0.02] p-4 hover:border-violet-500/40 hover:bg-white/[0.04]"
+          >
             <div className="flex items-center justify-between">
               <span className="font-medium">{s.name}</span>
               <span className="inline-flex items-center gap-1 text-xs text-amber-300">
@@ -279,7 +283,7 @@ function Marketplace() {
               </span>
               <span className="text-slate-300">${s.pricePerCall}/call</span>
             </div>
-          </div>
+          </Link>
         ))}
         {!isLoading && !error && results.length === 0 && (
           <p className="text-sm text-slate-500">No services match.</p>
