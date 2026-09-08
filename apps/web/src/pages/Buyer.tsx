@@ -1,12 +1,27 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Wallet, Search, UserCheck, Workflow, Star, ListChecks, ShieldCheck } from 'lucide-react';
+import {
+  Wallet,
+  Search,
+  UserCheck,
+  Workflow,
+  Star,
+  ListChecks,
+  ShieldCheck,
+  Copy,
+  Check,
+  ExternalLink,
+  Plus,
+} from 'lucide-react';
+import { isDemo } from '../config';
+import { useSession } from '../store/session';
 import { demoCategories } from '../lib/demo';
 import { getServices } from '../lib/services';
 import { getVault, getVaultStatus, depositToVault, withdrawFromVault } from '../lib/vault';
 import { getTasks, createTask, type HireMode } from '../lib/tasks';
 import { getPolicies, createPolicy } from '../lib/policies';
+import { getWalletBalances, addUsdcTrustline, explorerAccount } from '../lib/stellar';
 
 type Mode = 'direct' | 'search' | 'compose';
 
@@ -30,6 +45,101 @@ const MODES: { id: Mode; icon: typeof UserCheck; label: string; blurb: string }[
     blurb: 'A multi-service job where a delegate plans steps and pays per step.',
   },
 ];
+
+function WalletCard() {
+  const qc = useQueryClient();
+  const address = useSession((s) => s.session?.address ?? '');
+  const [copied, setCopied] = useState(false);
+  const {
+    data: bal,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['wallet-balances', address],
+    queryFn: () => getWalletBalances(address),
+    enabled: !!address,
+  });
+
+  const trust = useMutation({
+    mutationFn: () => addUsdcTrustline(address),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['wallet-balances', address] }),
+  });
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-xs text-slate-400">
+            {address.slice(0, 6)}…{address.slice(-4)}
+          </span>
+          <button
+            onClick={() => {
+              navigator.clipboard?.writeText(address);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            }}
+            className="text-slate-500 hover:text-white"
+            aria-label="Copy address"
+          >
+            {copied ? <Check size={13} /> : <Copy size={13} />}
+          </button>
+          <a
+            href={explorerAccount(address)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-slate-500 hover:text-white"
+            aria-label="View on explorer"
+          >
+            <ExternalLink size={13} />
+          </a>
+        </div>
+
+        <div className="flex items-center gap-5">
+          <div>
+            <div className="text-xs text-slate-500">XLM</div>
+            <div className="font-mono text-sm font-semibold text-emerald-300">
+              {isLoading ? '…' : (bal?.xlm ?? 0).toFixed(2)}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-slate-500">USDC</div>
+            {isLoading ? (
+              <div className="font-mono text-sm">…</div>
+            ) : bal?.usdc != null ? (
+              <div className="font-mono text-sm font-semibold text-sky-300">
+                {bal.usdc.toFixed(2)}
+              </div>
+            ) : (
+              <div className="text-xs italic text-slate-500">No trustline</div>
+            )}
+          </div>
+        </div>
+
+        {bal && bal.funded && bal.usdc == null && (
+          <button
+            onClick={() => trust.mutate()}
+            disabled={trust.isPending}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-sky-900/50 bg-sky-950/30 px-3 py-1.5 text-xs text-sky-300 hover:bg-sky-950/50 disabled:opacity-50"
+          >
+            {trust.isPending ? '…' : <Plus size={12} />}
+            {trust.isPending ? 'Adding…' : 'Add USDC trustline'}
+          </button>
+        )}
+      </div>
+      {error && (
+        <p className="mt-2 text-xs text-red-400">Could not load wallet balances from Horizon.</p>
+      )}
+      {trust.error && (
+        <p className="mt-2 text-xs text-red-400">Trustline transaction failed or was rejected.</p>
+      )}
+      {!isLoading && bal && !bal.funded && (
+        <p className="mt-2 text-xs text-amber-300">
+          This wallet is not funded on testnet yet. Fund it, then reload.
+        </p>
+      )}
+    </div>
+  );
+}
 
 function VaultCard() {
   const qc = useQueryClient();
@@ -466,6 +576,7 @@ export function Buyer() {
           Fund a vault, hire services, and keep your spending rules private.
         </p>
       </div>
+      {!isDemo() && <WalletCard />}
       <div className="grid lg:grid-cols-2 gap-6">
         <VaultCard />
         <HirePanel />
