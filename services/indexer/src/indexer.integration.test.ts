@@ -87,6 +87,24 @@ describe.skipIf(!DB)('Indexer (integration, real Postgres)', () => {
     expect(Number(again.balance)).toBe(3);
   });
 
+  it('applies each event exactly once across overlapping batches (concurrency-safe)', async () => {
+    // First batch: only the deposit.
+    expect(await indexer.persistEvents([vaultEv('d1', 'deposit_event', '50000000')])).toBe(1);
+    // Overlapping batch: the same deposit (already seen) plus a new withdraw. The
+    // duplicate must be skipped, so the deposit is not applied twice.
+    expect(
+      await indexer.persistEvents([
+        vaultEv('d1', 'deposit_event', '50000000'),
+        vaultEv('w1', 'withdraw_event', '20000000'),
+      ]),
+    ).toBe(1);
+    const row = await prisma.vaultAccount.findUnique({
+      where: { address_asset: { address: 'GUSER', asset: 'CASSET' } },
+    });
+    expect(Number(row.balance)).toBe(3); // 5 deposited once, 2 withdrawn once
+    expect(Number(row.totalDeposited)).toBe(5);
+  });
+
   it('round-trips the resume cursor', async () => {
     expect(await indexer.getCursor('vault')).toBeNull();
     await indexer.setCursor('vault', 'abc');

@@ -234,7 +234,14 @@ function WalletCard() {
 
 function VaultCard() {
   const qc = useQueryClient();
-  const { data: vault, isLoading, error } = useQuery({ queryKey: ['vault'], queryFn: getVault });
+  // Poll the vault (a cheap DB read) so a deposit/withdraw shows up on its own
+  // once the indexer mirrors it, without a manual reload. One observer polls;
+  // the shared cache updates the stat row too.
+  const {
+    data: vault,
+    isLoading,
+    error,
+  } = useQuery({ queryKey: ['vault'], queryFn: getVault, refetchInterval: 12_000 });
   const { data: status } = useQuery({ queryKey: ['vault-status'], queryFn: getVaultStatus });
   const [amount, setAmount] = useState('');
   const rows: [string, number, string][] = [
