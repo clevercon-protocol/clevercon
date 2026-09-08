@@ -57,6 +57,28 @@ const primaryBtn =
 
 const explorerContract = (id: string) => `https://stellar.expert/explorer/testnet/contract/${id}`;
 
+/** Pull a readable message out of an API/wallet error. */
+function readError(e: unknown): string {
+  if (!(e instanceof Error)) return 'Something went wrong.';
+  const m = e.message;
+  const jsonStart = m.indexOf('{');
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(m.slice(jsonStart));
+      if (parsed?.message) return String(parsed.message);
+    } catch {
+      // fall through to the raw message
+    }
+  }
+  return m;
+}
+
+const VAULT_HINTS: Record<string, string> = {
+  Balance: 'Total USDC held in the vault for you (deposits minus withdrawals).',
+  Available: 'Balance minus locked. This is what you can withdraw or spend right now.',
+  Locked: 'Reserved by active jobs. Released back to available when a job finishes.',
+};
+
 const STATUS_TINT: Record<string, string> = {
   RUNNING: 'text-sky-300',
   PENDING: 'text-amber-300',
@@ -193,9 +215,7 @@ function WalletCard() {
       {error && (
         <p className="mt-2 text-xs text-red-400">Could not load wallet balances from Horizon.</p>
       )}
-      {trust.error && (
-        <p className="mt-2 text-xs text-red-400">Trustline transaction failed or was rejected.</p>
-      )}
+      {trust.error && <p className="mt-2 text-xs text-red-400">{readError(trust.error)}</p>}
       {!isLoading && bal && !bal.funded && (
         <p className="mt-2 text-xs text-amber-300">
           This wallet is not funded on testnet yet. Fund it, then reload.
@@ -258,7 +278,8 @@ function VaultCard() {
           {rows.map(([label, v, tint]) => (
             <div
               key={label}
-              className="rounded-xl border border-white/[0.08] bg-black/20 p-3 text-center"
+              title={VAULT_HINTS[label]}
+              className="cursor-help rounded-xl border border-white/[0.08] bg-black/20 p-3 text-center"
             >
               <div className={`text-lg font-bold ${tint}`}>
                 {isLoading ? '…' : `$${v.toFixed(2)}`}
@@ -269,6 +290,9 @@ function VaultCard() {
             </div>
           ))}
         </div>
+        <p className="mt-2 text-[11px] text-slate-500">
+          Balance held in the vault. Available = balance minus what active jobs have locked.
+        </p>
 
         {enabled ? (
           <div className="mt-4">
@@ -295,9 +319,7 @@ function VaultCard() {
                 Withdraw
               </button>
             </div>
-            {move.error && (
-              <p className="mt-2 text-sm text-red-400">Transaction failed or rejected.</p>
-            )}
+            {move.error && <p className="mt-2 text-sm text-red-400">{readError(move.error)}</p>}
             {move.isSuccess && (
               <p className="mt-2 text-sm text-emerald-300">
                 Submitted. Your balance updates once the deposit is indexed.

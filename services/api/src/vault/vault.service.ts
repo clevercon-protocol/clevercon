@@ -78,8 +78,14 @@ export class VaultService {
       };
     }
 
+    // The app denominates the vault in USDC. Filter to the configured USDC asset
+    // so we never sum balances across different assets (e.g. a legacy XLM
+    // position + a USDC position) into one misleading number.
+    const where: { address: { in: string[] }; asset?: string } = { address: { in: addresses } };
+    if (this.contract.usdcAsset) where.asset = this.contract.usdcAsset;
+
     const rows = await this.prisma.vaultAccount.findMany({
-      where: { address: { in: addresses } },
+      where,
       orderBy: { balance: 'desc' },
     });
 

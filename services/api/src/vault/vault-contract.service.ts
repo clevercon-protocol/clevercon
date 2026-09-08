@@ -42,6 +42,11 @@ export class VaultContractService {
     return this.active ? this.contractId : '';
   }
 
+  /** The configured USDC asset (SAC) the app denominates the vault in. */
+  get usdcAsset(): string {
+    return this.usdcSac;
+  }
+
   constructor(config: ConfigService<AppEnv, true>) {
     this.contractId = config.get('AGENT_VAULT_CONTRACT_ID', { infer: true }) ?? '';
     this.rpcUrl = config.get('STELLAR_RPC_URL', { infer: true });
@@ -121,7 +126,17 @@ export class VaultContractService {
     const tx = TransactionBuilder.fromXDR(signedXdr, this.passphrase);
     const response = await server.sendTransaction(tx);
     if (response.status === 'ERROR') {
-      throw new ServiceUnavailableException('Vault transaction was rejected on submit');
+      // Surface the actual reason (e.g. txBadSeq, txInsufficientBalance) so the
+      // UI can tell the user why, instead of a generic failure.
+      let reason = 'rejected';
+      try {
+        reason = response.errorResult?.result().switch().name ?? reason;
+      } catch {
+        // keep the generic reason
+      }
+      throw new ServiceUnavailableException(
+        `Vault transaction rejected on submit: ${reason}. If it says txBadSeq, wait a few seconds and retry.`,
+      );
     }
     for (let i = 0; i < 30; i++) {
       await new Promise((r) => setTimeout(r, 1000));
