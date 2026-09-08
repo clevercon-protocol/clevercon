@@ -10,6 +10,7 @@ import { ServicesModule } from './services/services.module.js';
 import { VaultModule } from './vault/vault.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
 import { ProviderModule } from './provider/provider.module.js';
+import { PoliciesModule } from './policies/policies.module.js';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { ProviderModule } from './provider/provider.module.js';
     VaultModule,
     TasksModule,
     ProviderModule,
+    PoliciesModule,
   ],
 })
 export class AppModule {}

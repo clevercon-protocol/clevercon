@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Wallet, Search, UserCheck, Workflow, Star, ListChecks } from 'lucide-react';
+import { Wallet, Search, UserCheck, Workflow, Star, ListChecks, ShieldCheck } from 'lucide-react';
 import { demoCategories } from '../lib/demo';
 import { getServices } from '../lib/services';
 import { getVault, getVaultStatus, depositToVault, withdrawFromVault } from '../lib/vault';
 import { getTasks, createTask, type HireMode } from '../lib/tasks';
+import { getPolicies, createPolicy } from '../lib/policies';
 
 type Mode = 'direct' | 'search' | 'compose';
 
@@ -271,6 +272,119 @@ function TasksCard() {
   );
 }
 
+function PoliciesCard() {
+  const qc = useQueryClient();
+  const [ceiling, setCeiling] = useState('');
+  const [cap, setCap] = useState('');
+  const [isPrivate, setIsPrivate] = useState(false);
+  const {
+    data: policies = [],
+    isLoading,
+    error,
+  } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
+
+  const save = useMutation({
+    mutationFn: () =>
+      createPolicy(
+        {
+          perPaymentCeilingUsdc: ceiling ? Number(ceiling) : undefined,
+          rollingCapUsdc: cap ? Number(cap) : undefined,
+          rollingWindowSecs: cap ? 86400 : undefined,
+        },
+        isPrivate,
+      ),
+    onSuccess: () => {
+      setCeiling('');
+      setCap('');
+      qc.invalidateQueries({ queryKey: ['policies'] });
+    },
+  });
+
+  const hasRule = Number(ceiling) > 0 || Number(cap) > 0;
+  const canSave = hasRule && !save.isPending;
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+      <div className="flex items-center gap-2 text-slate-300">
+        <ShieldCheck size={18} className="text-violet-300" />
+        <h2 className="font-semibold">Spending policies</h2>
+      </div>
+      <p className="mt-1 text-sm text-slate-400">
+        Bound how funds can be spent. Transparent mode stores the rule; private (zero-knowledge)
+        mode is coming with the proving layer.
+      </p>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (canSave) save.mutate();
+        }}
+        className="mt-4 grid sm:grid-cols-2 gap-2"
+      >
+        <input
+          value={ceiling}
+          onChange={(e) => setCeiling(e.target.value)}
+          inputMode="decimal"
+          placeholder="Per-payment ceiling (USDC)"
+          className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
+        />
+        <input
+          value={cap}
+          onChange={(e) => setCap(e.target.value)}
+          inputMode="decimal"
+          placeholder="Daily cap (USDC)"
+          className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
+        />
+        <label className="flex items-center gap-2 text-sm text-slate-400">
+          <input
+            type="checkbox"
+            checked={isPrivate}
+            onChange={(e) => setIsPrivate(e.target.checked)}
+          />
+          Private (zero-knowledge)
+        </label>
+        <button
+          type="submit"
+          disabled={!canSave}
+          className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {save.isPending ? 'Saving…' : 'Create policy'}
+        </button>
+      </form>
+      {save.error && (
+        <p className="mt-2 text-sm text-amber-300">
+          Private policies are not enabled yet. Uncheck it to save a transparent policy for now.
+        </p>
+      )}
+
+      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading policies…</p>}
+      {error && <p className="mt-4 text-sm text-red-400">Could not load your policies.</p>}
+      {!isLoading && !error && policies.length === 0 && (
+        <p className="mt-4 text-sm text-slate-500">No policies yet.</p>
+      )}
+      <div className="mt-4 space-y-2">
+        {policies.map((p) => (
+          <div key={p.id} className="rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-300">
+                {p.isPrivate ? 'Private' : 'Transparent'} policy
+              </span>
+              <span className="font-mono text-xs text-slate-500">{p.commitment.slice(0, 10)}…</span>
+            </div>
+            {p.rules && (
+              <div className="mt-1 text-xs text-slate-500">
+                {p.rules.perPaymentCeilingUsdc != null &&
+                  `ceiling $${p.rules.perPaymentCeilingUsdc} `}
+                {p.rules.rollingCapUsdc != null && `· daily cap $${p.rules.rollingCapUsdc}`}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Marketplace() {
   const [q, setQ] = useState('');
   const [cat, setCat] = useState<string>('All');
@@ -357,6 +471,7 @@ export function Buyer() {
         <HirePanel />
       </div>
       <TasksCard />
+      <PoliciesCard />
       <Marketplace />
     </section>
   );
