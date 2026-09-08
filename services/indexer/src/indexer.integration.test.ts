@@ -40,7 +40,19 @@ describe.skipIf(!DB)('Indexer (integration, real Postgres)', () => {
   beforeEach(async () => {
     await prisma.chainEvent.deleteMany();
     await prisma.indexerState.deleteMany();
+    await prisma.vaultAccount.deleteMany();
   });
+
+  function vaultEv(cursor: string, type: string, amount: string): NormalizedEvent {
+    return {
+      contractId: 'CVAULT',
+      type,
+      ledger: 1n,
+      txHash: 'tx' + cursor,
+      cursor,
+      payload: { topics: ['GUSER', 'CASSET'], data: { amount } },
+    };
+  }
 
   it('persists events and dedupes on cursor', async () => {
     expect(await indexer.persistEvents([ev('c1'), ev('c2')])).toBe(2);
@@ -51,6 +63,28 @@ describe.skipIf(!DB)('Indexer (integration, real Postgres)', () => {
 
   it('no-ops on empty input', async () => {
     expect(await indexer.persistEvents([])).toBe(0);
+  });
+
+  it('projects deposit/withdraw events (stroops -> USDC) into the vault_accounts mirror', async () => {
+    await indexer.persistEvents([
+      vaultEv('d1', 'deposit_event', '50000000'), // +5.0 USDC (50,000,000 stroops)
+      vaultEv('w1', 'withdraw_event', '20000000'), // -2.0 USDC
+    ]);
+    const row = await prisma.vaultAccount.findUnique({
+      where: { address_asset: { address: 'GUSER', asset: 'CASSET' } },
+    });
+    expect(Number(row.balance)).toBe(3); // net 3.0 USDC, not 30000000 stroops
+    expect(Number(row.totalDeposited)).toBe(5);
+
+    // Replaying the same events must not double-count (exactly-once projection).
+    await indexer.persistEvents([
+      vaultEv('d1', 'deposit_event', '50000000'),
+      vaultEv('w1', 'withdraw_event', '20000000'),
+    ]);
+    const again = await prisma.vaultAccount.findUnique({
+      where: { address_asset: { address: 'GUSER', asset: 'CASSET' } },
+    });
+    expect(Number(again.balance)).toBe(3);
   });
 
   it('round-trips the resume cursor', async () => {
