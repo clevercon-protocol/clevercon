@@ -1,6 +1,13 @@
+import { config as loadDotenv } from 'dotenv';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { rpc as SorobanRpc } from '@stellar/stellar-sdk';
 import { PrismaClient } from '@clevercon/db';
 import { loadConfig } from './config.js';
+
+// Load the repo-root .env so the indexer picks up DATABASE_URL, the RPC URL, and
+// INDEXER_* config even when started from the package dir (npm run -w).
+loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env') });
 import { Indexer } from './indexer.js';
 import { decodeSorobanEvent } from './events.js';
 

@@ -2,7 +2,9 @@ import { z } from 'zod';
 
 const schema = z.object({
   DATABASE_URL: z.string().url(),
-  SOROBAN_RPC_URL: z.string().url().default('https://soroban-testnet.stellar.org'),
+  // Accept STELLAR_RPC_URL as an alias so the indexer shares the API's .env key.
+  SOROBAN_RPC_URL: z.string().url().optional(),
+  STELLAR_RPC_URL: z.string().url().optional(),
   // Comma-separated contract ids to index (vault, policy-verifier, ...).
   INDEXER_CONTRACT_IDS: z.string().default(''),
   INDEXER_START_LEDGER: z.coerce.number().int().positive().optional(),
@@ -28,7 +30,7 @@ export function loadConfig(env: Record<string, unknown> = process.env): IndexerC
   const c = parsed.data;
   return {
     databaseUrl: c.DATABASE_URL,
-    sorobanRpcUrl: c.SOROBAN_RPC_URL,
+    sorobanRpcUrl: c.SOROBAN_RPC_URL ?? c.STELLAR_RPC_URL ?? 'https://soroban-testnet.stellar.org',
     contractIds: c.INDEXER_CONTRACT_IDS.split(',')
       .map((s) => s.trim())
       .filter(Boolean),

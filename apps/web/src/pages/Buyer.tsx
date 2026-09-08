@@ -57,20 +57,25 @@ const primaryBtn =
 
 const explorerContract = (id: string) => `https://stellar.expert/explorer/testnet/contract/${id}`;
 
-/** Pull a readable message out of an API/wallet error. */
+/** Pull a readable message out of an API or wallet error (which is often not an Error). */
 function readError(e: unknown): string {
-  if (!(e instanceof Error)) return 'Something went wrong.';
-  const m = e.message;
-  const jsonStart = m.indexOf('{');
+  let raw = '';
+  if (e instanceof Error) raw = e.message;
+  else if (typeof e === 'string') raw = e;
+  else if (e && typeof e === 'object' && 'message' in e)
+    raw = String((e as { message: unknown }).message);
+  if (!raw) return 'The wallet or network rejected the transaction. Please try again.';
+  // apiFetch throws `API <status>: <json body>`; surface the JSON message.
+  const jsonStart = raw.indexOf('{');
   if (jsonStart >= 0) {
     try {
-      const parsed = JSON.parse(m.slice(jsonStart));
+      const parsed = JSON.parse(raw.slice(jsonStart));
       if (parsed?.message) return String(parsed.message);
     } catch {
       // fall through to the raw message
     }
   }
-  return m;
+  return raw;
 }
 
 const VAULT_HINTS: Record<string, string> = {
