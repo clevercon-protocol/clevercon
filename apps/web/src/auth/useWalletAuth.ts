@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { isDemo } from '../config';
 import { useSession, type Role } from '../store/session';
 import { apiPost } from '../lib/api';
-import { connectWallet, signTransaction } from '../lib/wallet';
+import { connectWallet, signTransaction, clearSelectedWallet } from '../lib/wallet';
 
 const DEMO_ADDRESS = 'GDEMOBUYERPROVIDER0000000000000000000000000000000000000DEMO';
 
@@ -57,5 +57,10 @@ export function useWalletAuth() {
     }
   }
 
-  return { connect, disconnect: clear, busy, error };
+  const disconnect = () => {
+    clearSelectedWallet();
+    clear();
+  };
+
+  return { connect, disconnect, busy, error };
 }

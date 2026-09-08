@@ -78,6 +78,21 @@ function readError(e: unknown): string {
   return raw;
 }
 
+/**
+ * Refresh vault + wallet balances now and again after a short delay: an on-chain
+ * change can take a few seconds to reflect in Horizon and the indexed mirror, so
+ * one immediate refetch may still read the pre-transaction state.
+ */
+function refreshBalancesSoon(qc: ReturnType<typeof useQueryClient>) {
+  const bump = () => {
+    qc.invalidateQueries({ queryKey: ['vault'] });
+    qc.invalidateQueries({ queryKey: ['wallet-balances'] });
+  };
+  bump();
+  setTimeout(bump, 4000);
+  setTimeout(bump, 9000);
+}
+
 const VAULT_HINTS: Record<string, string> = {
   Balance: 'Total USDC held in the vault for you (deposits minus withdrawals).',
   Available: 'Balance minus locked. This is what you can withdraw or spend right now.',
@@ -152,7 +167,7 @@ function WalletCard() {
 
   const trust = useMutation({
     mutationFn: () => addUsdcTrustline(address),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['wallet-balances', address] }),
+    onSuccess: () => refreshBalancesSoon(qc),
   });
 
   return (
@@ -255,7 +270,9 @@ function VaultCard() {
       kind === 'deposit' ? depositToVault(Number(amount)) : withdrawFromVault(Number(amount)),
     onSuccess: () => {
       setAmount('');
-      qc.invalidateQueries({ queryKey: ['vault'] });
+      // Both the vault mirror and the wallet balance change (funds move between
+      // wallet and vault); refresh both, allowing for propagation lag.
+      refreshBalancesSoon(qc);
     },
   });
 

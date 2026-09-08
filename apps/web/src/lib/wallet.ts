@@ -5,6 +5,12 @@ import type { ISupportedWallet, StellarWalletsKit } from '@creit.tech/stellar-wa
 // than shipped in the main bundle. The instance is memoised after first use.
 let kitPromise: Promise<StellarWalletsKit> | null = null;
 
+// Which wallet the user picked (freighter, xbull, ...). Persisted so that after a
+// page refresh, when the session is restored but the kit is a fresh instance, we
+// can re-select the wallet before signing (otherwise the kit throws
+// "Please set the wallet first").
+const WALLET_ID_KEY = 'clevercon.walletId';
+
 function getKit(): Promise<StellarWalletsKit> {
   if (!kitPromise) {
     kitPromise = import('@creit.tech/stellar-wallets-kit').then((m) => {
@@ -23,6 +29,17 @@ function getKit(): Promise<StellarWalletsKit> {
   return kitPromise;
 }
 
+/** Ensure the kit has a wallet selected (re-applying the persisted choice). */
+function ensureWallet(kit: StellarWalletsKit): void {
+  const id = typeof localStorage !== 'undefined' ? localStorage.getItem(WALLET_ID_KEY) : null;
+  if (id) kit.setWallet(id);
+}
+
+/** Forget the selected wallet (call on disconnect). */
+export function clearSelectedWallet(): void {
+  if (typeof localStorage !== 'undefined') localStorage.removeItem(WALLET_ID_KEY);
+}
+
 /** Open the wallet picker and return the connected address. */
 export async function connectWallet(): Promise<{ address: string }> {
   const kit = await getKit();
@@ -32,6 +49,7 @@ export async function connectWallet(): Promise<{ address: string }> {
         onWalletSelected: async (option: ISupportedWallet) => {
           try {
             kit.setWallet(option.id);
+            if (typeof localStorage !== 'undefined') localStorage.setItem(WALLET_ID_KEY, option.id);
             const { address } = await kit.getAddress();
             if (!address) throw new Error('Wallet returned no address');
             resolve({ address });
@@ -47,6 +65,9 @@ export async function connectWallet(): Promise<{ address: string }> {
 /** Sign a transaction XDR with the connected wallet. */
 export async function signTransaction(xdr: string, networkPassphrase: string): Promise<string> {
   const kit = await getKit();
+  // The kit instance does not survive a page refresh; re-select the persisted
+  // wallet so signing works even when only the session was restored.
+  ensureWallet(kit);
   const { signedTxXdr } = await kit.signTransaction(xdr, { networkPassphrase });
   if (!signedTxXdr) throw new Error('Wallet returned no signed transaction');
   return signedTxXdr;
