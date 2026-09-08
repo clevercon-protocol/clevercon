@@ -72,7 +72,9 @@ about this matters for anyone evaluating it.
 Private spending policies (see [ROADMAP.md](../ROADMAP.md)) let a user commit a
 spending rule that the vault enforces on every release without revealing it. At
 that point the orchestrator cannot spend outside the rule the user set, which
-removes most of the task-decomposition and agent-selection trust above.
+removes most of the task-decomposition and agent-selection trust above. The
+commitment, proof, and verification protocol is specified in
+[docs/private-policies.md](private-policies.md).
 
 ## Task lifecycle
 

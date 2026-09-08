@@ -68,6 +68,10 @@ The zero-knowledge engine for this already runs on testnet as a separate
 project, [CipherMit](https://github.com/Bosun-Josh121/ciphermit). Bringing it
 into CleverVault is the main build.
 
+The commitment scheme, public-input encoding, nullifier derivation, and threat
+model are frozen in [docs/private-policies.md](docs/private-policies.md), the
+normative spec the vault, verifier, circuit, and prover all build against.
+
 ## Harden CleverVault
 
 - Extend the test suite to cover the policy-verification path end to end.
