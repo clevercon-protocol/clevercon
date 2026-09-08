@@ -22,10 +22,15 @@ export async function getVault(): Promise<Vault> {
   return { balance: res.balance, available: res.available, locked: res.locked };
 }
 
-/** Whether on-chain deposit/withdraw is available (false in demo/unconfigured). */
-export async function getVaultStatus(): Promise<{ depositsEnabled: boolean }> {
-  if (isDemo()) return { depositsEnabled: false };
-  return apiFetch<{ depositsEnabled: boolean }>('/vault/status');
+export interface VaultStatus {
+  depositsEnabled: boolean;
+  contractAddress: string;
+}
+
+/** Deposit availability + the deployed contract address (empty in demo/unconfigured). */
+export async function getVaultStatus(): Promise<VaultStatus> {
+  if (isDemo()) return { depositsEnabled: false, contractAddress: '' };
+  return apiFetch<VaultStatus>('/vault/status');
 }
 
 interface BuildResp {

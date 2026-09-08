@@ -16,9 +16,12 @@ export class VaultService {
     private readonly contract: VaultContractService,
   ) {}
 
-  /** Whether on-chain deposit/withdraw is available in this environment. */
-  get depositsEnabled(): boolean {
-    return this.contract.active;
+  /** Deposit availability + the deployed contract address (for UI transparency). */
+  get status(): { depositsEnabled: boolean; contractAddress: string } {
+    return {
+      depositsEnabled: this.contract.active,
+      contractAddress: this.contract.contractAddress,
+    };
   }
 
   private async primaryAddress(userId: string): Promise<string> {

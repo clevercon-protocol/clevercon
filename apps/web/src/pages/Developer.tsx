@@ -11,6 +11,7 @@ import {
   type CreatedApiKey,
 } from '../lib/apiKeys';
 import { refreshRoles } from '../lib/sessionSync';
+import { PageHeader, StatCard } from '../components/ui';
 
 function when(v: string | null): string {
   if (!v) return 'never';
@@ -157,14 +158,11 @@ function Stats() {
         { icon: Activity, label: 'Calls this week', value: 'n/a' },
         { icon: KeyRound, label: 'Active keys', value: String(activeKeys) },
       ];
+  const accents = ['sky', 'violet', 'emerald'];
   return (
     <div className="grid grid-cols-3 gap-3">
-      {stats.map((s) => (
-        <div key={s.label} className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-          <s.icon size={16} className="text-violet-300" />
-          <div className="mt-2 text-xl font-bold">{s.value}</div>
-          <div className="text-xs text-slate-500">{s.label}</div>
-        </div>
+      {stats.map((s, i) => (
+        <StatCard key={s.label} icon={s.icon} accent={accents[i]} label={s.label} value={s.value} />
       ))}
     </div>
   );
@@ -173,11 +171,10 @@ function Stats() {
 export function Developer() {
   return (
     <section className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Developer portal</h1>
-        <p className="mt-1 text-slate-400">API keys, usage, webhooks, and SDK/MCP docs.</p>
-      </div>
-
+      <PageHeader
+        title="Developer portal"
+        subtitle="API keys, usage, webhooks, and SDK/MCP docs."
+      />
       <Stats />
       <ApiKeys />
 

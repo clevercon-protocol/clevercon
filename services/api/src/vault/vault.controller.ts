@@ -20,10 +20,10 @@ export class VaultController {
     return this.vault.getForUser(user.userId);
   }
 
-  /** Whether on-chain deposit/withdraw is available in this environment. */
+  /** Deposit availability + the deployed vault contract address. */
   @Get('status')
   status() {
-    return { depositsEnabled: this.vault.depositsEnabled };
+    return this.vault.status;
   }
 
   /** Build an unsigned deposit XDR for the caller's wallet to sign. */

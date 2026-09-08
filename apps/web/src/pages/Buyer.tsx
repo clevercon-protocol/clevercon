@@ -13,6 +13,9 @@ import {
   Check,
   ExternalLink,
   Plus,
+  Vault as VaultIcon,
+  Coins,
+  Briefcase,
 } from 'lucide-react';
 import { isDemo } from '../config';
 import { useSession } from '../store/session';
@@ -22,6 +25,7 @@ import { getVault, getVaultStatus, depositToVault, withdrawFromVault } from '../
 import { getTasks, createTask, type HireMode } from '../lib/tasks';
 import { getPolicies, createPolicy } from '../lib/policies';
 import { getWalletBalances, addUsdcTrustline, explorerAccount } from '../lib/stellar';
+import { Card, CardHeader, PageHeader, StatCard, EmptyState, Badge } from '../components/ui';
 
 type Mode = 'direct' | 'search' | 'compose';
 
@@ -46,6 +50,65 @@ const MODES: { id: Mode; icon: typeof UserCheck; label: string; blurb: string }[
   },
 ];
 
+const inputCls =
+  'w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-500/40';
+const primaryBtn =
+  'rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:from-violet-500 hover:to-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 transition-all';
+
+const explorerContract = (id: string) => `https://stellar.expert/explorer/testnet/contract/${id}`;
+
+const STATUS_TINT: Record<string, string> = {
+  RUNNING: 'text-sky-300',
+  PENDING: 'text-amber-300',
+  COMPLETED: 'text-emerald-300',
+  RELEASED: 'text-emerald-300',
+  CONFIRMED: 'text-emerald-300',
+  DRAFT: 'text-slate-400',
+  CANCELLED: 'text-slate-500',
+  DISPUTED: 'text-red-300',
+  FAILED: 'text-red-400',
+};
+
+// ── Stat row ──────────────────────────────────────────────────────────────────
+
+function StatsRow() {
+  const { data: vault } = useQuery({ queryKey: ['vault'], queryFn: getVault });
+  const { data: tasks = [] } = useQuery({ queryKey: ['tasks'], queryFn: getTasks });
+  const address = useSession((s) => s.session?.address ?? '');
+  const { data: bal } = useQuery({
+    queryKey: ['wallet-balances', address],
+    queryFn: () => getWalletBalances(address),
+    enabled: !isDemo() && !!address,
+  });
+  const activeJobs = tasks.filter((t) => t.status === 'RUNNING' || t.status === 'PENDING').length;
+
+  return (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <StatCard
+        icon={VaultIcon}
+        accent="violet"
+        label="Vault balance"
+        value={`$${(vault?.balance ?? 0).toFixed(2)}`}
+      />
+      <StatCard
+        icon={Coins}
+        accent="emerald"
+        label="Available"
+        value={`$${(vault?.available ?? 0).toFixed(2)}`}
+      />
+      <StatCard
+        icon={Wallet}
+        accent="sky"
+        label="Wallet USDC"
+        value={isDemo() ? 'n/a' : bal?.usdc != null ? `$${bal.usdc.toFixed(2)}` : 'None'}
+      />
+      <StatCard icon={Briefcase} accent="amber" label="Active jobs" value={activeJobs} />
+    </div>
+  );
+}
+
+// ── Wallet ────────────────────────────────────────────────────────────────────
+
 function WalletCard() {
   const qc = useQueryClient();
   const address = useSession((s) => s.session?.address ?? '');
@@ -66,9 +129,12 @@ function WalletCard() {
   });
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+    <Card className="p-4">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <div className="flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 text-slate-300">
+            <Wallet size={15} />
+          </div>
           <span className="font-mono text-xs text-slate-400">
             {address.slice(0, 6)}…{address.slice(-4)}
           </span>
@@ -93,16 +159,15 @@ function WalletCard() {
             <ExternalLink size={13} />
           </a>
         </div>
-
-        <div className="flex items-center gap-5">
+        <div className="flex items-center gap-6">
           <div>
-            <div className="text-xs text-slate-500">XLM</div>
+            <div className="text-[11px] uppercase tracking-wider text-slate-500">XLM</div>
             <div className="font-mono text-sm font-semibold text-emerald-300">
               {isLoading ? '…' : (bal?.xlm ?? 0).toFixed(2)}
             </div>
           </div>
           <div>
-            <div className="text-xs text-slate-500">USDC</div>
+            <div className="text-[11px] uppercase tracking-wider text-slate-500">USDC</div>
             {isLoading ? (
               <div className="font-mono text-sm">…</div>
             ) : bal?.usdc != null ? (
@@ -114,7 +179,6 @@ function WalletCard() {
             )}
           </div>
         </div>
-
         {bal && bal.funded && bal.usdc == null && (
           <button
             onClick={() => trust.mutate()}
@@ -137,19 +201,21 @@ function WalletCard() {
           This wallet is not funded on testnet yet. Fund it, then reload.
         </p>
       )}
-    </div>
+    </Card>
   );
 }
+
+// ── Vault ─────────────────────────────────────────────────────────────────────
 
 function VaultCard() {
   const qc = useQueryClient();
   const { data: vault, isLoading, error } = useQuery({ queryKey: ['vault'], queryFn: getVault });
   const { data: status } = useQuery({ queryKey: ['vault-status'], queryFn: getVaultStatus });
   const [amount, setAmount] = useState('');
-  const rows: [string, number][] = [
-    ['Balance', vault?.balance ?? 0],
-    ['Available', vault?.available ?? 0],
-    ['Locked', vault?.locked ?? 0],
+  const rows: [string, number, string][] = [
+    ['Balance', vault?.balance ?? 0, 'text-white'],
+    ['Available', vault?.available ?? 0, 'text-emerald-300'],
+    ['Locked', vault?.locked ?? 0, 'text-amber-300'],
   ];
 
   const move = useMutation({
@@ -164,68 +230,91 @@ function VaultCard() {
   const amountNum = Number(amount);
   const canMove = amount !== '' && Number.isFinite(amountNum) && amountNum > 0 && !move.isPending;
   const enabled = status?.depositsEnabled ?? false;
+  const contract = status?.contractAddress;
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
-      <div className="flex items-center gap-2 text-slate-300">
-        <Wallet size={18} className="text-violet-300" />
-        <h2 className="font-semibold">Your vault</h2>
-      </div>
-      {error && <p className="mt-3 text-sm text-red-400">Could not load your vault.</p>}
-      <div className="mt-4 grid grid-cols-3 gap-3">
-        {rows.map(([label, v]) => (
-          <div
-            key={label}
-            className="rounded-xl border border-white/10 bg-white/[0.02] p-3 text-center"
-          >
-            <div className="text-lg font-bold">{isLoading ? '…' : `$${v.toFixed(2)}`}</div>
-            <div className="text-xs text-slate-500">{label} USDC</div>
-          </div>
-        ))}
-      </div>
-
-      {enabled ? (
-        <div className="mt-4">
-          <input
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            inputMode="decimal"
-            placeholder="Amount (USDC)"
-            className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
-          />
-          <div className="mt-2 flex gap-2">
-            <button
-              onClick={() => canMove && move.mutate('deposit')}
-              disabled={!canMove}
-              className="flex-1 rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+    <Card className="p-0">
+      <CardHeader
+        icon={VaultIcon}
+        title="Your vault"
+        hint="On-chain balance, mirrored"
+        action={
+          contract ? (
+            <a
+              href={explorerContract(contract)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 font-mono text-[11px] text-slate-400 hover:text-white"
+              title={contract}
             >
-              {move.isPending ? 'Signing…' : 'Deposit'}
-            </button>
-            <button
-              onClick={() => canMove && move.mutate('withdraw')}
-              disabled={!canMove}
-              className="flex-1 rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+              {contract.slice(0, 4)}…{contract.slice(-4)} <ExternalLink size={11} />
+            </a>
+          ) : undefined
+        }
+      />
+      <div className="p-5 pt-4">
+        {error && <p className="mb-3 text-sm text-red-400">Could not load your vault.</p>}
+        <div className="grid grid-cols-3 gap-3">
+          {rows.map(([label, v, tint]) => (
+            <div
+              key={label}
+              className="rounded-xl border border-white/[0.08] bg-black/20 p-3 text-center"
             >
-              Withdraw
-            </button>
-          </div>
-          {move.error && (
-            <p className="mt-2 text-sm text-red-400">Transaction failed or rejected.</p>
-          )}
-          {move.isSuccess && (
-            <p className="mt-2 text-sm text-emerald-300">
-              Submitted. Your balance updates once the deposit is indexed.
-            </p>
-          )}
+              <div className={`text-lg font-bold ${tint}`}>
+                {isLoading ? '…' : `$${v.toFixed(2)}`}
+              </div>
+              <div className="text-[11px] uppercase tracking-wider text-slate-500">
+                {label} USDC
+              </div>
+            </div>
+          ))}
         </div>
-      ) : (
-        <p className="mt-4 text-center text-xs text-slate-500">
-          On-chain deposits are not enabled in this environment.
-        </p>
-      )}
-    </div>
+
+        {enabled ? (
+          <div className="mt-4">
+            <input
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              inputMode="decimal"
+              placeholder="Amount (USDC)"
+              className={inputCls}
+            />
+            <div className="mt-2 flex gap-2">
+              <button
+                onClick={() => canMove && move.mutate('deposit')}
+                disabled={!canMove}
+                className={`flex-1 ${primaryBtn}`}
+              >
+                {move.isPending ? 'Signing…' : 'Deposit'}
+              </button>
+              <button
+                onClick={() => canMove && move.mutate('withdraw')}
+                disabled={!canMove}
+                className="flex-1 rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Withdraw
+              </button>
+            </div>
+            {move.error && (
+              <p className="mt-2 text-sm text-red-400">Transaction failed or rejected.</p>
+            )}
+            {move.isSuccess && (
+              <p className="mt-2 text-sm text-emerald-300">
+                Submitted. Your balance updates once the deposit is indexed.
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="mt-4 text-center text-xs text-slate-500">
+            On-chain deposits are not enabled in this environment.
+          </p>
+        )}
+      </div>
+    </Card>
   );
 }
+
+// ── Hire ──────────────────────────────────────────────────────────────────────
 
 function HirePanel() {
   const qc = useQueryClient();
@@ -234,7 +323,6 @@ function HirePanel() {
   const [budget, setBudget] = useState('');
   const [serviceId, setServiceId] = useState('');
   const active = MODES.find((m) => m.id === mode)!;
-
   const { data: services = [] } = useQuery({ queryKey: ['services'], queryFn: getServices });
 
   const hire = useMutation({
@@ -263,83 +351,70 @@ function HirePanel() {
     !hire.isPending;
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
-      <h2 className="font-semibold text-slate-300">Hire a service</h2>
-      <div className="mt-4 flex gap-2">
-        {MODES.map((m) => (
-          <button
-            key={m.id}
-            onClick={() => setMode(m.id)}
-            className={`flex-1 rounded-xl border px-3 py-2 text-sm ${mode === m.id ? 'border-violet-500/40 bg-violet-500/10 text-white' : 'border-white/10 text-slate-400 hover:text-white'}`}
-          >
-            <m.icon size={16} className="mx-auto mb-1" />
-            {m.label}
-          </button>
-        ))}
-      </div>
-      <p className="mt-4 text-sm text-slate-400">{active.blurb}</p>
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (canSubmit) hire.mutate();
-        }}
-        className="mt-4 space-y-3"
-      >
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder={mode === 'direct' ? 'What is this payment for?' : 'Describe the job'}
-          className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
-        />
-        {mode === 'direct' && (
-          <select
-            value={serviceId}
-            onChange={(e) => setServiceId(e.target.value)}
-            className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm"
-          >
-            <option value="">Choose a provider…</option>
-            {services.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} (${s.pricePerCall}/call)
-              </option>
-            ))}
-          </select>
-        )}
-        <input
-          value={budget}
-          onChange={(e) => setBudget(e.target.value)}
-          inputMode="decimal"
-          placeholder="Budget (USDC)"
-          className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
-        />
-        <button
-          type="submit"
-          disabled={!canSubmit}
-          className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+    <Card className="p-0">
+      <CardHeader icon={Briefcase} title="Hire a service" hint="Create a bounded, private job" />
+      <div className="p-5 pt-4">
+        <div className="flex gap-2">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              onClick={() => setMode(m.id)}
+              className={`flex-1 rounded-xl border px-3 py-2 text-sm transition-colors ${mode === m.id ? 'border-violet-500/40 bg-violet-500/10 text-white' : 'border-white/10 text-slate-400 hover:text-white'}`}
+            >
+              <m.icon size={16} className="mx-auto mb-1" />
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-3 text-sm text-slate-400">{active.blurb}</p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (canSubmit) hire.mutate();
+          }}
+          className="mt-4 space-y-3"
         >
-          {hire.isPending ? 'Creating…' : 'Create job'}
-        </button>
-        {hire.error && <p className="text-sm text-red-400">Could not create the job.</p>}
-        {hire.isSuccess && (
-          <p className="text-sm text-emerald-300">
-            Job created as a draft. It appears in Your jobs below.
-          </p>
-        )}
-      </form>
-    </div>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder={mode === 'direct' ? 'What is this payment for?' : 'Describe the job'}
+            className={inputCls}
+          />
+          {mode === 'direct' && (
+            <select
+              value={serviceId}
+              onChange={(e) => setServiceId(e.target.value)}
+              className={inputCls}
+            >
+              <option value="">Choose a provider…</option>
+              {services.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} (${s.pricePerCall}/call)
+                </option>
+              ))}
+            </select>
+          )}
+          <input
+            value={budget}
+            onChange={(e) => setBudget(e.target.value)}
+            inputMode="decimal"
+            placeholder="Budget (USDC)"
+            className={inputCls}
+          />
+          <button type="submit" disabled={!canSubmit} className={primaryBtn}>
+            {hire.isPending ? 'Creating…' : 'Create job'}
+          </button>
+          {hire.error && <p className="text-sm text-red-400">Could not create the job.</p>}
+          {hire.isSuccess && (
+            <p className="text-sm text-emerald-300">Job created. It appears in Your jobs below.</p>
+          )}
+        </form>
+      </div>
+    </Card>
   );
 }
 
-const STATUS_TINT: Record<string, string> = {
-  RUNNING: 'text-sky-300',
-  PENDING: 'text-amber-300',
-  COMPLETED: 'text-emerald-300',
-  DRAFT: 'text-slate-400',
-  CANCELLED: 'text-slate-500',
-  DISPUTED: 'text-red-300',
-  FAILED: 'text-red-400',
-};
+// ── Jobs ──────────────────────────────────────────────────────────────────────
 
 function TasksCard() {
   const {
@@ -348,39 +423,42 @@ function TasksCard() {
     error,
   } = useQuery({ queryKey: ['tasks'], queryFn: getTasks });
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
-      <div className="flex items-center gap-2 text-slate-300">
-        <ListChecks size={18} className="text-violet-300" />
-        <h2 className="font-semibold">Your jobs</h2>
-      </div>
-      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading jobs…</p>}
-      {error && <p className="mt-4 text-sm text-red-400">Could not load your jobs.</p>}
-      {!isLoading && !error && tasks.length === 0 && (
-        <p className="mt-4 text-sm text-slate-500">No jobs yet. Hire a service to get started.</p>
-      )}
-      <div className="mt-4 space-y-2">
-        {tasks.map((t) => (
-          <Link
-            key={t.id}
-            to={`/app/tasks/${t.id}`}
-            className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3 hover:border-violet-500/40 hover:bg-white/[0.04]"
-          >
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium">{t.title}</div>
-              <div className="text-xs text-slate-500">
-                {t.mode} · {t.completedSteps}/{t.stepCount} steps · ${t.spent.toFixed(2)} of $
-                {t.budget.toFixed(2)}
+    <Card className="p-0">
+      <CardHeader icon={ListChecks} title="Your jobs" />
+      <div className="p-5 pt-4">
+        {isLoading && <p className="text-sm text-slate-500">Loading jobs…</p>}
+        {error && <p className="text-sm text-red-400">Could not load your jobs.</p>}
+        {!isLoading && !error && tasks.length === 0 && (
+          <EmptyState>No jobs yet. Hire a service to get started.</EmptyState>
+        )}
+        <div className="space-y-2">
+          {tasks.map((t) => (
+            <Link
+              key={t.id}
+              to={`/app/tasks/${t.id}`}
+              className="flex items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 hover:border-violet-500/40 hover:bg-white/[0.04] transition-colors"
+            >
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">{t.title}</div>
+                <div className="text-xs text-slate-500">
+                  {t.mode} · {t.completedSteps}/{t.stepCount} steps · ${t.spent.toFixed(2)} of $
+                  {t.budget.toFixed(2)}
+                </div>
               </div>
-            </div>
-            <span className={`ml-3 shrink-0 text-xs ${STATUS_TINT[t.status] ?? 'text-slate-400'}`}>
-              {t.status}
-            </span>
-          </Link>
-        ))}
+              <span
+                className={`ml-3 shrink-0 text-xs ${STATUS_TINT[t.status] ?? 'text-slate-400'}`}
+              >
+                {t.status}
+              </span>
+            </Link>
+          ))}
+        </div>
       </div>
-    </div>
+    </Card>
   );
 }
+
+// ── Policies ──────────────────────────────────────────────────────────────────
 
 function PoliciesCard() {
   const qc = useQueryClient();
@@ -414,86 +492,88 @@ function PoliciesCard() {
   const canSave = hasRule && !save.isPending;
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
-      <div className="flex items-center gap-2 text-slate-300">
-        <ShieldCheck size={18} className="text-violet-300" />
-        <h2 className="font-semibold">Spending policies</h2>
-      </div>
-      <p className="mt-1 text-sm text-slate-400">
-        Bound how funds can be spent. Transparent mode stores the rule; private (zero-knowledge)
-        mode is coming with the proving layer.
-      </p>
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (canSave) save.mutate();
-        }}
-        className="mt-4 grid sm:grid-cols-2 gap-2"
-      >
-        <input
-          value={ceiling}
-          onChange={(e) => setCeiling(e.target.value)}
-          inputMode="decimal"
-          placeholder="Per-payment ceiling (USDC)"
-          className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
-        />
-        <input
-          value={cap}
-          onChange={(e) => setCap(e.target.value)}
-          inputMode="decimal"
-          placeholder="Daily cap (USDC)"
-          className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
-        />
-        <label className="flex items-center gap-2 text-sm text-slate-400">
-          <input
-            type="checkbox"
-            checked={isPrivate}
-            onChange={(e) => setIsPrivate(e.target.checked)}
-          />
-          Private (zero-knowledge)
-        </label>
-        <button
-          type="submit"
-          disabled={!canSave}
-          className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+    <Card className="p-0">
+      <CardHeader
+        icon={ShieldCheck}
+        title="Spending policies"
+        hint="Bound how funds can be spent"
+      />
+      <div className="p-5 pt-4">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (canSave) save.mutate();
+          }}
+          className="grid gap-2 sm:grid-cols-2"
         >
-          {save.isPending ? 'Saving…' : 'Create policy'}
-        </button>
-      </form>
-      {save.error && (
-        <p className="mt-2 text-sm text-amber-300">
-          Private policies are not enabled yet. Uncheck it to save a transparent policy for now.
-        </p>
-      )}
-
-      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading policies…</p>}
-      {error && <p className="mt-4 text-sm text-red-400">Could not load your policies.</p>}
-      {!isLoading && !error && policies.length === 0 && (
-        <p className="mt-4 text-sm text-slate-500">No policies yet.</p>
-      )}
-      <div className="mt-4 space-y-2">
-        {policies.map((p) => (
-          <div key={p.id} className="rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-300">
-                {p.isPrivate ? 'Private' : 'Transparent'} policy
-              </span>
-              <span className="font-mono text-xs text-slate-500">{p.commitment.slice(0, 10)}…</span>
-            </div>
-            {p.rules && (
-              <div className="mt-1 text-xs text-slate-500">
-                {p.rules.perPaymentCeilingUsdc != null &&
-                  `ceiling $${p.rules.perPaymentCeilingUsdc} `}
-                {p.rules.rollingCapUsdc != null && `· daily cap $${p.rules.rollingCapUsdc}`}
-              </div>
-            )}
+          <input
+            value={ceiling}
+            onChange={(e) => setCeiling(e.target.value)}
+            inputMode="decimal"
+            placeholder="Per-payment ceiling (USDC)"
+            className={inputCls}
+          />
+          <input
+            value={cap}
+            onChange={(e) => setCap(e.target.value)}
+            inputMode="decimal"
+            placeholder="Daily cap (USDC)"
+            className={inputCls}
+          />
+          <label className="flex items-center gap-2 text-sm text-slate-400">
+            <input
+              type="checkbox"
+              checked={isPrivate}
+              onChange={(e) => setIsPrivate(e.target.checked)}
+            />
+            Private (zero-knowledge)
+          </label>
+          <button type="submit" disabled={!canSave} className={primaryBtn}>
+            {save.isPending ? 'Saving…' : 'Create policy'}
+          </button>
+        </form>
+        {save.error && (
+          <p className="mt-2 text-sm text-amber-300">
+            Private policies are not enabled yet. Uncheck it to save a transparent policy for now.
+          </p>
+        )}
+        {isLoading && <p className="mt-4 text-sm text-slate-500">Loading policies…</p>}
+        {error && <p className="mt-4 text-sm text-red-400">Could not load your policies.</p>}
+        {!isLoading && !error && policies.length === 0 && (
+          <div className="mt-4">
+            <EmptyState>No policies yet.</EmptyState>
           </div>
-        ))}
+        )}
+        <div className="mt-4 space-y-2">
+          {policies.map((p) => (
+            <div
+              key={p.id}
+              className="flex items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 text-sm"
+            >
+              <div>
+                <span className="text-slate-200">
+                  {p.isPrivate ? 'Private' : 'Transparent'} policy
+                </span>
+                {p.rules && (
+                  <div className="mt-0.5 text-xs text-slate-500">
+                    {p.rules.perPaymentCeilingUsdc != null &&
+                      `ceiling $${p.rules.perPaymentCeilingUsdc} `}
+                    {p.rules.rollingCapUsdc != null && `· daily cap $${p.rules.rollingCapUsdc}`}
+                  </div>
+                )}
+              </div>
+              <span className="font-mono text-[11px] text-slate-500">
+                {p.commitment.slice(0, 10)}…
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </Card>
   );
 }
+
+// ── Marketplace ───────────────────────────────────────────────────────────────
 
 function Marketplace() {
   const [q, setQ] = useState('');
@@ -504,80 +584,83 @@ function Marketplace() {
     error,
   } = useQuery({ queryKey: ['services'], queryFn: getServices });
 
-  const results = useMemo(() => {
-    return services.filter(
-      (s) =>
-        (cat === 'All' || s.category === cat) &&
-        (q === '' ||
-          s.name.toLowerCase().includes(q.toLowerCase()) ||
-          s.description.toLowerCase().includes(q.toLowerCase())),
-    );
-  }, [services, q, cat]);
+  const results = useMemo(
+    () =>
+      services.filter(
+        (s) =>
+          (cat === 'All' || s.category === cat) &&
+          (q === '' ||
+            s.name.toLowerCase().includes(q.toLowerCase()) ||
+            s.description.toLowerCase().includes(q.toLowerCase())),
+      ),
+    [services, q, cat],
+  );
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
-      <h2 className="font-semibold text-slate-300">Marketplace</h2>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search services…"
-          className="flex-1 min-w-48 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
-        />
-        <select
-          value={cat}
-          onChange={(e) => setCat(e.target.value)}
-          className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm"
-        >
-          <option>All</option>
-          {demoCategories.map((c) => (
-            <option key={c}>{c}</option>
-          ))}
-        </select>
-      </div>
-      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading services…</p>}
-      {error && <p className="mt-4 text-sm text-red-400">Could not load services.</p>}
-      <div className="mt-4 grid sm:grid-cols-2 gap-3">
-        {results.map((s) => (
-          <Link
-            key={s.id}
-            to={`/app/marketplace/${s.id}`}
-            className="rounded-xl border border-white/10 bg-white/[0.02] p-4 hover:border-violet-500/40 hover:bg-white/[0.04]"
+    <Card className="p-0">
+      <CardHeader icon={Search} title="Marketplace" hint="Hire AI agents, humans, and businesses" />
+      <div className="p-5 pt-4">
+        <div className="flex flex-wrap gap-2">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search services…"
+            className={`min-w-48 flex-1 ${inputCls}`}
+          />
+          <select
+            value={cat}
+            onChange={(e) => setCat(e.target.value)}
+            className={`w-auto ${inputCls}`}
           >
-            <div className="flex items-center justify-between">
-              <span className="font-medium">{s.name}</span>
-              <span className="inline-flex items-center gap-1 text-xs text-amber-300">
-                <Star size={12} /> {s.rating.toFixed(1)}
-              </span>
-            </div>
-            <p className="mt-1 text-sm text-slate-400">{s.description}</p>
-            <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-              <span>
-                {s.category} · {s.provider}
-              </span>
-              <span className="text-slate-300">${s.pricePerCall}/call</span>
-            </div>
-          </Link>
-        ))}
-        {!isLoading && !error && results.length === 0 && (
-          <p className="text-sm text-slate-500">No services match.</p>
-        )}
+            <option>All</option>
+            {demoCategories.map((c) => (
+              <option key={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+        {isLoading && <p className="mt-4 text-sm text-slate-500">Loading services…</p>}
+        {error && <p className="mt-4 text-sm text-red-400">Could not load services.</p>}
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {results.map((s) => (
+            <Link
+              key={s.id}
+              to={`/app/marketplace/${s.id}`}
+              className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-4 hover:border-violet-500/40 hover:bg-white/[0.04] transition-colors"
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium">{s.name}</span>
+                <Badge className="border-amber-500/25 bg-amber-500/10 text-amber-300">
+                  <Star size={11} /> {s.rating.toFixed(1)}
+                </Badge>
+              </div>
+              <p className="mt-1 text-sm text-slate-400">{s.description}</p>
+              <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                <span>
+                  {s.category} · {s.provider}
+                </span>
+                <span className="text-slate-300">${s.pricePerCall}/call</span>
+              </div>
+            </Link>
+          ))}
+          {!isLoading && !error && results.length === 0 && (
+            <p className="text-sm text-slate-500">No services match.</p>
+          )}
+        </div>
       </div>
-    </div>
+    </Card>
   );
 }
 
 export function Buyer() {
   return (
     <section className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Buyer console</h1>
-        <p className="mt-1 text-slate-400">
-          Fund a vault, hire services, and keep your spending rules private.
-        </p>
-      </div>
+      <PageHeader
+        title="Buyer console"
+        subtitle="Fund a vault, hire services, and keep your spending rules private."
+      />
+      <StatsRow />
       {!isDemo() && <WalletCard />}
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid gap-6 lg:grid-cols-2">
         <VaultCard />
         <HirePanel />
       </div>

@@ -37,6 +37,10 @@ export class VaultContractService {
   private readonly usdcSac: string;
   readonly passphrase: string;
   readonly active: boolean;
+  /** The deployed vault contract id, or '' when not configured. */
+  get contractAddress(): string {
+    return this.active ? this.contractId : '';
+  }
 
   constructor(config: ConfigService<AppEnv, true>) {
     this.contractId = config.get('AGENT_VAULT_CONTRACT_ID', { infer: true }) ?? '';

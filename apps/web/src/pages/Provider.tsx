@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DollarSign, Briefcase, Star, Boxes } from 'lucide-react';
 import { getProviderServices, getProviderEarnings, registerService } from '../lib/provider';
 import { refreshRoles } from '../lib/sessionSync';
+import { PageHeader, StatCard } from '../components/ui';
 
 const JOB_STYLE: Record<string, string> = {
   CONFIRMED: 'text-emerald-300',
@@ -24,21 +25,36 @@ function Stats() {
     queryKey: ['provider-earnings'],
     queryFn: getProviderEarnings,
   });
-  const stats = [
-    { icon: DollarSign, label: 'Total earned', value: `$${(data?.totalEarned ?? 0).toFixed(2)}` },
-    { icon: DollarSign, label: 'This week', value: `$${(data?.thisWeek ?? 0).toFixed(2)}` },
-    { icon: Briefcase, label: 'Jobs', value: String(data?.jobs ?? 0) },
-    { icon: Star, label: 'Rating', value: (data?.rating ?? 0).toFixed(1) },
-  ];
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      {stats.map((s) => (
-        <div key={s.label} className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-          <s.icon size={16} className="text-violet-300" />
-          <div className="mt-2 text-xl font-bold">{isLoading ? '…' : s.value}</div>
-          <div className="text-xs text-slate-500">{s.label}</div>
-        </div>
-      ))}
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <StatCard
+        icon={DollarSign}
+        accent="emerald"
+        label="Total earned"
+        loading={isLoading}
+        value={`$${(data?.totalEarned ?? 0).toFixed(2)}`}
+      />
+      <StatCard
+        icon={DollarSign}
+        accent="violet"
+        label="This week"
+        loading={isLoading}
+        value={`$${(data?.thisWeek ?? 0).toFixed(2)}`}
+      />
+      <StatCard
+        icon={Briefcase}
+        accent="sky"
+        label="Jobs"
+        loading={isLoading}
+        value={String(data?.jobs ?? 0)}
+      />
+      <StatCard
+        icon={Star}
+        accent="amber"
+        label="Rating"
+        loading={isLoading}
+        value={(data?.rating ?? 0).toFixed(1)}
+      />
     </div>
   );
 }
@@ -240,13 +256,10 @@ function JobsCard() {
 export function Provider() {
   return (
     <section className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Provider console</h1>
-        <p className="mt-1 text-slate-400">
-          Register services, handle jobs, and track earnings and reputation.
-        </p>
-      </div>
-
+      <PageHeader
+        title="Provider console"
+        subtitle="Register services, handle jobs, and track earnings and reputation."
+      />
       <Stats />
 
       <div className="grid lg:grid-cols-2 gap-6">
