@@ -23,6 +23,10 @@ export const envSchema = z.object({
   HOME_DOMAIN: z.string().default('localhost'),
   WEB_AUTH_DOMAIN: z.string().default('localhost'),
   LOG_LEVEL: z.string().default('info'),
+  // OpenTelemetry: tracing is off unless OTEL_EXPORTER_OTLP_ENDPOINT points at a
+  // collector (e.g. http://localhost:4318). Read in src/tracing.ts at startup.
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
+  OTEL_SERVICE_NAME: z.string().default('clevercon-api'),
   // CleverVault (Soroban). Optional: when the contract id is unset or a
   // placeholder the vault client stays inactive and deposit/withdraw report
   // "not configured" instead of touching the chain.

@@ -1,3 +1,6 @@
+// Must be first: starts OpenTelemetry (when configured) before any instrumented
+// library (express/pg/ioredis) is imported by the rest of the app.
+import './tracing.js';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
