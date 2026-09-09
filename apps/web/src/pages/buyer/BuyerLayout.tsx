@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { LayoutDashboard, Vault, Search, ListChecks, ShieldCheck } from 'lucide-react';
+import { useRealtime } from '../../lib/useRealtime';
 
 const TABS = [
   { to: '/app', label: 'Overview', icon: LayoutDashboard, end: true },
@@ -10,6 +11,7 @@ const TABS = [
 ];
 
 export function BuyerLayout() {
+  useRealtime();
   return (
     <section className="space-y-6">
       <div>

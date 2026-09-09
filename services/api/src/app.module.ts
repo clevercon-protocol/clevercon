@@ -12,6 +12,7 @@ import { TasksModule } from './tasks/tasks.module.js';
 import { ProviderModule } from './provider/provider.module.js';
 import { PoliciesModule } from './policies/policies.module.js';
 import { QueueModule } from './queue/queue.module.js';
+import { EventsModule } from './events/events.module.js';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { QueueModule } from './queue/queue.module.js';
       envFilePath: ['.env', '../../.env'],
     }),
     QueueModule,
+    EventsModule,
     PrismaModule,
     HealthModule,
     AuthModule,

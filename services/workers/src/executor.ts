@@ -4,6 +4,8 @@ export interface ExecuteResult {
   status: 'completed' | 'failed' | 'skipped';
   reason?: string;
   stepsRun?: number;
+  /** The task's buyer, so the worker can push a real-time update to their room. */
+  buyerId?: string;
 }
 
 type FetchImpl = typeof fetch;
@@ -33,7 +35,8 @@ export async function executeTask(
     include: { steps: { orderBy: { index: 'asc' }, include: { service: true } } },
   });
   if (!task) return { status: 'skipped', reason: 'task not found' };
-  if (TERMINAL.includes(task.status)) return { status: 'skipped', reason: 'task already terminal' };
+  if (TERMINAL.includes(task.status))
+    return { status: 'skipped', reason: 'task already terminal', buyerId: task.buyerId };
 
   await prisma.task.update({ where: { id: taskId }, data: { status: TaskStatus.RUNNING } });
 
@@ -83,5 +86,5 @@ export async function executeTask(
 
   const status = anyFailed ? TaskStatus.FAILED : TaskStatus.COMPLETED;
   await prisma.task.update({ where: { id: taskId }, data: { status } });
-  return { status: anyFailed ? 'failed' : 'completed', stepsRun };
+  return { status: anyFailed ? 'failed' : 'completed', stepsRun, buyerId: task.buyerId };
 }
