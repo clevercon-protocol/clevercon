@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Wallet,
   Search,
@@ -21,7 +21,7 @@ import {
 import { isDemo } from '../../config';
 import { useSession } from '../../store/session';
 import { demoCategories } from '../../lib/demo';
-import { getServices } from '../../lib/services';
+import { getServices, type ServiceSort } from '../../lib/services';
 import { getVault, getVaultStatus, depositToVault, withdrawFromVault } from '../../lib/vault';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import { getPolicies, createPolicy } from '../../lib/policies';
@@ -368,7 +368,11 @@ export function HirePanel() {
   const [budget, setBudget] = useState('');
   const [serviceId, setServiceId] = useState('');
   const activeMode = MODES.find((m) => m.id === mode)!;
-  const { data: services = [] } = useQuery({ queryKey: ['services'], queryFn: getServices });
+  const { data: servicePage } = useQuery({
+    queryKey: ['services', { picker: true }],
+    queryFn: () => getServices({ limit: 100 }),
+  });
+  const services = servicePage?.items ?? [];
 
   const hire = useMutation({
     mutationFn: () =>
@@ -632,26 +636,50 @@ export function PoliciesCard() {
 
 // ── Marketplace ───────────────────────────────────────────────────────────────
 
+const SORT_OPTIONS: { value: ServiceSort; label: string }[] = [
+  { value: 'recent', label: 'Most recent' },
+  { value: 'rating', label: 'Top rated' },
+  { value: 'price_asc', label: 'Price: low to high' },
+  { value: 'price_desc', label: 'Price: high to low' },
+];
+
+const PAGE_SIZE = 12;
+
 export function Marketplace() {
   const [q, setQ] = useState('');
+  const [debouncedQ, setDebouncedQ] = useState('');
   const [cat, setCat] = useState<string>('All');
-  const {
-    data: services = [],
-    isLoading,
-    error,
-  } = useQuery({ queryKey: ['services'], queryFn: getServices });
+  const [sort, setSort] = useState<ServiceSort>('recent');
+  const [page, setPage] = useState(0);
 
-  const results = useMemo(
-    () =>
-      services.filter(
-        (s) =>
-          (cat === 'All' || s.category === cat) &&
-          (q === '' ||
-            s.name.toLowerCase().includes(q.toLowerCase()) ||
-            s.description.toLowerCase().includes(q.toLowerCase())),
-      ),
-    [services, q, cat],
-  );
+  // Debounce the search box so we hit the API once the user pauses, not per key.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  // Any filter/sort/search change resets to the first page.
+  useEffect(() => setPage(0), [debouncedQ, cat, sort]);
+
+  const { data, isLoading, isFetching, error } = useQuery({
+    queryKey: ['services', { q: debouncedQ, cat, sort, page }],
+    queryFn: () =>
+      getServices({
+        q: debouncedQ,
+        category: cat,
+        sort,
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      }),
+    placeholderData: keepPreviousData,
+  });
+
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const start = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const end = Math.min(total, page * PAGE_SIZE + items.length);
+  const hasPrev = page > 0;
+  const hasNext = (page + 1) * PAGE_SIZE < total;
 
   return (
     <Card className="p-0">
@@ -674,11 +702,23 @@ export function Marketplace() {
               <option key={c}>{c}</option>
             ))}
           </select>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as ServiceSort)}
+            className={`w-auto ${inputCls}`}
+            aria-label="Sort services"
+          >
+            {SORT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
         </div>
         {isLoading && <p className="mt-4 text-sm text-slate-500">Loading services…</p>}
         {error && <p className="mt-4 text-sm text-red-400">Could not load services.</p>}
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          {results.map((s) => (
+          {items.map((s) => (
             <Link
               key={s.id}
               to={`/app/marketplace/${s.id}`}
@@ -699,10 +739,35 @@ export function Marketplace() {
               </div>
             </Link>
           ))}
-          {!isLoading && !error && results.length === 0 && (
+          {!isLoading && !error && items.length === 0 && (
             <p className="text-sm text-slate-500">No services match.</p>
           )}
         </div>
+        {total > 0 && (
+          <div className="mt-4 flex items-center justify-between text-sm text-slate-400">
+            <span>
+              {start}-{end} of {total}
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={!hasPrev || isFetching}
+                className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-slate-200 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage((p) => p + 1)}
+                disabled={!hasNext || isFetching}
+                className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-slate-200 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </Card>
   );
