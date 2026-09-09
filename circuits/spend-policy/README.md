@@ -1,5 +1,7 @@
 # `spend-policy` (Noir circuit)
 
+> Status: circuit built and **proven in CI** (nargo test + bb prove/verify green on a GitHub runner; proof + vk uploaded as an artifact). On-chain verification is a binding check pending Stellar pairing precompiles, see docs/private-policies.md section 7.
+
 Proves a release of `amount` to `payee` obeys a **private** spending policy whose
 hash equals the public `commitment`, emitting a `nullifier` that binds the proof
 to a single spend. Implements the four composable rule types from
