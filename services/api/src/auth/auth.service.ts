@@ -51,10 +51,9 @@ export class AuthService {
     return { transaction, networkPassphrase: this.auth.networkPassphrase };
   }
 
-  /** Step 2: verify the signed challenge (SEP-10), upsert the user, issue tokens. */
-  async verifyChallenge(signedXdr: string, meta?: SessionMeta): Promise<TokenBundle> {
+  /** Verify a signed SEP-10 challenge and return the wallet that signed it. */
+  private readChallengeSigner(signedXdr: string): string {
     const serverId = this.auth.serverKeypair.publicKey();
-    let clientAccountID: string;
     try {
       const read = WebAuth.readChallengeTx(
         signedXdr,
@@ -63,21 +62,25 @@ export class AuthService {
         this.auth.homeDomain,
         this.auth.webAuthDomain,
       );
-      clientAccountID = read.clientAccountID;
       WebAuth.verifyChallengeTxSigners(
         signedXdr,
         serverId,
         this.auth.networkPassphrase,
-        [clientAccountID],
+        [read.clientAccountID],
         this.auth.homeDomain,
         this.auth.webAuthDomain,
       );
+      return read.clientAccountID;
     } catch {
       throw new UnauthorizedException('Invalid challenge signature');
     }
+  }
 
-    // Replay protection: the tx hash is stable across signing; match a stored,
-    // unconsumed, unexpired challenge and consume it.
+  /**
+   * Replay protection: the tx hash is stable across signing; match a stored,
+   * unconsumed, unexpired challenge for this signer and consume it (single-use).
+   */
+  private async consumeChallenge(signedXdr: string, clientAccountID: string): Promise<void> {
     const txHash = TransactionBuilder.fromXDR(signedXdr, this.auth.networkPassphrase)
       .hash()
       .toString('hex');
@@ -90,6 +93,30 @@ export class AuthService {
       where: { nonce: txHash },
       data: { consumedAt: new Date() },
     });
+  }
+
+  /**
+   * Step-up authorization for a money action: require a fresh wallet signature
+   * proving the caller currently controls a wallet that belongs to the
+   * authenticated user, so a stolen access token alone cannot initiate one. The
+   * challenge is single-use and time-boxed via the same replay protection as
+   * sign-in. Throws if the signature is invalid, replayed, expired, or the
+   * signer wallet is not owned by this user.
+   */
+  async verifyStepUp(signedXdr: string, userId: string): Promise<void> {
+    const clientAccountID = this.readChallengeSigner(signedXdr);
+    const wallet = await this.prisma.wallet.findFirst({
+      where: { address: clientAccountID, userId },
+    });
+    if (!wallet)
+      throw new UnauthorizedException('Step-up wallet does not belong to the current user');
+    await this.consumeChallenge(signedXdr, clientAccountID);
+  }
+
+  /** Step 2: verify the signed challenge (SEP-10), upsert the user, issue tokens. */
+  async verifyChallenge(signedXdr: string, meta?: SessionMeta): Promise<TokenBundle> {
+    const clientAccountID = this.readChallengeSigner(signedXdr);
+    await this.consumeChallenge(signedXdr, clientAccountID);
 
     const wallet = await this.prisma.wallet.upsert({
       where: { address: clientAccountID },

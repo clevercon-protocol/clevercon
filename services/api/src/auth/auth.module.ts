@@ -6,6 +6,7 @@ import { AuthService } from './auth.service.js';
 import { AuthController } from './auth.controller.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 import { RolesGuard } from './roles.guard.js';
+import { StepUpGuard } from './step-up.guard.js';
 import { AUTH_CONFIG, type AuthConfig } from './auth.config.js';
 import type { AppEnv } from '../config/env.validation.js';
 
@@ -24,6 +25,7 @@ import type { AppEnv } from '../config/env.validation.js';
     AuthService,
     JwtAuthGuard,
     RolesGuard,
+    StepUpGuard,
     {
       provide: AUTH_CONFIG,
       inject: [ConfigService],
@@ -44,6 +46,6 @@ import type { AppEnv } from '../config/env.validation.js';
       },
     },
   ],
-  exports: [AuthService, JwtAuthGuard, RolesGuard, JwtModule],
+  exports: [AuthService, JwtAuthGuard, RolesGuard, StepUpGuard, JwtModule],
 })
 export class AuthModule {}

@@ -88,6 +88,43 @@ describe.skipIf(!DB)('AuthService SEP-10 (integration, real Postgres)', () => {
     await expect(auth.verifyChallenge(signed)).rejects.toThrow();
   });
 
+  it('step-up: a fresh signature by the user wallet authorizes a money action', async () => {
+    const kp = Keypair.random();
+    const { transaction } = await auth.createChallenge(kp.publicKey());
+    await auth.verifyChallenge(signChallenge(transaction, kp)); // creates user + wallet
+    const wallet = await prisma.wallet.findUnique({ where: { address: kp.publicKey() } });
+
+    const c2 = await auth.createChallenge(kp.publicKey());
+    await expect(
+      auth.verifyStepUp(signChallenge(c2.transaction, kp), wallet.userId),
+    ).resolves.toBeUndefined();
+  });
+
+  it('step-up: rejects a valid signature from a wallet the user does not own', async () => {
+    const kp = Keypair.random();
+    const { transaction } = await auth.createChallenge(kp.publicKey());
+    await auth.verifyChallenge(signChallenge(transaction, kp));
+    const wallet = await prisma.wallet.findUnique({ where: { address: kp.publicKey() } });
+
+    const attacker = Keypair.random();
+    const c2 = await auth.createChallenge(attacker.publicKey());
+    await expect(
+      auth.verifyStepUp(signChallenge(c2.transaction, attacker), wallet.userId),
+    ).rejects.toThrow();
+  });
+
+  it('step-up: rejects a reused step-up challenge (replay)', async () => {
+    const kp = Keypair.random();
+    const { transaction } = await auth.createChallenge(kp.publicKey());
+    await auth.verifyChallenge(signChallenge(transaction, kp));
+    const wallet = await prisma.wallet.findUnique({ where: { address: kp.publicKey() } });
+
+    const c2 = await auth.createChallenge(kp.publicKey());
+    const signed = signChallenge(c2.transaction, kp);
+    await auth.verifyStepUp(signed, wallet.userId);
+    await expect(auth.verifyStepUp(signed, wallet.userId)).rejects.toThrow();
+  });
+
   it('refresh rotates and revokes the old token; logout revokes', async () => {
     const kp = Keypair.random();
     const { transaction } = await auth.createChallenge(kp.publicKey());
