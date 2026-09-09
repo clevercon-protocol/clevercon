@@ -7,6 +7,7 @@ import { Redis } from 'ioredis';
 import { PrismaClient } from '@clevercon/db';
 import { TASK_QUEUE, redisConnection, redisUrl, type TaskExecutionJob } from './queue.js';
 import { executeTask } from './executor.js';
+import { logger } from './logger.js';
 
 // Load the repo-root .env (DATABASE_URL, REDIS_URL) so this runs standalone.
 loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env') });
@@ -35,13 +36,13 @@ function main(): void {
   );
 
   worker.on('completed', (job, result) =>
-    console.log(`[workers] task ${job.data.taskId} -> ${JSON.stringify(result)}`),
+    logger.info({ taskId: job.data.taskId, result }, 'task completed'),
   );
   worker.on('failed', (job, err) =>
-    console.error(`[workers] task ${job?.data.taskId} failed: ${err.message}`),
+    logger.error({ taskId: job?.data.taskId, err: err.message }, 'task failed'),
   );
 
-  console.log(`[workers] task-execution worker up (concurrency ${CONCURRENCY})`);
+  logger.info({ concurrency: CONCURRENCY }, 'task-execution worker up');
 
   const shutdown = async () => {
     await worker.close();

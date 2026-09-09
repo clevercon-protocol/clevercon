@@ -14,6 +14,7 @@ import { PoliciesModule } from './policies/policies.module.js';
 import { QueueModule } from './queue/queue.module.js';
 import { EventsModule } from './events/events.module.js';
 import { RateLimitModule } from './throttler/rate-limit.module.js';
+import { AppLoggerModule } from './logging/logger.module.js';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { RateLimitModule } from './throttler/rate-limit.module.js';
       validate: validateEnv,
       envFilePath: ['.env', '../../.env'],
     }),
+    AppLoggerModule,
     RateLimitModule,
     QueueModule,
     EventsModule,
