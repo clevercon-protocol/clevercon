@@ -54,10 +54,18 @@ nargo info     # circuit size (main: ~371 ACIR opcodes)
 #   bb write_vk -b ./target/spend_policy.json -o ./vk
 ```
 
-> Note: `bb` binaries require **glibc >= 2.38**. The current dev sandbox ships
-> glibc 2.35, so `bb` cannot run here; proof/VK generation must be done on a
-> newer base image (or in CI). The circuit itself is fully exercised by
-> `nargo test` (Noir's ACVM, no `bb` required), which is the verification here.
+> Note: `bb` binaries require **glibc >= 2.38**, and the current stable `nargo`
+> (beta.26) has no released matching `bb`. So proof/VK generation is pinned to a
+> known-good pair (`nargo 1.0.0-beta.6` + `bb 0.84.0`) and run in Docker:
+>
+> ```bash
+> sudo bash circuits/spend-policy/prove-in-docker.sh   # -> target/proof, target/vk
+> ```
+>
+> The circuit compiles and its 9 tests pass on both beta.6 and beta.26, and the
+> witness solves on the host (`nargo execute`); only the final `bb` step needs
+> the container. `nargo test` (Noir's ACVM, no `bb`) is the host-side
+> verification.
 
 The `#[test]` functions in `src/main.nr` are the golden vectors: they build a
 witness, derive the commitment/nullifier the same way the circuit does, and

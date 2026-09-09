@@ -73,12 +73,12 @@ fn is_bool(x: Field) -> bool {
 }
 
 fn main(
-    // ── public inputs (section 4) ──
+    // -- public inputs (section 4) --
     commitment: pub Field,
     payee: pub Field,
     amount: pub Field,
     nullifier: pub Field,
-    // ── private witnesses ──
+    // -- private witnesses --
     salt: Field,
     spend_counter: Field,
     // rule enable flags (0/1)
@@ -138,7 +138,7 @@ fn main(
     }
 }
 
-// ── Tests ───────────────────────────────────────────────────────────────────
+// -- Tests -------------------------------------------------------------------
 // Each test builds a witness, derives the commitment/nullifier the same way the
 // circuit does, and checks the circuit accepts or rejects it.
 
@@ -271,3 +271,4 @@ fn accepts_denied_payee_under_threshold() {
         [false; MERKLE_DEPTH], denylist, threshold,
     );
 }
+

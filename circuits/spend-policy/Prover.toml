@@ -1,18 +1,20 @@
-amount = 0
-commitment = 0
-en = [0, 0, 0, 0]
-nullifier = 0
-payee = 0
-r1_ceiling = 0
-r2_cap = 0
-r2_delegate = 0
-r2_window = 0
-r3_depth = 0
+# Golden witness: a DIRECT payment of 60 under an R1 policy (ceiling 100).
+# commitment/nullifier were emitted by the circuit for this exact input.
+commitment = "0x0b1057b25a49e5cf25a5a4ddc214f43bcd354ea109c52c8883276fb4cd71e1e2"
+payee = "42"
+amount = "60"
+nullifier = "0x0d9fa2a6b533fc3a4a10ef621fec6479ef6be4251afbe1079cd7a1941ee1e9b6"
+salt = "123456789"
+spend_counter = "0"
+en = ["1", "0", "0", "0"]
+r1_ceiling = "100"
+r2_cap = "0"
+r2_window = "0"
+r2_delegate = "0"
+running_spend = "0"
+r3_root = "0"
+r3_depth = "0"
+r3_path = ["0", "0", "0", "0"]
 r3_index_bits = [false, false, false, false]
-r3_path = [0, 0, 0, 0]
-r3_root = 0
-r4_entries = [0, 0, 0, 0]
-r4_threshold = 0
-running_spend = 0
-salt = 0
-spend_counter = 0
+r4_entries = ["0", "0", "0", "0"]
+r4_threshold = "0"
