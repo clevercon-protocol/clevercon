@@ -47,11 +47,17 @@ nargo test     # run the constraint tests (accept/reject vectors)
 nargo info     # circuit size (main: ~371 ACIR opcodes)
 
 # Proof + verifying key generation needs barretenberg (bb):
-#   bbup            # install bb
-#   nargo execute   # produce the witness
+#   bbup -v <version>   # install bb (see AztecProtocol bb-versions.json for the
+#                       # bb release matching your nargo)
+#   nargo execute       # produce the witness
 #   bb prove -b ./target/spend_policy.json -w ./target/spend_policy.gz -o ./proof
 #   bb write_vk -b ./target/spend_policy.json -o ./vk
 ```
+
+> Note: `bb` binaries require **glibc >= 2.38**. The current dev sandbox ships
+> glibc 2.35, so `bb` cannot run here; proof/VK generation must be done on a
+> newer base image (or in CI). The circuit itself is fully exercised by
+> `nargo test` (Noir's ACVM, no `bb` required), which is the verification here.
 
 The `#[test]` functions in `src/main.nr` are the golden vectors: they build a
 witness, derive the commitment/nullifier the same way the circuit does, and
