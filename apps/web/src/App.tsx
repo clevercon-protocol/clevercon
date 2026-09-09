@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, type ComponentType } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './lib/queryClient';
@@ -10,16 +10,22 @@ import { Connect } from './pages/Connect';
 import { Placeholder } from './pages/Placeholder';
 
 // Persona consoles are code-split: each loads only when its route is visited.
-const Buyer = lazy(() => import('./pages/Buyer').then((m) => ({ default: m.Buyer })));
-const TaskDetail = lazy(() =>
-  import('./pages/TaskDetail').then((m) => ({ default: m.TaskDetail })),
-);
-const ServiceDetail = lazy(() =>
-  import('./pages/ServiceDetail').then((m) => ({ default: m.ServiceDetail })),
-);
-const Provider = lazy(() => import('./pages/Provider').then((m) => ({ default: m.Provider })));
-const Admin = lazy(() => import('./pages/Admin').then((m) => ({ default: m.Admin })));
-const Developer = lazy(() => import('./pages/Developer').then((m) => ({ default: m.Developer })));
+const lazyFrom = <T extends Record<string, ComponentType>>(
+  loader: () => Promise<T>,
+  key: keyof T,
+) => lazy(() => loader().then((m) => ({ default: m[key] })));
+
+const BuyerLayout = lazyFrom(() => import('./pages/buyer/BuyerLayout'), 'BuyerLayout');
+const Overview = lazyFrom(() => import('./pages/buyer/Overview'), 'Overview');
+const VaultPage = lazyFrom(() => import('./pages/buyer/VaultPage'), 'VaultPage');
+const MarketplacePage = lazyFrom(() => import('./pages/buyer/MarketplacePage'), 'MarketplacePage');
+const JobsPage = lazyFrom(() => import('./pages/buyer/JobsPage'), 'JobsPage');
+const PoliciesPage = lazyFrom(() => import('./pages/buyer/PoliciesPage'), 'PoliciesPage');
+const TaskDetail = lazyFrom(() => import('./pages/TaskDetail'), 'TaskDetail');
+const ServiceDetail = lazyFrom(() => import('./pages/ServiceDetail'), 'ServiceDetail');
+const Provider = lazyFrom(() => import('./pages/Provider'), 'Provider');
+const Admin = lazyFrom(() => import('./pages/Admin'), 'Admin');
+const Developer = lazyFrom(() => import('./pages/Developer'), 'Developer');
 
 function RouteFallback() {
   return <p className="text-sm text-slate-500">Loading…</p>;
@@ -34,30 +40,25 @@ export function App() {
             <Routes>
               <Route path="/" element={<Landing />} />
               <Route path="/connect" element={<Connect />} />
+
+              {/* Buyer console: a layout with secondary nav and focused sub-pages. */}
               <Route
                 path="/app"
                 element={
                   <RequireAuth role="BUYER">
-                    <Buyer />
+                    <BuyerLayout />
                   </RequireAuth>
                 }
-              />
-              <Route
-                path="/app/tasks/:id"
-                element={
-                  <RequireAuth role="BUYER">
-                    <TaskDetail />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/app/marketplace/:id"
-                element={
-                  <RequireAuth role="BUYER">
-                    <ServiceDetail />
-                  </RequireAuth>
-                }
-              />
+              >
+                <Route index element={<Overview />} />
+                <Route path="vault" element={<VaultPage />} />
+                <Route path="marketplace" element={<MarketplacePage />} />
+                <Route path="marketplace/:id" element={<ServiceDetail />} />
+                <Route path="jobs" element={<JobsPage />} />
+                <Route path="tasks/:id" element={<TaskDetail />} />
+                <Route path="policies" element={<PoliciesPage />} />
+              </Route>
+
               <Route
                 path="/provider"
                 element={

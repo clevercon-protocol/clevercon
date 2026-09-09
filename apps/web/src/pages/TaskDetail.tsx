@@ -41,10 +41,10 @@ export function TaskDetail() {
   return (
     <section className="space-y-6">
       <Link
-        to="/app"
+        to="/app/jobs"
         className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-white"
       >
-        <ArrowLeft size={14} /> Back to buyer console
+        <ArrowLeft size={14} /> Back to jobs
       </Link>
 
       {isLoading && <p className="text-sm text-slate-500">Loading job…</p>}

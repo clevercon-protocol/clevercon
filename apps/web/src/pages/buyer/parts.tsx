@@ -16,16 +16,17 @@ import {
   Vault as VaultIcon,
   Coins,
   Briefcase,
+  ArrowRight,
 } from 'lucide-react';
-import { isDemo } from '../config';
-import { useSession } from '../store/session';
-import { demoCategories } from '../lib/demo';
-import { getServices } from '../lib/services';
-import { getVault, getVaultStatus, depositToVault, withdrawFromVault } from '../lib/vault';
-import { getTasks, createTask, type HireMode } from '../lib/tasks';
-import { getPolicies, createPolicy } from '../lib/policies';
-import { getWalletBalances, addUsdcTrustline, explorerAccount } from '../lib/stellar';
-import { Card, CardHeader, PageHeader, StatCard, EmptyState, Badge } from '../components/ui';
+import { isDemo } from '../../config';
+import { useSession } from '../../store/session';
+import { demoCategories } from '../../lib/demo';
+import { getServices } from '../../lib/services';
+import { getVault, getVaultStatus, depositToVault, withdrawFromVault } from '../../lib/vault';
+import { getTasks, createTask, type HireMode } from '../../lib/tasks';
+import { getPolicies, createPolicy } from '../../lib/policies';
+import { getWalletBalances, addUsdcTrustline, explorerAccount } from '../../lib/stellar';
+import { Card, CardHeader, StatCard, EmptyState, Badge } from '../../components/ui';
 
 type Mode = 'direct' | 'search' | 'compose';
 
@@ -65,7 +66,6 @@ function readError(e: unknown): string {
   else if (e && typeof e === 'object' && 'message' in e)
     raw = String((e as { message: unknown }).message);
   if (!raw) return 'The wallet or network rejected the transaction. Please try again.';
-  // apiFetch throws `API <status>: <json body>`; surface the JSON message.
   const jsonStart = raw.indexOf('{');
   if (jsonStart >= 0) {
     try {
@@ -80,8 +80,7 @@ function readError(e: unknown): string {
 
 /**
  * Refresh vault + wallet balances now and again after a short delay: an on-chain
- * change can take a few seconds to reflect in Horizon and the indexed mirror, so
- * one immediate refetch may still read the pre-transaction state.
+ * change can take a few seconds to reflect in Horizon and the indexed mirror.
  */
 function refreshBalancesSoon(qc: ReturnType<typeof useQueryClient>) {
   const bump = () => {
@@ -113,7 +112,7 @@ const STATUS_TINT: Record<string, string> = {
 
 // ── Stat row ──────────────────────────────────────────────────────────────────
 
-function StatsRow() {
+export function StatsRow() {
   const { data: vault } = useQuery({ queryKey: ['vault'], queryFn: getVault });
   const { data: tasks = [] } = useQuery({ queryKey: ['tasks'], queryFn: getTasks });
   const address = useSession((s) => s.session?.address ?? '');
@@ -151,7 +150,7 @@ function StatsRow() {
 
 // ── Wallet ────────────────────────────────────────────────────────────────────
 
-function WalletCard() {
+export function WalletCard() {
   const qc = useQueryClient();
   const address = useSession((s) => s.session?.address ?? '');
   const [copied, setCopied] = useState(false);
@@ -247,11 +246,8 @@ function WalletCard() {
 
 // ── Vault ─────────────────────────────────────────────────────────────────────
 
-function VaultCard() {
+export function VaultCard() {
   const qc = useQueryClient();
-  // Poll the vault (a cheap DB read) so a deposit/withdraw shows up on its own
-  // once the indexer mirrors it, without a manual reload. One observer polls;
-  // the shared cache updates the stat row too.
   const {
     data: vault,
     isLoading,
@@ -270,8 +266,6 @@ function VaultCard() {
       kind === 'deposit' ? depositToVault(Number(amount)) : withdrawFromVault(Number(amount)),
     onSuccess: () => {
       setAmount('');
-      // Both the vault mirror and the wallet balance change (funds move between
-      // wallet and vault); refresh both, allowing for propagation lag.
       refreshBalancesSoon(qc);
     },
   });
@@ -351,7 +345,7 @@ function VaultCard() {
             {move.error && <p className="mt-2 text-sm text-red-400">{readError(move.error)}</p>}
             {move.isSuccess && (
               <p className="mt-2 text-sm text-emerald-300">
-                Submitted. Your balance updates once the deposit is indexed.
+                Submitted. Your balance updates automatically in a few seconds.
               </p>
             )}
           </div>
@@ -367,13 +361,13 @@ function VaultCard() {
 
 // ── Hire ──────────────────────────────────────────────────────────────────────
 
-function HirePanel() {
+export function HirePanel() {
   const qc = useQueryClient();
   const [mode, setMode] = useState<Mode>('direct');
   const [title, setTitle] = useState('');
   const [budget, setBudget] = useState('');
   const [serviceId, setServiceId] = useState('');
-  const active = MODES.find((m) => m.id === mode)!;
+  const activeMode = MODES.find((m) => m.id === mode)!;
   const { data: services = [] } = useQuery({ queryKey: ['services'], queryFn: getServices });
 
   const hire = useMutation({
@@ -403,7 +397,7 @@ function HirePanel() {
 
   return (
     <Card className="p-0">
-      <CardHeader icon={Briefcase} title="Hire a service" hint="Create a bounded, private job" />
+      <CardHeader icon={Briefcase} title="Start a job" hint="Create a bounded, private payment" />
       <div className="p-5 pt-4">
         <div className="flex gap-2">
           {MODES.map((m) => (
@@ -417,7 +411,7 @@ function HirePanel() {
             </button>
           ))}
         </div>
-        <p className="mt-3 text-sm text-slate-400">{active.blurb}</p>
+        <p className="mt-3 text-sm text-slate-400">{activeMode.blurb}</p>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -456,9 +450,7 @@ function HirePanel() {
             {hire.isPending ? 'Creating…' : 'Create job'}
           </button>
           {hire.error && <p className="text-sm text-red-400">Could not create the job.</p>}
-          {hire.isSuccess && (
-            <p className="text-sm text-emerald-300">Job created. It appears in Your jobs below.</p>
-          )}
+          {hire.isSuccess && <p className="text-sm text-emerald-300">Job created.</p>}
         </form>
       </div>
     </Card>
@@ -467,23 +459,37 @@ function HirePanel() {
 
 // ── Jobs ──────────────────────────────────────────────────────────────────────
 
-function TasksCard() {
+export function TasksCard({ limit }: { limit?: number }) {
   const {
     data: tasks = [],
     isLoading,
     error,
   } = useQuery({ queryKey: ['tasks'], queryFn: getTasks });
+  const shown = limit ? tasks.slice(0, limit) : tasks;
   return (
     <Card className="p-0">
-      <CardHeader icon={ListChecks} title="Your jobs" />
+      <CardHeader
+        icon={ListChecks}
+        title="Your jobs"
+        action={
+          limit && tasks.length > limit ? (
+            <Link
+              to="/app/jobs"
+              className="inline-flex items-center gap-1 text-xs text-violet-300 hover:text-violet-200"
+            >
+              View all <ArrowRight size={12} />
+            </Link>
+          ) : undefined
+        }
+      />
       <div className="p-5 pt-4">
         {isLoading && <p className="text-sm text-slate-500">Loading jobs…</p>}
         {error && <p className="text-sm text-red-400">Could not load your jobs.</p>}
         {!isLoading && !error && tasks.length === 0 && (
-          <EmptyState>No jobs yet. Hire a service to get started.</EmptyState>
+          <EmptyState>No jobs yet. Start one to get going.</EmptyState>
         )}
         <div className="space-y-2">
-          {tasks.map((t) => (
+          {shown.map((t) => (
             <Link
               key={t.id}
               to={`/app/tasks/${t.id}`}
@@ -511,7 +517,7 @@ function TasksCard() {
 
 // ── Policies ──────────────────────────────────────────────────────────────────
 
-function PoliciesCard() {
+export function PoliciesCard() {
   const qc = useQueryClient();
   const [ceiling, setCeiling] = useState('');
   const [cap, setCap] = useState('');
@@ -626,7 +632,7 @@ function PoliciesCard() {
 
 // ── Marketplace ───────────────────────────────────────────────────────────────
 
-function Marketplace() {
+export function Marketplace() {
   const [q, setQ] = useState('');
   const [cat, setCat] = useState<string>('All');
   const {
@@ -702,22 +708,29 @@ function Marketplace() {
   );
 }
 
-export function Buyer() {
+// ── Compact vault summary (for the overview) ────────────────────────────────────
+
+export function VaultSummary() {
+  const { data: vault } = useQuery({ queryKey: ['vault'], queryFn: getVault });
   return (
-    <section className="space-y-6">
-      <PageHeader
-        title="Buyer console"
-        subtitle="Fund a vault, hire services, and keep your spending rules private."
-      />
-      <StatsRow />
-      {!isDemo() && <WalletCard />}
-      <div className="grid gap-6 lg:grid-cols-2">
-        <VaultCard />
-        <HirePanel />
+    <Card className="p-0">
+      <CardHeader icon={VaultIcon} title="Vault" hint="Your bounded spending balance" />
+      <div className="p-5 pt-4">
+        <div className="flex items-end gap-2">
+          <span className="text-3xl font-bold text-white">${(vault?.balance ?? 0).toFixed(2)}</span>
+          <span className="pb-1 text-xs text-slate-500">USDC balance</span>
+        </div>
+        <div className="mt-1 text-sm text-slate-400">
+          ${(vault?.available ?? 0).toFixed(2)} available · ${(vault?.locked ?? 0).toFixed(2)}{' '}
+          locked
+        </div>
+        <Link
+          to="/app/vault"
+          className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-white/[0.06] px-4 py-2 text-sm text-slate-200 hover:bg-white/10"
+        >
+          Manage vault <ArrowRight size={14} />
+        </Link>
       </div>
-      <TasksCard />
-      <PoliciesCard />
-      <Marketplace />
-    </section>
+    </Card>
   );
 }

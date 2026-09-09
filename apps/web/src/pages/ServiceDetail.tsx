@@ -69,7 +69,7 @@ export function ServiceDetail() {
   return (
     <section className="space-y-6">
       <Link
-        to="/app"
+        to="/app/marketplace"
         className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-white"
       >
         <ArrowLeft size={14} /> Back to marketplace
