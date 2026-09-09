@@ -26,9 +26,12 @@ export function useRealtime(): void {
       qc.invalidateQueries({ queryKey: ['vault'] });
       qc.invalidateQueries({ queryKey: ['activity'] });
     };
+    const refreshProofs = () => qc.invalidateQueries({ queryKey: ['proof'] });
     socket.on('task.updated', refresh);
+    socket.on('proof.updated', refreshProofs);
     return () => {
       socket.off('task.updated', refresh);
+      socket.off('proof.updated', refreshProofs);
       socket.disconnect();
     };
   }, [token, qc]);

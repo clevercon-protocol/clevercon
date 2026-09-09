@@ -24,7 +24,13 @@ import { demoCategories } from '../../lib/demo';
 import { getServices, type ServiceSort } from '../../lib/services';
 import { getVault, getVaultStatus, depositToVault, withdrawFromVault } from '../../lib/vault';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
-import { getPolicies, createPolicy } from '../../lib/policies';
+import {
+  getPolicies,
+  createPolicy,
+  requestProof,
+  getProofStatus,
+  type Policy,
+} from '../../lib/policies';
 import { getWalletBalances, addUsdcTrustline, explorerAccount } from '../../lib/stellar';
 import { Card, CardHeader, StatCard, EmptyState, Badge } from '../../components/ui';
 
@@ -593,9 +599,15 @@ export function PoliciesCard() {
             {save.isPending ? 'Saving…' : 'Create policy'}
           </button>
         </form>
+        {isPrivate && (
+          <p className="mt-2 text-xs text-slate-500">
+            Private policies store only a commitment. The rule itself is never sent to or kept by
+            the server; releases are authorized with a zero-knowledge binding proof.
+          </p>
+        )}
         {save.error && (
-          <p className="mt-2 text-sm text-amber-300">
-            Private policies are not enabled yet. Uncheck it to save a transparent policy for now.
+          <p className="mt-2 text-sm text-red-400">
+            Could not create the policy. Please try again.
           </p>
         )}
         {isLoading && <p className="mt-4 text-sm text-slate-500">Loading policies…</p>}
@@ -612,15 +624,18 @@ export function PoliciesCard() {
               className="flex items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 text-sm"
             >
               <div>
-                <span className="text-slate-200">
+                <span className="inline-flex items-center gap-1.5 text-slate-200">
+                  {p.isPrivate ? <ShieldCheck size={13} className="text-violet-300" /> : null}
                   {p.isPrivate ? 'Private' : 'Transparent'} policy
                 </span>
-                {p.rules && (
+                {p.rules ? (
                   <div className="mt-0.5 text-xs text-slate-500">
                     {p.rules.perPaymentCeilingUsdc != null &&
                       `ceiling $${p.rules.perPaymentCeilingUsdc} `}
                     {p.rules.rollingCapUsdc != null && `· daily cap $${p.rules.rollingCapUsdc}`}
                   </div>
+                ) : (
+                  <div className="mt-0.5 text-xs text-slate-500">commitment only, rule hidden</div>
                 )}
               </div>
               <span className="font-mono text-[11px] text-slate-500">
@@ -629,6 +644,116 @@ export function PoliciesCard() {
             </div>
           ))}
         </div>
+      </div>
+    </Card>
+  );
+}
+
+// ── Prove a release ─────────────────────────────────────────────────────────────
+
+const PROOF_TINT: Record<string, string> = {
+  REQUESTED: 'text-amber-300',
+  GENERATING: 'text-sky-300',
+  READY: 'text-emerald-300',
+  VERIFIED: 'text-emerald-300',
+  REJECTED: 'text-red-400',
+  FAILED: 'text-red-400',
+};
+
+/**
+ * Request a zero-knowledge binding proof authorizing a release (payee + amount)
+ * under a chosen policy, and watch its status. The worker builds the proof the
+ * on-chain verifier checks; this is the proof-gated-release step made visible.
+ */
+export function ProveReleaseCard() {
+  const [policyId, setPolicyId] = useState('');
+  const [payee, setPayee] = useState('');
+  const [amount, setAmount] = useState('');
+  const [proofId, setProofId] = useState<string | null>(null);
+
+  const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
+
+  const prove = useMutation({
+    mutationFn: () => requestProof(policyId, payee.trim(), Number(amount)),
+    onSuccess: (r) => setProofId(r.proofId),
+  });
+
+  // Poll the proof status until it settles.
+  const { data: status } = useQuery({
+    queryKey: ['proof', proofId],
+    queryFn: () => getProofStatus(proofId as string),
+    enabled: !!proofId,
+    refetchInterval: (q) => {
+      const s = (q.state.data as { status?: string } | undefined)?.status;
+      return s === 'READY' || s === 'VERIFIED' || s === 'REJECTED' || s === 'FAILED' ? false : 800;
+    },
+  });
+
+  const usable = policies.filter((p: Policy) => p.isPrivate);
+  const canProve =
+    policyId !== '' && payee.trim().length > 0 && Number(amount) > 0 && !prove.isPending;
+
+  return (
+    <Card className="p-0">
+      <CardHeader
+        icon={ShieldCheck}
+        title="Prove a release"
+        hint="Authorize a payment with a zero-knowledge proof"
+      />
+      <div className="p-5 pt-4">
+        {usable.length === 0 ? (
+          <EmptyState>Create a private policy first to authorize releases with a proof.</EmptyState>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (canProve) prove.mutate();
+            }}
+            className="grid gap-2"
+          >
+            <select
+              value={policyId}
+              onChange={(e) => setPolicyId(e.target.value)}
+              className={inputCls}
+              aria-label="Policy"
+            >
+              <option value="">Select a private policy…</option>
+              {usable.map((p: Policy) => (
+                <option key={p.id} value={p.id}>
+                  {p.commitment.slice(0, 10)}… (private)
+                </option>
+              ))}
+            </select>
+            <input
+              value={payee}
+              onChange={(e) => setPayee(e.target.value)}
+              placeholder="Payee address (G…)"
+              className={inputCls}
+            />
+            <input
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              inputMode="decimal"
+              placeholder="Amount (USDC)"
+              className={inputCls}
+            />
+            <button type="submit" disabled={!canProve} className={primaryBtn}>
+              {prove.isPending ? 'Requesting…' : 'Generate proof'}
+            </button>
+          </form>
+        )}
+        {prove.error && <p className="mt-2 text-sm text-red-400">{readError(prove.error)}</p>}
+        {proofId && (
+          <div className="mt-4 flex items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 text-sm">
+            <span className="text-slate-400">Proof status</span>
+            <span
+              className={`font-medium ${PROOF_TINT[status?.status ?? 'REQUESTED'] ?? 'text-slate-300'}`}
+            >
+              {status?.status ?? 'REQUESTED'}
+              {status?.status === 'READY' && ' · ready to release'}
+            </span>
+          </div>
+        )}
       </div>
     </Card>
   );
