@@ -11,6 +11,7 @@ import { VaultModule } from './vault/vault.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
 import { ProviderModule } from './provider/provider.module.js';
 import { PoliciesModule } from './policies/policies.module.js';
+import { QueueModule } from './queue/queue.module.js';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { PoliciesModule } from './policies/policies.module.js';
       validate: validateEnv,
       envFilePath: ['.env', '../../.env'],
     }),
+    QueueModule,
     PrismaModule,
     HealthModule,
     AuthModule,

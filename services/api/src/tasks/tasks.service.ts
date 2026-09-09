@@ -1,6 +1,7 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma, PaymentStatus, StepStatus, TaskMode, TaskStatus } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { QueueService } from '../queue/queue.service.js';
 
 type TaskRow = Prisma.TaskGetPayload<{
   include: { steps: { select: { id: true; status: true } }; payments: true };
@@ -47,7 +48,12 @@ function serialize(t: TaskRow) {
 
 @Injectable()
 export class TasksService {
-  constructor(private readonly prisma: PrismaService) {}
+  // QueueService is optional so the service can be constructed directly in tests
+  // without Redis; in the app, Nest injects it (QueueModule is global).
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly queue?: QueueService,
+  ) {}
 
   /**
    * Create a task for the current buyer. The task starts in DRAFT; no money
@@ -93,6 +99,9 @@ export class TasksService {
       data,
       include: { steps: { select: { id: true, status: true } }, payments: true },
     });
+    // A task with steps (a DIRECT hire) is ready to run now; hand it to the
+    // worker queue. SEARCH/COMPOSE have no steps yet (planning is a later job).
+    if (created.steps.length > 0) await this.queue?.enqueueTaskExecution(created.id);
     return serialize(created);
   }
 
