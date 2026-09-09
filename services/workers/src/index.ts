@@ -5,8 +5,16 @@ import { Worker } from 'bullmq';
 import { Emitter } from '@socket.io/redis-emitter';
 import { Redis } from 'ioredis';
 import { PrismaClient } from '@clevercon/db';
-import { TASK_QUEUE, redisConnection, redisUrl, type TaskExecutionJob } from './queue.js';
+import {
+  TASK_QUEUE,
+  PROOF_QUEUE,
+  redisConnection,
+  redisUrl,
+  type TaskExecutionJob,
+  type ProofGenerationJob,
+} from './queue.js';
 import { executeTask } from './executor.js';
+import { generateProof } from './prover.js';
 import { logger } from './logger.js';
 
 // Load the repo-root .env (DATABASE_URL, REDIS_URL) so this runs standalone.
@@ -42,10 +50,37 @@ function main(): void {
     logger.error({ taskId: job?.data.taskId, err: err.message }, 'task failed'),
   );
 
-  logger.info({ concurrency: CONCURRENCY }, 'task-execution worker up');
+  const proofWorker = new Worker<ProofGenerationJob>(
+    PROOF_QUEUE,
+    async (job) => {
+      const result = await generateProof(
+        prisma,
+        job.data.proofId,
+        job.data.payeeAddress,
+        BigInt(job.data.amountStroops),
+      );
+      if (result.buyerId) {
+        emitter
+          .to(`user:${result.buyerId}`)
+          .emit('proof.updated', { proofId: job.data.proofId, status: result.status });
+      }
+      return result;
+    },
+    { connection: redisConnection(), concurrency: CONCURRENCY },
+  );
+
+  proofWorker.on('completed', (job, result) =>
+    logger.info({ proofId: job.data.proofId, result }, 'proof generated'),
+  );
+  proofWorker.on('failed', (job, err) =>
+    logger.error({ proofId: job?.data.proofId, err: err.message }, 'proof generation failed'),
+  );
+
+  logger.info({ concurrency: CONCURRENCY }, 'task-execution + proof-generation workers up');
 
   const shutdown = async () => {
     await worker.close();
+    await proofWorker.close();
     await prisma.$disconnect();
     process.exit(0);
   };

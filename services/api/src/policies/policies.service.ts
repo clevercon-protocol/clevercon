@@ -1,7 +1,9 @@
-import { BadRequestException, Injectable, NotImplementedException } from '@nestjs/common';
-import { createHash } from 'node:crypto';
-import { Prisma } from '@clevercon/db';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { createHash, randomBytes } from 'node:crypto';
+import { Prisma, ProofStatus } from '@clevercon/db';
+import { StrKey } from '@stellar/stellar-sdk';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { QueueService } from '../queue/queue.service.js';
 
 /**
  * A spending policy expressed as the four composable rule types from
@@ -75,7 +77,10 @@ function serialize(p: {
 
 @Injectable()
 export class PoliciesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly queue?: QueueService,
+  ) {}
 
   async list(userId: string) {
     const rows = await this.prisma.policy.findMany({
@@ -90,28 +95,75 @@ export class PoliciesService {
       throw new BadRequestException('A policy must enable at least one rule');
     }
 
-    if (params.isPrivate) {
-      // Private policies require the Noir circuit + prover to produce the
-      // Poseidon2 commitment and the proof-gated release. Until that lands we do
-      // not fabricate a commitment; the transparent path is fully available.
-      throw new NotImplementedException(
-        'Private (zero-knowledge) policies are not enabled yet; use transparent mode for now',
-      );
-    }
-
-    // Transparent policy: the rule is stored in the clear and the commitment is
-    // a SHA-256 of the canonical encoding (verifiable, but not hiding without
-    // the ZK layer, which is the point of transparent mode).
+    // The commitment binds the rule in both modes: a SHA-256 of the canonical
+    // encoding. The difference is what is persisted. Transparent mode stores the
+    // plaintext rule (ruleSummary) so it is publicly auditable; private mode
+    // stores ONLY the commitment and discards the plaintext, so the server never
+    // holds the rule. (v1 uses SHA-256, matching the on-chain binding check; a
+    // client-side commitment with the circuit hash is the migration target, see
+    // docs/private-policies.md.)
     const commitment = createHash('sha256').update(canonicalEncoding(params.rules)).digest('hex');
 
     const created = await this.prisma.policy.create({
       data: {
         userId,
         commitment,
-        isPrivate: false,
-        ruleSummary: params.rules as unknown as Prisma.InputJsonValue,
+        isPrivate: params.isPrivate ?? false,
+        ruleSummary: params.isPrivate
+          ? undefined
+          : (params.rules as unknown as Prisma.InputJsonValue),
       },
     });
     return serialize(created);
+  }
+
+  /**
+   * Request a binding proof authorising a release (payee + amount) under a
+   * policy the caller owns. Reserves a unique nullifier, creates the Proof in
+   * REQUESTED, and enqueues generation; the worker fills in the proof and flips
+   * it to READY. Returns immediately with the proof id to poll (or receive over
+   * the WebSocket as `proof.updated`).
+   */
+  async requestProof(userId: string, policyId: string, payeeAddress: string, amountUsdc: number) {
+    if (!StrKey.isValidEd25519PublicKey(payeeAddress)) {
+      throw new BadRequestException('Invalid payee address');
+    }
+    if (!(amountUsdc > 0)) throw new BadRequestException('Amount must be positive');
+
+    const policy = await this.prisma.policy.findFirst({ where: { id: policyId, userId } });
+    if (!policy) throw new NotFoundException('Policy not found');
+
+    const proof = await this.prisma.proof.create({
+      data: {
+        policyId,
+        status: ProofStatus.REQUESTED,
+        nullifier: randomBytes(32).toString('hex'),
+      },
+    });
+
+    await this.queue?.enqueueProofGeneration({
+      proofId: proof.id,
+      payeeAddress,
+      amountStroops: String(Math.round(amountUsdc * STROOPS_PER_USDC)),
+    });
+
+    return { proofId: proof.id, status: proof.status };
+  }
+
+  /** Read a proof's status; scoped to the caller via the owning policy. */
+  async getProof(userId: string, proofId: string) {
+    const proof = await this.prisma.proof.findUnique({
+      where: { id: proofId },
+      include: { policy: { select: { userId: true } } },
+    });
+    if (!proof || proof.policy?.userId !== userId) throw new NotFoundException('Proof not found');
+    return {
+      id: proof.id,
+      status: proof.status,
+      hasProof: proof.proofRef !== null,
+      nullifier: proof.nullifier,
+      createdAt: proof.createdAt,
+      updatedAt: proof.updatedAt,
+    };
   }
 }
