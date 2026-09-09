@@ -66,6 +66,14 @@ nargo info     # circuit size (main: ~371 ACIR opcodes)
 > witness solves on the host (`nargo execute`); only the final `bb` step needs
 > the container. `nargo test` (Noir's ACVM, no `bb`) is the host-side
 > verification.
+>
+> `bb` also requires a CPU with the **ADX** instruction (Zen/Ryzen or modern
+> Intel); it SIGILLs ("Illegal instruction") on older CPUs such as AMD Excavator,
+> and Docker does not help since it uses the host CPU. If your machine lacks ADX,
+> use CI: the **`.github/workflows/circuit.yml`** workflow runs `nargo test` +
+> `bb prove`/`write_vk`/`verify` on a GitHub runner and uploads the proof + vk as
+> an artifact. `prove-in-docker.sh` is for local machines that do have ADX + can
+> run Docker.
 
 The `#[test]` functions in `src/main.nr` are the golden vectors: they build a
 witness, derive the commitment/nullifier the same way the circuit does, and

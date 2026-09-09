@@ -1,0 +1,72 @@
+name: Circuit
+
+# The spend-policy Noir circuit. `nargo test` verifies the constraints; proof and
+# verifying-key generation needs barretenberg (bb), which requires a modern CPU
+# (ADX) and glibc >= 2.38, GitHub's runners have both. The circuit is pinned to
+# nargo 1.0.0-beta.6 + bb 0.84.0 (a known-good pair).
+on:
+  push:
+    branches: [main]
+    paths: ['circuits/**', '.github/workflows/circuit.yml']
+  pull_request:
+    branches: [main]
+    paths: ['circuits/**', '.github/workflows/circuit.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NARGO_VERSION: '1.0.0-beta.6'
+  BB_VERSION: '0.84.0'
+
+jobs:
+  spend-policy:
+    name: spend-policy circuit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: circuits/spend-policy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Noir (nargo)
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
+          echo "$HOME/.nargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.nargo/bin/noirup" -v "${NARGO_VERSION}"
+
+      - name: Install Barretenberg (bb)
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/AztecProtocol/aztec-packages/master/barretenberg/bbup/install | bash
+          echo "$HOME/.bb" >> "$GITHUB_PATH"
+          "$HOME/.bb/bbup" -v "${BB_VERSION}"
+
+      - name: Versions
+        run: nargo --version && bb --version
+
+      - name: Test the circuit constraints
+        run: nargo test
+
+      - name: Solve the witness
+        run: nargo execute
+
+      - name: Generate proof and verifying key
+        run: |
+          bb prove -b ./target/spend_policy.json -w ./target/spend_policy.gz -o ./target
+          bb write_vk -b ./target/spend_policy.json -o ./target
+
+      - name: Verify the proof
+        run: bb verify -k ./target/vk -p ./target/proof
+
+      - name: Upload proof + verifying key
+        uses: actions/upload-artifact@v4
+        with:
+          name: spend-policy-proof
+          path: |
+            circuits/spend-policy/target/proof
+            circuits/spend-policy/target/vk
