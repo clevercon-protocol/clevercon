@@ -1,7 +1,10 @@
 import { Controller, Get } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 /** Liveness + dependency health. Used by infra probes and local debugging. */
+// Probes hit this on a tight interval; never rate limit them.
+@SkipThrottle()
 @Controller('health')
 export class HealthController {
   constructor(private readonly prisma: PrismaService) {}

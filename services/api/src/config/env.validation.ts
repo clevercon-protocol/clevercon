@@ -10,6 +10,10 @@ export const envSchema = z.object({
   NETWORK: z.enum(['local', 'testnet', 'mainnet']).default('testnet'),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url().optional(),
+  // Number of trusted proxy hops in front of the API (load balancer / ingress).
+  // Controls Express `trust proxy` so rate limiting sees the real client IP from
+  // X-Forwarded-For instead of the proxy's. Keep 0 for direct local runs.
+  TRUST_PROXY: z.coerce.number().int().min(0).default(0),
   JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
   JWT_ACCESS_TTL: z.string().default('15m'),
   // SEP-10 wallet auth. If SERVER_SIGNING_KEY is unset, an ephemeral key is used

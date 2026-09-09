@@ -13,6 +13,7 @@ import { ProviderModule } from './provider/provider.module.js';
 import { PoliciesModule } from './policies/policies.module.js';
 import { QueueModule } from './queue/queue.module.js';
 import { EventsModule } from './events/events.module.js';
+import { RateLimitModule } from './throttler/rate-limit.module.js';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { EventsModule } from './events/events.module.js';
       validate: validateEnv,
       envFilePath: ['.env', '../../.env'],
     }),
+    RateLimitModule,
     QueueModule,
     EventsModule,
     PrismaModule,

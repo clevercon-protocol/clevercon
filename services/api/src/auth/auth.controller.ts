@@ -1,4 +1,5 @@
 import { Body, Controller, Post, Req } from '@nestjs/common';
+import { Throttle, seconds } from '@nestjs/throttler';
 import { z } from 'zod';
 import { AuthService } from './auth.service.js';
 import { parseBody } from './validate.js';
@@ -13,6 +14,10 @@ function metaOf(req: HttpRequest) {
   return { userAgent: Array.isArray(ua) ? ua[0] : ua, ip: req.ip };
 }
 
+// Auth is the most abused surface (credential stuffing, token brute force), so
+// it gets a much tighter budget than the global default: 15 requests/minute per
+// client IP across all of these endpoints.
+@Throttle({ default: { ttl: seconds(60), limit: 15 } })
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
