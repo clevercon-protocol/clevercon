@@ -15,7 +15,7 @@ The privacy layer spans four components that MUST agree byte-for-byte:
 |---|---|---|
 | CleverVault (`agent-vault`) | Stores the policy commitment; calls the verifier before releasing funds; tracks the running-spend accumulator | `contracts/agent-vault` |
 | policy-verifier | Pure on-chain check: proof + public inputs → `bool` | `contracts/policy-verifier` |
-| spend-policy circuit | Proves a release obeys the private rule | `circuits/spend-policy` (Noir, to build) |
+| spend-policy circuit | Proves a release obeys the private rule | `circuits/spend-policy` (Noir, built) |
 | Prover client | Builds the commitment, generates the proof per release | `services/*` prover worker (to build) |
 
 If any two disagree on the commitment, the public-input order/encoding, or the
@@ -32,9 +32,12 @@ These are pinned so the other three components do not each decide independently.
   `p = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
   This matches the UltraHonk / Noir target and CipherMit.
 - **Circuit hash primitive.** The commitment, the allowlist Merkle tree, and the
-  nullifier use **Poseidon2 over BN-254** (Noir-native, cheap in-circuit). A
-  Poseidon2 output is a field element `< p`, serialised as **32 bytes big-endian**
-  (the top two bits are therefore always zero).
+  nullifier use a single BN-254 field hash `H`. **v1 uses `pedersen_hash`** (Noir
+  stdlib-native); **Poseidon2 is the migration target** (to match the UltraHonk /
+  CipherMit stack) once the external `poseidon` Noir library compiles against the
+  pinned `nargo`. Either way `H(...)` is a field element `< p`, serialised as
+  **32 bytes big-endian** (the top two bits are therefore always zero). The
+  implemented circuit is `circuits/spend-policy`.
 - **On-chain transcript hash.** The verifier binds the proof to its public inputs
   with **SHA-256** (the only cheap hash host function Soroban exposes). This is a
   *binding* check, not a full pairing; see [§7](#7-trust-and-threat-model).
@@ -96,7 +99,7 @@ policy_encoding = enabled_flags (4 × 1 field, 0/1)
                ‖ R4.entries[0..K] ‖ R4.threshold
                ‖ version                       (field, = 1 for pp/1)
 
-commitment = Poseidon2( policy_encoding , salt )
+commitment = H( policy_encoding , salt )            (H = the circuit hash; v1 pedersen_hash)
 ```
 
 - `salt` is a uniformly random field element (`≥ 128 bits` of entropy) generated
@@ -118,10 +121,10 @@ The verifier's ABI is fixed at **four** 32-byte public inputs, in this order:
 
 | Index | Field | Encoding | Bytes |
 |---|---|---|---|
-| PI₀ | `commitment` | Poseidon2 output, big-endian | 32 |
+| PI₀ | `commitment` | circuit-hash output (v1 pedersen), big-endian | 32 |
 | PI₁ | `payee_hash` | `SHA-256(payee_scval_xdr)` | 32 |
 | PI₂ | `amount_scalar` | `0x00 × 16 ‖ amount_u128.to_be_bytes()` | 32 |
-| PI₃ | `nullifier` | Poseidon2 output, big-endian ([§5](#5-nullifier-derivation)) | 32 |
+| PI₃ | `nullifier` | circuit-hash output (v1 pedersen), big-endian ([§5](#5-nullifier-derivation)) | 32 |
 
 The canonical **public-input vector** is the 128-byte concatenation
 `PI₀ ‖ PI₁ ‖ PI₂ ‖ PI₃`. The **public-input commitment** carried in the proof
@@ -158,7 +161,7 @@ caller cannot supply an inconsistent pre-hashed value.
 ## 5. Nullifier derivation
 
 ```
-nullifier = Poseidon2( commitment , payee_field , amount , spend_counter )
+nullifier = H( commitment , payee_field , amount , spend_counter )   (H = the circuit hash; v1 pedersen_hash)
 ```
 
 - `spend_counter` is a per-policy monotonically increasing witness (starting at
@@ -269,7 +272,7 @@ called out as a known limitation, not silently assumed.
 
 - **Circuit** (`circuits/spend-policy`, #65): public inputs exactly
   `[commitment, payee, amount, nullifier]` per [§4](#4-public-input-encoding-byte-precise);
-  proves `Poseidon2(policy, salt) == commitment`, the enabled rules, and the
+  proves `H(policy, salt) == commitment`, the enabled rules, and the
   nullifier derivation; inactive rules provably neutral. Ships golden
   `Prover.toml` / `Verifier.toml` + a generated proof/VK.
 - **Verifier** (`contracts/policy-verifier`, #64): the `verify` ABI above; VK
@@ -288,7 +291,7 @@ called out as a known limitation, not silently assumed.
 
 A concrete release, computable by any implementation. `commitment` and
 `nullifier` below are illustrative 32-byte field elements (in a real release they
-are Poseidon2 outputs from the circuit); `payee_hash`, `amount_scalar`, and
+are circuit-hash outputs (v1 pedersen) from the circuit); `payee_hash`, `amount_scalar`, and
 `PI_hash` are computed exactly per this spec and are reproducible.
 
 ```
