@@ -20,6 +20,7 @@ const Overview = lazyFrom(() => import('./pages/buyer/Overview'), 'Overview');
 const VaultPage = lazyFrom(() => import('./pages/buyer/VaultPage'), 'VaultPage');
 const MarketplacePage = lazyFrom(() => import('./pages/buyer/MarketplacePage'), 'MarketplacePage');
 const JobsPage = lazyFrom(() => import('./pages/buyer/JobsPage'), 'JobsPage');
+const ActivityPage = lazyFrom(() => import('./pages/buyer/ActivityPage'), 'ActivityPage');
 const PoliciesPage = lazyFrom(() => import('./pages/buyer/PoliciesPage'), 'PoliciesPage');
 const TaskDetail = lazyFrom(() => import('./pages/TaskDetail'), 'TaskDetail');
 const ServiceDetail = lazyFrom(() => import('./pages/ServiceDetail'), 'ServiceDetail');
@@ -55,6 +56,7 @@ export function App() {
                 <Route path="marketplace" element={<MarketplacePage />} />
                 <Route path="marketplace/:id" element={<ServiceDetail />} />
                 <Route path="jobs" element={<JobsPage />} />
+                <Route path="activity" element={<ActivityPage />} />
                 <Route path="tasks/:id" element={<TaskDetail />} />
                 <Route path="policies" element={<PoliciesPage />} />
               </Route>

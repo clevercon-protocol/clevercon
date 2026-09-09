@@ -24,6 +24,7 @@ export function useRealtime(): void {
     const refresh = () => {
       qc.invalidateQueries({ queryKey: ['tasks'] });
       qc.invalidateQueries({ queryKey: ['vault'] });
+      qc.invalidateQueries({ queryKey: ['activity'] });
     };
     socket.on('task.updated', refresh);
     return () => {

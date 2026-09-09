@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, Vault, Search, ListChecks, ShieldCheck } from 'lucide-react';
+import { LayoutDashboard, Vault, Search, ListChecks, ShieldCheck, Activity } from 'lucide-react';
 import { useRealtime } from '../../lib/useRealtime';
 
 const TABS = [
@@ -7,6 +7,7 @@ const TABS = [
   { to: '/app/vault', label: 'Vault', icon: Vault },
   { to: '/app/marketplace', label: 'Marketplace', icon: Search },
   { to: '/app/jobs', label: 'Jobs', icon: ListChecks },
+  { to: '/app/activity', label: 'Activity', icon: Activity },
   { to: '/app/policies', label: 'Policies', icon: ShieldCheck },
 ];
 
