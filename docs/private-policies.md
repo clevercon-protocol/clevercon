@@ -355,6 +355,12 @@ testnet, not just in unit tests:
   **rejected** (verifier `false` -> vault `PolicyProofRejected`), and no funds
   moved.
 
+The release is **asset-agnostic**: the proof binds `(commitment, payee, amount,
+nullifier)` and never the asset, so `release_payment_proved` works for any
+supported SAC. Both paths were validated on testnet with real fund movement: a
+native XLM release (20 XLM) and a USDC release (20 TWUSDC), each gated by the
+same cross-contract `verify_policy` check.
+
 Reproduce the proof bytes with `scripts/build-test-proof.mjs`. The binding
 check, not a full pairing verification, is what runs on-chain (section 7); the
 UltraHonk compliance proof remains the trusted off-chain artifact in v1.
