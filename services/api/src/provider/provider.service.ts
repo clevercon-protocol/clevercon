@@ -153,6 +153,38 @@ export class ProviderService {
   }
 
   /**
+   * Incoming work for the current provider: the task steps routed to any service
+   * they own, newest first, with live status. This reflects real marketplace
+   * activity (buyers hiring the provider's services) independently of settlement,
+   * so it is honest even before any payment is recorded.
+   */
+  async jobs(userId: string, limit = 25) {
+    const steps = await this.prisma.taskStep.findMany({
+      where: { service: { providerId: userId } },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        service: { select: { name: true } },
+        task: { select: { title: true } },
+      },
+    });
+    return {
+      items: steps.map((s) => ({
+        id: s.id,
+        taskId: s.taskId,
+        taskTitle: s.task.title,
+        service: s.service?.name ?? null,
+        action: s.action,
+        status: s.status,
+        estimatedCost: Number(s.estimatedCost),
+        latencyMs: s.latencyMs,
+        createdAt: s.createdAt,
+      })),
+      total: steps.length,
+    };
+  }
+
+  /**
    * Earnings + recent incoming jobs for the current provider. Earnings are the
    * confirmed payments sent to any of the provider's service addresses.
    */

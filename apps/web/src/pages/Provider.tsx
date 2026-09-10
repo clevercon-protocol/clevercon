@@ -4,6 +4,7 @@ import { DollarSign, Briefcase, Star, Boxes } from 'lucide-react';
 import {
   getProviderServices,
   getProviderEarnings,
+  getProviderJobs,
   registerService,
   setServiceStatus,
 } from '../lib/provider';
@@ -13,10 +14,14 @@ import { PageHeader, StatCard } from '../components/ui';
 const JOB_STYLE: Record<string, string> = {
   CONFIRMED: 'text-emerald-300',
   COMPLETED: 'text-emerald-300',
+  RELEASED: 'text-emerald-300',
   PENDING: 'text-amber-300',
+  AWAITING_APPROVAL: 'text-amber-300',
+  RUNNING: 'text-sky-300',
   SUBMITTED: 'text-sky-300',
   DISPUTED: 'text-red-300',
   FAILED: 'text-red-400',
+  SKIPPED: 'text-slate-500',
 };
 
 /** Shows an ISO timestamp as a short date, or passes demo strings through. */
@@ -249,11 +254,14 @@ function ServicesCard() {
 }
 
 function JobsCard() {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['provider-earnings'],
-    queryFn: getProviderEarnings,
+  const {
+    data: jobs = [],
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['provider-jobs'],
+    queryFn: getProviderJobs,
   });
-  const jobs = data?.recent ?? [];
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
       <h2 className="font-semibold text-slate-300">Incoming jobs</h2>
@@ -269,13 +277,13 @@ function JobsCard() {
             className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
           >
             <div className="min-w-0">
-              <div className="truncate font-medium">{j.service}</div>
-              <div className="text-xs text-slate-500">
-                {j.from} · {when(j.createdAt)}
+              <div className="truncate font-medium">{j.action}</div>
+              <div className="truncate text-xs text-slate-500">
+                {j.service ?? 'service'} · {j.taskTitle} · {when(j.createdAt)}
               </div>
             </div>
             <div className="text-right">
-              <div className="text-slate-300">${j.amount}</div>
+              <div className="text-slate-300">${j.estimatedCost}</div>
               <div className={`text-xs ${JOB_STYLE[j.status] ?? 'text-slate-400'}`}>{j.status}</div>
             </div>
           </div>

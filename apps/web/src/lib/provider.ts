@@ -152,6 +152,37 @@ export async function setServiceStatus(id: string, active: boolean): Promise<Pro
   );
 }
 
+export interface ProviderStep {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  service: string | null;
+  action: string;
+  status: string;
+  estimatedCost: number;
+  latencyMs: number | null;
+  createdAt: string;
+}
+
+/** Incoming work (task steps) routed to the provider's services. */
+export async function getProviderJobs(): Promise<ProviderStep[]> {
+  if (isDemo()) {
+    return demoJobs.map((j) => ({
+      id: j.id,
+      taskId: j.id,
+      taskTitle: j.service,
+      service: j.service,
+      action: 'Fulfil request',
+      status: j.status.toUpperCase() === 'COMPLETED' ? 'RELEASED' : 'PENDING',
+      estimatedCost: j.amountUsdc,
+      latencyMs: null,
+      createdAt: j.when,
+    }));
+  }
+  const res = await apiFetch<{ items: ProviderStep[] }>('/provider/jobs');
+  return res.items;
+}
+
 /** The provider's earnings and recent jobs: demo data in demo mode, live API otherwise. */
 export async function getProviderEarnings(): Promise<ProviderEarnings> {
   if (isDemo()) {

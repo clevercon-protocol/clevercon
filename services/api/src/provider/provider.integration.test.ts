@@ -133,6 +133,66 @@ describe.skipIf(!DB)('Provider (integration, real Postgres)', () => {
     expect(e.recent).toHaveLength(0);
   });
 
+  it('lists incoming jobs (task steps) routed to the provider own services', async () => {
+    const me = await prisma.user.create({ data: {} });
+    const other = await prisma.user.create({ data: {} });
+    const buyer = await prisma.user.create({ data: {} });
+    const mySvc = await provider.registerService(me.id, {
+      name: 'My Svc',
+      description: 'd',
+      pricingModel: 'X402',
+      pricePerCall: 0.05,
+      endpoint: 'https://m.example.com',
+      stellarAddress: 'GMYSVC',
+    });
+    const theirSvc = await provider.registerService(other.id, {
+      name: 'Their Svc',
+      description: 'd',
+      pricingModel: 'X402',
+      pricePerCall: 0.05,
+      endpoint: 'https://t.example.com',
+      stellarAddress: 'GTHEIRSVC',
+    });
+
+    const task = await prisma.task.create({
+      data: { buyerId: buyer.id, title: 'A job', mode: 'DIRECT', budget: '1', asset: 'USDC' },
+    });
+    await prisma.taskStep.create({
+      data: {
+        taskId: task.id,
+        index: 0,
+        serviceId: mySvc.id,
+        action: 'Fetch data',
+        estimatedCost: '0.05',
+        status: 'RELEASED',
+      },
+    });
+    // A step on another provider's service must NOT appear for me.
+    await prisma.taskStep.create({
+      data: {
+        taskId: task.id,
+        index: 1,
+        serviceId: theirSvc.id,
+        action: 'Other work',
+        estimatedCost: '0.05',
+        status: 'PENDING',
+      },
+    });
+
+    const mine = await provider.jobs(me.id);
+    expect(mine.total).toBe(1);
+    expect(mine.items[0]).toMatchObject({
+      service: 'My Svc',
+      action: 'Fetch data',
+      status: 'RELEASED',
+      taskTitle: 'A job',
+    });
+
+    const theirs = await provider.jobs(other.id);
+    expect(theirs.total).toBe(1);
+    expect(theirs.items[0].action).toBe('Other work');
+  });
+
   it('updates a service the caller owns and rejects editing another provider service', async () => {
     const me = await prisma.user.create({ data: {} });
     const other = await prisma.user.create({ data: {} });

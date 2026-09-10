@@ -62,6 +62,12 @@ export class ProviderController {
     return this.provider.setServiceStatus(user.userId, id, active);
   }
 
+  /** Task steps routed to the caller's services (real incoming work). */
+  @Get('jobs')
+  jobs(@CurrentUser() user: AuthUser) {
+    return this.provider.jobs(user.userId);
+  }
+
   @Get('earnings')
   earnings(@CurrentUser() user: AuthUser) {
     return this.provider.earnings(user.userId);
