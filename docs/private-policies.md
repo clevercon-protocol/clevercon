@@ -331,3 +331,30 @@ public-input layer independently of the proving stack.
 - These are stated so the privacy claim is not overstated. See
   [ROADMAP.md](../ROADMAP.md) "Private spending policies" and
   [docs/architecture.md](architecture.md) "Where it is headed".
+
+---
+
+## 13. Testnet validation (2026-09-10)
+
+The full opt-in private-spending path was exercised end to end on Stellar
+testnet, not just in unit tests:
+
+- **policy-verifier** deployed at `CBILHCY4FEYU7RMWBHJX42QJ5TILHZ33HNOD7A6FXTXKB7X57N4LZQ2D`
+  (admin set, VK installed: circuit_size 16384, 4 public inputs, offset 1).
+- A binding proof produced by the TypeScript prover
+  (`@clevercon/common` `buildBindingProof`) was **accepted** by the deployed
+  contract: `verify_policy -> true`. A mismatched release (wrong amount)
+  returned `false`. This is the authoritative cross-language check that the
+  off-chain prover and the on-chain verifier agree byte for byte.
+- A CleverVault instance bound a task to a policy commitment
+  (`create_task_with_policy`), was pointed at the verifier
+  (`set_policy_verifier`), and a proof-gated release
+  (`release_payment_proved`) **moved real funds** (20 XLM to the payee) only
+  after the cross-contract `verify_policy` returned `true`.
+- Negative control: a release presented with a proof for a different amount was
+  **rejected** (verifier `false` -> vault `PolicyProofRejected`), and no funds
+  moved.
+
+Reproduce the proof bytes with `scripts/build-test-proof.mjs`. The binding
+check, not a full pairing verification, is what runs on-chain (section 7); the
+UltraHonk compliance proof remains the trusted off-chain artifact in v1.
