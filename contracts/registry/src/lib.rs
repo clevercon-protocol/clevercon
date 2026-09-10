@@ -1,5 +1,5 @@
 #![no_std]
-//! # `registry` — on-chain agent/service registry for CleverCon
+//! # `registry`: on-chain agent/service registry for CleverCon
 //!
 //! Stores, per `agent_id`, a tamper-evident **manifest hash** (what the provider
 //! published: name, endpoint, pricing, capabilities) plus an on-chain

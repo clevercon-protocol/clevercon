@@ -1,9 +1,40 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { Prisma, PaymentStatus, PricingModel, Role, ServiceStatus } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 const ZERO = new Prisma.Decimal(0);
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Tamper-evident hash of what a provider published. This is the value the
+ * on-chain registry anchors (contracts/registry): a client can hash a service's
+ * advertised fields and compare to the chain to confirm it was not altered.
+ * Keys are emitted in a fixed order so the hash is stable.
+ */
+export function manifestHash(m: {
+  name: string;
+  description: string;
+  category?: string | null;
+  capabilities: string[];
+  pricingModel: string;
+  pricePerCall: string | number;
+  endpoint: string;
+  stellarAddress: string;
+}): string {
+  const canonical = JSON.stringify({
+    v: 1,
+    name: m.name,
+    description: m.description,
+    category: m.category ?? null,
+    capabilities: [...m.capabilities].sort(),
+    pricingModel: m.pricingModel,
+    pricePerCall: String(m.pricePerCall),
+    endpoint: m.endpoint,
+    stellarAddress: m.stellarAddress,
+  });
+  return createHash('sha256').update(canonical).digest('hex');
+}
 
 export interface RegisterServiceParams {
   name: string;
@@ -79,6 +110,16 @@ export class ProviderService {
           endpoint: params.endpoint,
           stellarAddress: params.stellarAddress,
           status: ServiceStatus.ACTIVE,
+          manifestHash: manifestHash({
+            name: params.name,
+            description: params.description,
+            category: params.category,
+            capabilities: params.capabilities ?? [],
+            pricingModel: params.pricingModel,
+            pricePerCall: params.pricePerCall,
+            endpoint: params.endpoint,
+            stellarAddress: params.stellarAddress,
+          }),
           reputation: { create: {} },
         },
         include: { reputation: true },
@@ -99,7 +140,25 @@ export class ProviderService {
    * service. Only the provided fields change.
    */
   async updateService(userId: string, serviceId: string, params: UpdateServiceParams) {
-    const data: Prisma.ServiceUpdateInput = {};
+    // Ownership enforced here; also gives us the current values to merge so the
+    // manifest hash stays consistent with the stored fields.
+    const current = await this.prisma.service.findFirst({
+      where: { id: serviceId, providerId: userId },
+    });
+    if (!current) throw new NotFoundException('Service not found');
+
+    const merged = {
+      name: params.name ?? current.name,
+      description: params.description ?? current.description,
+      category: params.category ?? current.category,
+      capabilities: params.capabilities ?? current.capabilities,
+      pricingModel: current.pricingModel,
+      pricePerCall: params.pricePerCall ?? Number(current.pricePerCall),
+      endpoint: params.endpoint ?? current.endpoint,
+      stellarAddress: params.stellarAddress ?? current.stellarAddress,
+    };
+
+    const data: Prisma.ServiceUpdateInput = { manifestHash: manifestHash(merged) };
     if (params.name !== undefined) data.name = params.name;
     if (params.description !== undefined) data.description = params.description;
     if (params.category !== undefined) data.category = params.category;
@@ -109,14 +168,9 @@ export class ProviderService {
     if (params.endpoint !== undefined) data.endpoint = params.endpoint;
     if (params.stellarAddress !== undefined) data.stellarAddress = params.stellarAddress;
 
-    const result = await this.prisma.service.updateMany({
-      where: { id: serviceId, providerId: userId },
-      data,
-    });
-    if (result.count === 0) throw new NotFoundException('Service not found');
-
-    const updated = await this.prisma.service.findUniqueOrThrow({
+    const updated = await this.prisma.service.update({
       where: { id: serviceId },
+      data,
       include: { reputation: true },
     });
     return serializeService(updated);
