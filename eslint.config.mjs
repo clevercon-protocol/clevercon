@@ -11,6 +11,7 @@ export default tseslint.config(
       'apps/web/**',
       'packages/orchestrator/public/**',
       'packages/mcp/test-server.mjs',
+      'scripts/build-test-proof.mjs',
       'data/**',
       'logs/**',
       '.local/**',

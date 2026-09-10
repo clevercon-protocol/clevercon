@@ -132,4 +132,63 @@ describe.skipIf(!DB)('Provider (integration, real Postgres)', () => {
     expect(e).toMatchObject({ totalEarned: 0, thisWeek: 0, jobs: 0, rating: 0 });
     expect(e.recent).toHaveLength(0);
   });
+
+  it('updates a service the caller owns and rejects editing another provider service', async () => {
+    const me = await prisma.user.create({ data: {} });
+    const other = await prisma.user.create({ data: {} });
+    const svc = await provider.registerService(me.id, {
+      name: 'Orig',
+      description: 'orig desc',
+      pricingModel: 'X402',
+      pricePerCall: 0.05,
+      endpoint: 'https://a.example.com',
+      stellarAddress: 'GADDR1',
+    });
+
+    const updated = await provider.updateService(me.id, svc.id, {
+      name: 'Renamed',
+      pricePerCall: 0.2,
+    });
+    expect(updated.name).toBe('Renamed');
+    expect(updated.pricePerCall).toBe(0.2);
+
+    // Partial update leaves other fields intact.
+    const row = await prisma.service.findUnique({ where: { id: svc.id } });
+    expect(row.description).toBe('orig desc');
+    expect(row.endpoint).toBe('https://a.example.com');
+
+    // A different provider cannot edit it.
+    await expect(provider.updateService(other.id, svc.id, { name: 'Hijack' })).rejects.toThrow();
+    const still = await prisma.service.findUnique({ where: { id: svc.id } });
+    expect(still.name).toBe('Renamed');
+  });
+
+  it('pauses and resumes a service (owner-scoped), toggling marketplace visibility', async () => {
+    const me = await prisma.user.create({ data: {} });
+    const other = await prisma.user.create({ data: {} });
+    const svc = await provider.registerService(me.id, {
+      name: 'Pausable',
+      description: 'desc',
+      pricingModel: 'X402',
+      pricePerCall: 0.05,
+      endpoint: 'https://b.example.com',
+      stellarAddress: 'GADDR2',
+    });
+
+    const paused = await provider.setServiceStatus(me.id, svc.id, false);
+    expect(paused.status).toBe('INACTIVE');
+    // A paused service is excluded from the public marketplace listing.
+    const { ServicesService } = await import('../services/services.service.js');
+    const market = new ServicesService(prisma);
+    let listed = await market.list({});
+    expect(listed.items.find((s: { id: string }) => s.id === svc.id)).toBeUndefined();
+
+    const resumed = await provider.setServiceStatus(me.id, svc.id, true);
+    expect(resumed.status).toBe('ACTIVE');
+    listed = await market.list({});
+    expect(listed.items.find((s: { id: string }) => s.id === svc.id)).toBeDefined();
+
+    // Non-owner cannot change status.
+    await expect(provider.setServiceStatus(other.id, svc.id, false)).rejects.toThrow();
+  });
 });

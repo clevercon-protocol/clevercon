@@ -50,3 +50,6 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
 export const apiPost = <T>(path: string, body: unknown): Promise<T> =>
   apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body) });
+
+export const apiPatch = <T>(path: string, body: unknown): Promise<T> =>
+  apiFetch<T>(path, { method: 'PATCH', body: JSON.stringify(body) });

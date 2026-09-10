@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, PaymentStatus, PricingModel, Role, ServiceStatus } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 
@@ -14,6 +14,17 @@ export interface RegisterServiceParams {
   pricePerCall: number;
   endpoint: string;
   stellarAddress: string;
+}
+
+/** Fields a provider may edit after registration. All optional (partial update). */
+export interface UpdateServiceParams {
+  name?: string;
+  description?: string;
+  category?: string;
+  capabilities?: string[];
+  pricePerCall?: number;
+  endpoint?: string;
+  stellarAddress?: string;
 }
 
 /** Stable, URL-safe id from a display name plus a short random suffix. */
@@ -80,6 +91,55 @@ export class ProviderService {
       return service;
     });
     return serializeService(created);
+  }
+
+  /**
+   * Edit a service the caller owns. Ownership is enforced in the WHERE clause
+   * (id + providerId), so a provider can never mutate another provider's
+   * service. Only the provided fields change.
+   */
+  async updateService(userId: string, serviceId: string, params: UpdateServiceParams) {
+    const data: Prisma.ServiceUpdateInput = {};
+    if (params.name !== undefined) data.name = params.name;
+    if (params.description !== undefined) data.description = params.description;
+    if (params.category !== undefined) data.category = params.category;
+    if (params.capabilities !== undefined) data.capabilities = params.capabilities;
+    if (params.pricePerCall !== undefined)
+      data.pricePerCall = new Prisma.Decimal(params.pricePerCall);
+    if (params.endpoint !== undefined) data.endpoint = params.endpoint;
+    if (params.stellarAddress !== undefined) data.stellarAddress = params.stellarAddress;
+
+    const result = await this.prisma.service.updateMany({
+      where: { id: serviceId, providerId: userId },
+      data,
+    });
+    if (result.count === 0) throw new NotFoundException('Service not found');
+
+    const updated = await this.prisma.service.findUniqueOrThrow({
+      where: { id: serviceId },
+      include: { reputation: true },
+    });
+    return serializeService(updated);
+  }
+
+  /**
+   * Pause (INACTIVE) or resume (ACTIVE) a service the caller owns. A paused
+   * service drops out of the public marketplace (which lists only ACTIVE/NEW)
+   * but is not deleted, so reputation and history are preserved.
+   */
+  async setServiceStatus(userId: string, serviceId: string, active: boolean) {
+    const status = active ? ServiceStatus.ACTIVE : ServiceStatus.INACTIVE;
+    const result = await this.prisma.service.updateMany({
+      where: { id: serviceId, providerId: userId },
+      data: { status },
+    });
+    if (result.count === 0) throw new NotFoundException('Service not found');
+
+    const updated = await this.prisma.service.findUniqueOrThrow({
+      where: { id: serviceId },
+      include: { reputation: true },
+    });
+    return serializeService(updated);
   }
 
   /** Services owned by the current provider. */

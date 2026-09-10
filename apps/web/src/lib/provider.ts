@@ -1,5 +1,5 @@
 import { isDemo } from '../config';
-import { apiFetch, apiPost } from './api';
+import { apiFetch, apiPost, apiPatch } from './api';
 import { demoEarnings, demoServices, demoJobs } from './demo';
 
 export interface ProviderServiceItem {
@@ -92,6 +92,64 @@ export async function registerService(input: RegisterServiceInput): Promise<Prov
     status: s.status,
     rating: s.reputation?.score ?? 0,
   };
+}
+
+export interface UpdateServiceInput {
+  name?: string;
+  description?: string;
+  category?: string;
+  capabilities?: string[];
+  pricePerCall?: number;
+  endpoint?: string;
+  stellarAddress?: string;
+}
+
+function mapService(s: ApiProviderService): ProviderServiceItem {
+  return {
+    id: s.id,
+    name: s.name,
+    category: s.category,
+    pricePerCall: s.pricePerCall,
+    status: s.status,
+    rating: s.reputation?.score ?? 0,
+  };
+}
+
+/** Edit a service the caller owns. */
+export async function updateService(
+  id: string,
+  input: UpdateServiceInput,
+): Promise<ProviderServiceItem> {
+  if (isDemo()) {
+    const s = demoServices.find((d) => d.id === id) ?? demoServices[0];
+    return {
+      id,
+      name: input.name ?? s.name,
+      category: s.category,
+      pricePerCall: input.pricePerCall ?? s.pricePerCall,
+      status: 'ACTIVE',
+      rating: s.rating,
+    };
+  }
+  return mapService(await apiPatch<ApiProviderService>(`/provider/services/${id}`, input));
+}
+
+/** Pause or resume a service the caller owns. */
+export async function setServiceStatus(id: string, active: boolean): Promise<ProviderServiceItem> {
+  if (isDemo()) {
+    const s = demoServices.find((d) => d.id === id) ?? demoServices[0];
+    return {
+      id,
+      name: s.name,
+      category: s.category,
+      pricePerCall: s.pricePerCall,
+      status: active ? 'ACTIVE' : 'INACTIVE',
+      rating: s.rating,
+    };
+  }
+  return mapService(
+    await apiPost<ApiProviderService>(`/provider/services/${id}/status`, { active }),
+  );
 }
 
 /** The provider's earnings and recent jobs: demo data in demo mode, live API otherwise. */

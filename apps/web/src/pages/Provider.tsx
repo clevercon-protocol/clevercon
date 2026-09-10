@@ -1,7 +1,12 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DollarSign, Briefcase, Star, Boxes } from 'lucide-react';
-import { getProviderServices, getProviderEarnings, registerService } from '../lib/provider';
+import {
+  getProviderServices,
+  getProviderEarnings,
+  registerService,
+  setServiceStatus,
+} from '../lib/provider';
 import { refreshRoles } from '../lib/sessionSync';
 import { PageHeader, StatCard } from '../components/ui';
 
@@ -168,11 +173,20 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
 
 function ServicesCard() {
   const [registering, setRegistering] = useState(false);
+  const qc = useQueryClient();
   const {
     data: services = [],
     isLoading,
     error,
   } = useQuery({ queryKey: ['provider-services'], queryFn: getProviderServices });
+
+  const toggle = useMutation({
+    mutationFn: ({ id, active }: { id: string; active: boolean }) => setServiceStatus(id, active),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['provider-services'] });
+      qc.invalidateQueries({ queryKey: ['services'] }); // the public marketplace
+    },
+  });
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
       <div className="flex items-center justify-between">
@@ -197,17 +211,35 @@ function ServicesCard() {
         {services.map((s) => (
           <div
             key={s.id}
-            className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3"
+            className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3"
           >
-            <div>
-              <div className="font-medium">{s.name}</div>
+            <div className="min-w-0">
+              <div className="truncate font-medium">{s.name}</div>
               <div className="text-xs text-slate-500">{s.category ?? 'Uncategorised'}</div>
             </div>
-            <div className="text-right text-xs">
-              <div className="text-slate-300">${s.pricePerCall}/call</div>
-              <div className="inline-flex items-center gap-1 text-emerald-300">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> {s.status}
+            <div className="flex items-center gap-3">
+              <div className="text-right text-xs">
+                <div className="text-slate-300">${s.pricePerCall}/call</div>
+                <div
+                  className={`inline-flex items-center gap-1 ${
+                    s.status === 'ACTIVE' ? 'text-emerald-300' : 'text-slate-500'
+                  }`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      s.status === 'ACTIVE' ? 'bg-emerald-400' : 'bg-slate-500'
+                    }`}
+                  />{' '}
+                  {s.status}
+                </div>
               </div>
+              <button
+                onClick={() => toggle.mutate({ id: s.id, active: s.status !== 'ACTIVE' })}
+                disabled={toggle.isPending}
+                className="shrink-0 rounded-lg border border-white/10 px-2.5 py-1 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
+              >
+                {s.status === 'ACTIVE' ? 'Pause' : 'Activate'}
+              </button>
             </div>
           </div>
         ))}
