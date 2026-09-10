@@ -85,22 +85,25 @@ export function withdrawFromVault(amountUsdc: number): Promise<{ txHash: string 
 export interface Delegate {
   orchestrator: string | null;
   settlementEnabled: boolean;
+  registered: boolean;
 }
 
-/** The platform delegate the user can authorize to spend within their policy. */
+/** The user's spending delegate (provisioned on first read). */
 export async function getDelegate(): Promise<Delegate> {
-  if (isDemo()) return { orchestrator: null, settlementEnabled: false };
+  if (isDemo()) return { orchestrator: null, settlementEnabled: false, registered: false };
   return apiFetch<Delegate>('/vault/delegate');
 }
 
 /**
- * Authorize the platform delegate once (register_orchestrator): the API builds
- * the XDR, the wallet signs it, the API submits. After this the delegate can
- * lock and pay within the user's policy without further prompts, bounded by the
- * vault so it can never overspend.
+ * Authorize the user's delegate once (register_orchestrator): the API builds the
+ * XDR, the wallet signs it, the API submits, then we confirm it. After this the
+ * delegate can lock and pay within the user's policy without further prompts,
+ * bounded by the vault so it can never overspend.
  */
 export async function authorizeDelegate(): Promise<{ txHash: string }> {
   const built = await apiPost<BuildResp>('/vault/delegate/register', {});
   const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
-  return apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
+  const res = await apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
+  await apiPost('/vault/delegate/confirm', {});
+  return res;
 }

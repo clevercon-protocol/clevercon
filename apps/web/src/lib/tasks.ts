@@ -127,6 +127,7 @@ export interface CreateTaskInput {
   mode: HireMode;
   budget: number;
   serviceId?: string;
+  policyId?: string;
   description?: string;
 }
 

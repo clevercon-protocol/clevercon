@@ -380,12 +380,14 @@ export function HirePanel() {
   const [title, setTitle] = useState('');
   const [budget, setBudget] = useState('');
   const [serviceId, setServiceId] = useState('');
+  const [policyId, setPolicyId] = useState('');
   const activeMode = MODES.find((m) => m.id === mode)!;
   const { data: servicePage } = useQuery({
     queryKey: ['services', { picker: true }],
     queryFn: () => getServices({ limit: 100 }),
   });
   const services = servicePage?.items ?? [];
+  const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
 
   const hire = useMutation({
     mutationFn: () =>
@@ -394,6 +396,7 @@ export function HirePanel() {
         mode: mode.toUpperCase() as HireMode,
         budget: Number(budget),
         serviceId: mode === 'direct' ? serviceId || undefined : undefined,
+        policyId: policyId || undefined,
       }),
     onSuccess: () => {
       setTitle('');
@@ -463,6 +466,21 @@ export function HirePanel() {
             placeholder="Budget (USDC)"
             className={inputCls}
           />
+          {policies.length > 0 && (
+            <select
+              value={policyId}
+              onChange={(e) => setPolicyId(e.target.value)}
+              className={inputCls}
+              aria-label="Spending policy"
+            >
+              <option value="">No policy (off-chain only)</option>
+              {policies.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.isPrivate ? 'Private' : 'Transparent'} policy {p.commitment.slice(0, 8)}…
+                </option>
+              ))}
+            </select>
+          )}
           <button type="submit" disabled={!canSubmit} className={primaryBtn}>
             {hire.isPending ? 'Creating…' : 'Create job'}
           </button>
@@ -939,22 +957,24 @@ export function DelegateCard() {
           <span className="font-mono text-xs text-slate-500">
             {delegate.orchestrator.slice(0, 6)}…{delegate.orchestrator.slice(-4)}
           </span>
-          <button
-            onClick={() => authorize.mutate()}
-            disabled={authorize.isPending}
-            className={primaryBtn}
-          >
-            {authorize.isPending
-              ? 'Authorizing…'
-              : authorize.isSuccess
-                ? 'Authorized'
-                : 'Authorize agent'}
-          </button>
+          {delegate.registered ? (
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-300">
+              <Check size={14} /> Authorized
+            </span>
+          ) : (
+            <button
+              onClick={() => authorize.mutate()}
+              disabled={authorize.isPending}
+              className={primaryBtn}
+            >
+              {authorize.isPending ? 'Authorizing…' : 'Authorize agent'}
+            </button>
+          )}
         </div>
         {authorize.error && (
           <p className="mt-2 text-sm text-red-400">{readError(authorize.error)}</p>
         )}
-        {authorize.isSuccess && (
+        {authorize.isSuccess && !delegate.registered && (
           <p className="mt-2 text-sm text-emerald-300">
             Agent authorized. Jobs can now settle automatically.
           </p>
