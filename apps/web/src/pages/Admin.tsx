@@ -1,33 +1,116 @@
-import { Users, Boxes, Percent, Landmark } from 'lucide-react';
-import { demoPlatform, demoDisputes } from '../lib/demo';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Users, Boxes, Coins, Landmark, Briefcase } from 'lucide-react';
+import { demoDisputes } from '../lib/demo';
+import { getAdminStats, getAdminUsers, setUserRole } from '../lib/admin';
 
-const STAT = [
-  { icon: Users, label: 'Users', value: String(demoPlatform.users) },
-  { icon: Boxes, label: 'Active services', value: String(demoPlatform.activeServices) },
-  { icon: Percent, label: 'Protocol fee', value: `${(demoPlatform.feeBps / 100).toFixed(2)}%` },
-  { icon: Landmark, label: 'Value locked', value: `$${demoPlatform.tvlUsdc.toLocaleString()}` },
-];
+const MANAGEABLE_ROLES = ['PROVIDER', 'DEVELOPER', 'ADMIN'] as const;
+
+function StatTiles() {
+  const { data: s } = useQuery({ queryKey: ['admin-stats'], queryFn: getAdminStats });
+  const tiles = [
+    { icon: Users, label: 'Users', value: String(s?.users ?? 0) },
+    { icon: Boxes, label: 'Active services', value: String(s?.activeServices ?? 0) },
+    { icon: Briefcase, label: 'Tasks', value: String(s?.tasks ?? 0) },
+    { icon: Coins, label: 'Paid volume', value: `$${(s?.paymentsVolumeUsdc ?? 0).toFixed(2)}` },
+    { icon: Landmark, label: 'Value locked', value: `$${(s?.tvlUsdc ?? 0).toFixed(2)}` },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      {tiles.map((t) => (
+        <div key={t.label} className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+          <t.icon size={16} className="text-violet-300" />
+          <div className="mt-2 text-xl font-bold">{t.value}</div>
+          <div className="text-xs text-slate-500">{t.label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function UsersCard() {
+  const qc = useQueryClient();
+  const {
+    data: users = [],
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['admin-users'],
+    queryFn: getAdminUsers,
+  });
+  const toggle = useMutation({
+    mutationFn: (v: { userId: string; role: string; grant: boolean }) =>
+      setUserRole(v.userId, v.role, v.grant),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-users'] });
+      qc.invalidateQueries({ queryKey: ['admin-stats'] });
+    },
+  });
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+      <h2 className="font-semibold text-slate-300">Users &amp; roles</h2>
+      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading users…</p>}
+      {error && <p className="mt-4 text-sm text-red-400">Could not load users.</p>}
+      {!isLoading && !error && users.length === 0 && (
+        <p className="mt-4 text-sm text-slate-500">No users yet.</p>
+      )}
+      <div className="mt-4 space-y-2">
+        {users.map((u) => (
+          <div
+            key={u.id}
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+          >
+            <div className="min-w-0">
+              <div className="font-mono text-xs text-slate-400">
+                {u.wallet ? `${u.wallet.slice(0, 6)}…${u.wallet.slice(-4)}` : u.id.slice(0, 10)}
+              </div>
+              <div className="mt-0.5 text-xs text-slate-500">
+                {u.services} services · {u.tasks} tasks · {u.apiKeys} keys
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {MANAGEABLE_ROLES.map((role) => {
+                const has = u.roles.includes(role);
+                return (
+                  <button
+                    key={role}
+                    onClick={() => toggle.mutate({ userId: u.id, role, grant: !has })}
+                    disabled={toggle.isPending}
+                    className={`rounded-lg border px-2.5 py-1 text-xs transition-colors disabled:opacity-50 ${
+                      has
+                        ? 'border-violet-500/40 bg-violet-500/15 text-white'
+                        : 'border-white/10 text-slate-500 hover:text-white'
+                    }`}
+                    title={has ? `Revoke ${role}` : `Grant ${role}`}
+                  >
+                    {role}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function Admin() {
   return (
     <section className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Admin console</h1>
-        <p className="mt-1 text-slate-400">Disputes, fees, users, and platform monitoring.</p>
+        <p className="mt-1 text-slate-400">Monitoring, users and roles, and disputes.</p>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {STAT.map((s) => (
-          <div key={s.label} className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-            <s.icon size={16} className="text-violet-300" />
-            <div className="mt-2 text-xl font-bold">{s.value}</div>
-            <div className="text-xs text-slate-500">{s.label}</div>
-          </div>
-        ))}
-      </div>
+      <StatTiles />
+      <UsersCard />
 
       <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
         <h2 className="font-semibold text-slate-300">Disputes</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Dispute arbitration is on the roadmap; this is a preview.
+        </p>
         <div className="mt-4 space-y-2">
           {demoDisputes.map((d) => (
             <div
@@ -47,7 +130,7 @@ export function Admin() {
                 </span>
                 <button
                   disabled
-                  className="rounded-lg bg-white/10 px-2.5 py-1 text-xs text-slate-400 cursor-not-allowed"
+                  className="cursor-not-allowed rounded-lg bg-white/10 px-2.5 py-1 text-xs text-slate-400"
                 >
                   Resolve
                 </button>
