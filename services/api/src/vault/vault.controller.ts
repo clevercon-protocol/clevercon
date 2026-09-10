@@ -27,6 +27,22 @@ export class VaultController {
     return this.vault.status;
   }
 
+  /** The platform delegate address + whether automatic settlement is enabled. */
+  @Get('delegate')
+  delegate() {
+    return this.vault.delegate;
+  }
+
+  /**
+   * Build the one-time register_orchestrator XDR authorizing the platform
+   * delegate to spend within the caller's policy. Signed in the wallet and
+   * submitted via /vault/submit, like deposit/withdraw.
+   */
+  @Post('delegate/register')
+  registerDelegate(@CurrentUser() user: AuthUser) {
+    return this.vault.buildRegisterOrchestrator(user.userId);
+  }
+
   /**
    * Build an unsigned deposit XDR for the caller's wallet to sign. Requires a
    * fresh step-up wallet signature (x-stepup header) on top of the access token.

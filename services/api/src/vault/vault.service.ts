@@ -57,6 +57,29 @@ export class VaultService {
   }
 
   /**
+   * The platform delegate the user authorizes to spend on their behalf (bounded
+   * by the vault policy). Returns its address and whether automatic settlement
+   * is enabled in this environment.
+   */
+  get delegate(): { orchestrator: string | null; settlementEnabled: boolean } {
+    return {
+      orchestrator: this.contract.orchestratorPublicKey(),
+      settlementEnabled: this.contract.settlementEnabled,
+    };
+  }
+
+  /**
+   * Build the one-time register_orchestrator XDR for the caller to sign,
+   * authorizing the platform delegate. User-custodied (the user signs, the API
+   * submits via `submit`), mirroring deposit/withdraw.
+   */
+  async buildRegisterOrchestrator(userId: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildRegisterOrchestratorXdr(address);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /**
    * Aggregate the vault position for a user across every wallet they control.
    * On-chain is the source of truth; these rows are the indexed mirror, so a
    * user with no deposits yet simply reads back zeros.

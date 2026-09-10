@@ -22,7 +22,14 @@ import { isDemo } from '../../config';
 import { useSession } from '../../store/session';
 import { demoCategories } from '../../lib/demo';
 import { getServices, type ServiceSort } from '../../lib/services';
-import { getVault, getVaultStatus, depositToVault, withdrawFromVault } from '../../lib/vault';
+import {
+  getVault,
+  getVaultStatus,
+  depositToVault,
+  withdrawFromVault,
+  getDelegate,
+  authorizeDelegate,
+} from '../../lib/vault';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import {
   getPolicies,
@@ -892,6 +899,65 @@ export function Marketplace() {
               </button>
             </div>
           </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// ── Delegate authorization (bounded agent) ──────────────────────────────────────
+
+/**
+ * One-time authorization of the platform delegate (register_orchestrator). Once
+ * authorized, the delegate can lock and pay for jobs within the user's policy
+ * without further wallet prompts, and the vault guarantees it can never
+ * overspend. Shown only when automatic settlement is enabled server-side.
+ */
+export function DelegateCard() {
+  const qc = useQueryClient();
+  const { data: delegate } = useQuery({ queryKey: ['delegate'], queryFn: getDelegate });
+  const authorize = useMutation({
+    mutationFn: authorizeDelegate,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['delegate'] }),
+  });
+
+  if (!delegate?.settlementEnabled || !delegate.orchestrator) return null;
+
+  return (
+    <Card className="p-0">
+      <CardHeader
+        icon={ShieldCheck}
+        title="Spending agent"
+        hint="Authorize a bounded delegate to pay for jobs within your policy"
+      />
+      <div className="p-5 pt-4">
+        <p className="text-sm text-slate-400">
+          Authorize the agent once so it can lock and release funds for your jobs automatically. The
+          vault enforces your policy, so even the agent cannot overspend.
+        </p>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <span className="font-mono text-xs text-slate-500">
+            {delegate.orchestrator.slice(0, 6)}…{delegate.orchestrator.slice(-4)}
+          </span>
+          <button
+            onClick={() => authorize.mutate()}
+            disabled={authorize.isPending}
+            className={primaryBtn}
+          >
+            {authorize.isPending
+              ? 'Authorizing…'
+              : authorize.isSuccess
+                ? 'Authorized'
+                : 'Authorize agent'}
+          </button>
+        </div>
+        {authorize.error && (
+          <p className="mt-2 text-sm text-red-400">{readError(authorize.error)}</p>
+        )}
+        {authorize.isSuccess && (
+          <p className="mt-2 text-sm text-emerald-300">
+            Agent authorized. Jobs can now settle automatically.
+          </p>
         )}
       </div>
     </Card>
