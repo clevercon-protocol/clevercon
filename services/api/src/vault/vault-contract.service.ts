@@ -37,7 +37,6 @@ export class VaultContractService {
   private readonly contractId: string;
   private readonly rpcUrl: string;
   private readonly usdcSac: string;
-  private readonly orchestratorKey: string;
   readonly passphrase: string;
   readonly active: boolean;
   /** The deployed vault contract id, or '' when not configured. */
@@ -54,7 +53,6 @@ export class VaultContractService {
     this.contractId = config.get('AGENT_VAULT_CONTRACT_ID', { infer: true }) ?? '';
     this.rpcUrl = config.get('STELLAR_RPC_URL', { infer: true });
     this.usdcSac = config.get('USDC_SAC', { infer: true }) ?? '';
-    this.orchestratorKey = config.get('SERVER_ORCHESTRATOR_KEY', { infer: true }) ?? '';
     this.passphrase = config.get('NETWORK_PASSPHRASE', { infer: true });
     this.active = this.contractId.length > 10 && !this.contractId.startsWith('C...');
     if (!this.active) {
@@ -153,34 +151,21 @@ export class VaultContractService {
     throw new ServiceUnavailableException(`Vault transaction timed out: ${response.hash}`);
   }
 
-  // ── Bounded-delegate settlement (the orchestrator the user authorizes once) ──
-
-  /** Whether a platform delegate key is configured (automatic settlement on). */
-  get settlementEnabled(): boolean {
-    return this.active && this.orchestratorKey.length > 0;
-  }
-
-  private orchestratorKeypair(): Keypair {
-    if (!this.orchestratorKey) {
-      throw new ServiceUnavailableException('SERVER_ORCHESTRATOR_KEY not configured');
-    }
-    return Keypair.fromSecret(this.orchestratorKey);
-  }
-
-  /** The platform delegate's public address (what the user registers + authorizes). */
-  orchestratorPublicKey(): string | null {
-    return this.settlementEnabled ? this.orchestratorKeypair().publicKey() : null;
-  }
+  // ── Bounded-delegate actions (signed by the user's per-user delegate) ──
+  // The delegate keypair is supplied by DelegateService per call; this client
+  // holds no key. The delegate is bounded by the vault policy on every release.
 
   /**
    * Unsigned `register_orchestrator(user, orchestrator, name)` XDR for the user
-   * to sign once, authorizing the platform delegate to lock/release within the
-   * user's policy. User-custodied: the user signs, the API submits.
+   * to sign once, authorizing their delegate to lock/release within policy.
+   * User-custodied: the user signs, the API submits.
    */
-  async buildRegisterOrchestratorXdr(userAddress: string, name = 'clevercon'): Promise<string> {
+  async buildRegisterOrchestratorXdr(
+    userAddress: string,
+    orchestrator: string,
+    name = 'clevercon',
+  ): Promise<string> {
     this.ensureActive();
-    const orchestrator = this.orchestratorPublicKey();
-    if (!orchestrator) throw new ServiceUnavailableException('Settlement delegate not configured');
     return this.buildUnsignedXdr(userAddress, 'register_orchestrator', [
       new Address(userAddress).toScVal(),
       new Address(orchestrator).toScVal(),
@@ -189,15 +174,15 @@ export class VaultContractService {
   }
 
   /**
-   * Sign a contract call with the delegate key and submit it; returns the tx
-   * hash and the decoded contract return value (e.g. the new task id).
+   * Sign a contract call with the given delegate keypair and submit it; returns
+   * the tx hash and the decoded contract return value (e.g. the new task id).
    */
   private async signAndSubmitAsOrchestrator(
+    kp: Keypair,
     method: string,
     args: xdr.ScVal[],
   ): Promise<{ hash: string; returnValue: unknown }> {
     const server = this.server();
-    const kp = this.orchestratorKeypair();
     const account = await server.getAccount(kp.publicKey());
     const contract = new Contract(this.contractId);
     const tx = new TransactionBuilder(account, {
@@ -236,13 +221,17 @@ export class VaultContractService {
    * Returns the on-chain task id. Signed by the platform delegate (the user must
    * have registered it first), bounded by the committed policy.
    */
-  async createTaskWithPolicy(planCostUsdc: number, commitmentHex: string): Promise<bigint> {
+  async createTaskWithPolicy(
+    kp: Keypair,
+    planCostUsdc: number,
+    commitmentHex: string,
+  ): Promise<bigint> {
     this.ensureActive();
     const commitment = Buffer.from(commitmentHex, 'hex');
     if (commitment.length !== 32)
       throw new ServiceUnavailableException('commitment must be 32 bytes');
-    const { returnValue } = await this.signAndSubmitAsOrchestrator('create_task_with_policy', [
-      new Address(this.orchestratorKeypair().publicKey()).toScVal(),
+    const { returnValue } = await this.signAndSubmitAsOrchestrator(kp, 'create_task_with_policy', [
+      new Address(kp.publicKey()).toScVal(),
       this.usdcSacScVal(),
       nativeToScVal(usdcToStroops(planCostUsdc), { type: 'i128' }),
       nativeToScVal(commitment, { type: 'bytes' }),
@@ -255,18 +244,21 @@ export class VaultContractService {
    * the binding proof. The vault calls the verifier and only moves funds on a
    * true verdict, so the delegate can never pay outside the policy.
    */
-  async releasePaymentProved(params: {
-    taskId: bigint;
-    stepId: bigint;
-    amountUsdc: number;
-    payee: string;
-    nullifierHex: string;
-    proof: Buffer;
-  }): Promise<string> {
+  async releasePaymentProved(
+    kp: Keypair,
+    params: {
+      taskId: bigint;
+      stepId: bigint;
+      amountUsdc: number;
+      payee: string;
+      nullifierHex: string;
+      proof: Buffer;
+    },
+  ): Promise<string> {
     this.ensureActive();
     const nullifier = Buffer.from(params.nullifierHex, 'hex');
-    const { hash } = await this.signAndSubmitAsOrchestrator('release_payment_proved', [
-      new Address(this.orchestratorKeypair().publicKey()).toScVal(),
+    const { hash } = await this.signAndSubmitAsOrchestrator(kp, 'release_payment_proved', [
+      new Address(kp.publicKey()).toScVal(),
       nativeToScVal(params.taskId, { type: 'u64' }),
       nativeToScVal(params.stepId, { type: 'u64' }),
       this.usdcSacScVal(),

@@ -37,12 +37,11 @@ export const envSchema = z.object({
   // verifier gates proof-backed releases; the vault's set_policy_verifier must
   // point here for release_payment_proved to succeed.
   POLICY_VERIFIER_CONTRACT_ID: z.string().optional(),
-  // Platform delegate (orchestrator) secret. The user authorizes this key once
-  // via register_orchestrator; it then signs create_task (lock) and
-  // release_payment_proved (settle) on their behalf, bounded by the vault policy
-  // so it can never overspend. When unset, automatic settlement is disabled
-  // (tasks run off-chain only). Keep in KMS in production, never in git.
-  SERVER_ORCHESTRATOR_KEY: z.string().optional(),
+  // At-rest encryption key for per-user delegate secrets (32-byte hex or base64;
+  // KMS in production). When set, the platform can provision per-user spending
+  // delegates and automatic settlement is enabled; when unset, tasks run
+  // off-chain only. Shared with the worker (which reads it from process.env).
+  DELEGATE_ENCRYPTION_KEY: z.string().optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

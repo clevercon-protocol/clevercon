@@ -27,20 +27,26 @@ export class VaultController {
     return this.vault.status;
   }
 
-  /** The platform delegate address + whether automatic settlement is enabled. */
+  /** The caller's delegate address, whether settlement is enabled, and if authorized. */
   @Get('delegate')
-  delegate() {
-    return this.vault.delegate;
+  delegate(@CurrentUser() user: AuthUser) {
+    return this.vault.getDelegate(user.userId);
   }
 
   /**
-   * Build the one-time register_orchestrator XDR authorizing the platform
-   * delegate to spend within the caller's policy. Signed in the wallet and
-   * submitted via /vault/submit, like deposit/withdraw.
+   * Build the one-time register_orchestrator XDR authorizing the caller's own
+   * delegate to spend within their policy. Signed in the wallet and submitted
+   * via /vault/submit, like deposit/withdraw.
    */
   @Post('delegate/register')
   registerDelegate(@CurrentUser() user: AuthUser) {
     return this.vault.buildRegisterOrchestrator(user.userId);
+  }
+
+  /** Confirm the delegate was authorized on-chain (called after the register tx). */
+  @Post('delegate/confirm')
+  confirmDelegate(@CurrentUser() user: AuthUser) {
+    return this.vault.confirmDelegateRegistered(user.userId);
   }
 
   /**

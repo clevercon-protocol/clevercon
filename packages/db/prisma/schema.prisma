@@ -30,8 +30,26 @@ model User {
   policies  Policy[]
   webhooks  Webhook[]
   auditLogs AuditLog[]
+  delegate  AgentDelegate?
 
   @@map("users")
+}
+
+/// The per-user spending delegate (orchestrator) the platform provisions and the
+/// user authorizes on the vault. The secret is stored encrypted at rest (AES-GCM;
+/// KMS in production). Bounded by the vault policy, so even if leaked it cannot
+/// overspend; holds only a little XLM for fees, never user funds.
+model AgentDelegate {
+  userId       String   @id
+  publicKey    String   @unique // the Stellar G... address the user registers
+  secretCipher String // AES-256-GCM ciphertext of the secret key (base64 iv:tag:data)
+  registered   Boolean  @default(false) // whether register_orchestrator has been confirmed
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("agent_delegates")
 }
 
 model Wallet {

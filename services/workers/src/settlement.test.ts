@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Keypair } from '@stellar/stellar-sdk';
+import { encryptSecret } from '@clevercon/db';
 import { settleStep } from './settlement.js';
 
 interface StepRow {
@@ -17,10 +19,22 @@ interface StepRow {
   } | null;
 }
 
-function mockPrisma(step: StepRow | null, existingPayment = false) {
+function mockPrisma(
+  step: StepRow | null,
+  opts: { delegate?: boolean; existingPayment?: boolean } = {},
+) {
+  const { delegate = true, existingPayment = false } = opts;
   const created: unknown[] = [];
+  const delegateRow = delegate
+    ? {
+        userId: step?.task?.buyerId,
+        publicKey: 'GDEL',
+        secretCipher: encryptSecret(Keypair.random().secret()),
+      }
+    : null;
   const prisma = {
     taskStep: { findUnique: vi.fn(async () => step) },
+    agentDelegate: { findUnique: vi.fn(async () => delegateRow) },
     payment: {
       findFirst: vi.fn(async () => (existingPayment ? { id: 'p-existing' } : null)),
       create: vi.fn(async ({ data }: { data: unknown }) => {
@@ -53,13 +67,12 @@ function baseStep(over: Partial<StepRow> = {}): StepRow {
 
 describe('settleStep guards', () => {
   beforeEach(() => {
-    // settlement is configured in most guard tests so we exercise the later checks
-    process.env.SERVER_ORCHESTRATOR_KEY = 'SXXX';
+    process.env.DELEGATE_ENCRYPTION_KEY = 'a'.repeat(64); // 32-byte hex
     process.env.AGENT_VAULT_CONTRACT_ID = 'CVAULT';
     process.env.USDC_SAC = 'CUSDC';
   });
   afterEach(() => {
-    delete process.env.SERVER_ORCHESTRATOR_KEY;
+    delete process.env.DELEGATE_ENCRYPTION_KEY;
     delete process.env.AGENT_VAULT_CONTRACT_ID;
     delete process.env.USDC_SAC;
   });
@@ -71,8 +84,7 @@ describe('settleStep guards', () => {
 
   it('skips a step that is not released', async () => {
     const { prisma } = mockPrisma(baseStep({ status: 'PENDING' }));
-    const r = await settleStep(prisma, 's1');
-    expect(r).toMatchObject({ status: 'skipped', reason: 'step not released' });
+    expect((await settleStep(prisma, 's1')).reason).toBe('step not released');
   });
 
   it('skips a task not locked on-chain', async () => {
@@ -86,8 +98,7 @@ describe('settleStep guards', () => {
         },
       }),
     );
-    const r = await settleStep(prisma, 's1');
-    expect(r.reason).toBe('task not locked on-chain');
+    expect((await settleStep(prisma, 's1')).reason).toBe('task not locked on-chain');
   });
 
   it('skips a task with no policy commitment', async () => {
@@ -103,13 +114,18 @@ describe('settleStep guards', () => {
   });
 
   it('skips when settlement is not configured', async () => {
-    delete process.env.SERVER_ORCHESTRATOR_KEY;
-    const { prisma } = mockPrisma(baseStep());
+    const { prisma } = mockPrisma(baseStep(), { delegate: false }); // build mock before unsetting key
+    delete process.env.DELEGATE_ENCRYPTION_KEY;
     expect((await settleStep(prisma, 's1')).reason).toBe('settlement not configured');
   });
 
+  it('skips when the buyer has no delegate', async () => {
+    const { prisma } = mockPrisma(baseStep(), { delegate: false });
+    expect((await settleStep(prisma, 's1')).reason).toBe('buyer has no delegate');
+  });
+
   it('is idempotent: skips a step already settled', async () => {
-    const { prisma, created } = mockPrisma(baseStep(), true);
+    const { prisma, created } = mockPrisma(baseStep(), { existingPayment: true });
     const r = await settleStep(prisma, 's1');
     expect(r).toMatchObject({ status: 'skipped', reason: 'already settled' });
     expect(created).toHaveLength(0);

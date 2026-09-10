@@ -8,7 +8,7 @@ import {
   Address,
   type xdr,
 } from '@stellar/stellar-sdk';
-import { PaymentMethod, PaymentStatus, type PrismaClient } from '@clevercon/db';
+import { PaymentMethod, PaymentStatus, decryptSecret, type PrismaClient } from '@clevercon/db';
 import { buildBindingProof, generateNullifier } from '@clevercon/common';
 import { logger } from './logger.js';
 
@@ -24,23 +24,25 @@ function env(key: string): string {
 }
 
 /**
- * Sign `release_payment_proved` with the platform delegate key and submit it.
+ * Sign `release_payment_proved` with the buyer's delegate key and submit it.
  * Mirrors VaultContractService on the API side, but standalone so the worker
  * (which runs under tsx, not Nest) can settle without importing the API.
  */
-async function releasePaymentProved(params: {
-  taskId: bigint;
-  stepId: bigint;
-  amountStroops: bigint;
-  payee: string;
-  nullifier: Buffer;
-  proof: Buffer;
-}): Promise<string> {
+async function releasePaymentProved(
+  kp: Keypair,
+  params: {
+    taskId: bigint;
+    stepId: bigint;
+    amountStroops: bigint;
+    payee: string;
+    nullifier: Buffer;
+    proof: Buffer;
+  },
+): Promise<string> {
   const rpcUrl = env('STELLAR_RPC_URL') || 'https://soroban-testnet.stellar.org';
   const passphrase = env('NETWORK_PASSPHRASE') || 'Test SDF Network ; September 2015';
   const contractId = env('AGENT_VAULT_CONTRACT_ID');
   const usdcSac = env('USDC_SAC');
-  const kp = Keypair.fromSecret(env('SERVER_ORCHESTRATOR_KEY'));
 
   const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
   const account = await server.getAccount(kp.publicKey());
@@ -79,7 +81,7 @@ async function releasePaymentProved(params: {
 }
 
 function settlementConfigured(): boolean {
-  return !!(env('SERVER_ORCHESTRATOR_KEY') && env('AGENT_VAULT_CONTRACT_ID') && env('USDC_SAC'));
+  return !!(env('DELEGATE_ENCRYPTION_KEY') && env('AGENT_VAULT_CONTRACT_ID') && env('USDC_SAC'));
 }
 
 const STROOPS_PER_USDC = 10_000_000;
@@ -113,6 +115,13 @@ export async function settleStep(prisma: PrismaClient, stepId: string): Promise<
   if (!settlementConfigured())
     return { status: 'skipped', reason: 'settlement not configured', buyerId };
 
+  // The buyer's own delegate signs the release (bounded by their policy).
+  const delegate = buyerId
+    ? await prisma.agentDelegate.findUnique({ where: { userId: buyerId } })
+    : null;
+  if (!delegate) return { status: 'skipped', reason: 'buyer has no delegate', buyerId };
+  const delegateKp = Keypair.fromSecret(decryptSecret(delegate.secretCipher));
+
   // Idempotency: one vault-release payment per step.
   const existing = await prisma.payment.findFirst({
     where: { stepId, method: PaymentMethod.VAULT_RELEASE },
@@ -130,7 +139,7 @@ export async function settleStep(prisma: PrismaClient, stepId: string): Promise<
   });
 
   try {
-    const txHash = await releasePaymentProved({
+    const txHash = await releasePaymentProved(delegateKp, {
       taskId: step.task.vaultTaskId,
       stepId: BigInt(step.index),
       amountStroops,

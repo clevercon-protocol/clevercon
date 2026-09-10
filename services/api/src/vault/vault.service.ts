@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { VaultContractService } from './vault-contract.service.js';
+import { DelegateService } from './delegate.service.js';
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -14,6 +15,7 @@ export class VaultService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly contract: VaultContractService,
+    private readonly delegates: DelegateService,
   ) {}
 
   /** Deposit availability + the deployed contract address (for UI transparency). */
@@ -57,26 +59,33 @@ export class VaultService {
   }
 
   /**
-   * The platform delegate the user authorizes to spend on their behalf (bounded
-   * by the vault policy). Returns its address and whether automatic settlement
-   * is enabled in this environment.
+   * The caller's spending delegate (provisioned on first read) plus whether
+   * settlement is enabled here and whether it has been authorized on-chain yet.
    */
-  get delegate(): { orchestrator: string | null; settlementEnabled: boolean } {
-    return {
-      orchestrator: this.contract.orchestratorPublicKey(),
-      settlementEnabled: this.contract.settlementEnabled,
-    };
+  async getDelegate(userId: string) {
+    const settlementEnabled = this.contract.active && this.delegates.available;
+    if (!settlementEnabled) {
+      return { orchestrator: null, settlementEnabled: false, registered: false };
+    }
+    const d = await this.delegates.getOrProvision(userId);
+    return { orchestrator: d.publicKey, settlementEnabled: true, registered: d.registered };
   }
 
   /**
-   * Build the one-time register_orchestrator XDR for the caller to sign,
-   * authorizing the platform delegate. User-custodied (the user signs, the API
-   * submits via `submit`), mirroring deposit/withdraw.
+   * Build the one-time register_orchestrator XDR authorizing the caller's own
+   * delegate. User-custodied (the user signs, the API submits via `submit`).
    */
   async buildRegisterOrchestrator(userId: string) {
     const address = await this.primaryAddress(userId);
-    const xdr = await this.contract.buildRegisterOrchestratorXdr(address);
+    const { publicKey } = await this.delegates.getOrProvision(userId);
+    const xdr = await this.contract.buildRegisterOrchestratorXdr(address, publicKey);
     return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Mark the caller's delegate as authorized (called after the register tx submits). */
+  async confirmDelegateRegistered(userId: string) {
+    await this.delegates.markRegistered(userId);
+    return { ok: true as const };
   }
 
   /**

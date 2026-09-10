@@ -1,7 +1,15 @@
-import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { Prisma, PaymentStatus, StepStatus, TaskMode, TaskStatus } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueueService } from '../queue/queue.service.js';
+import { VaultContractService } from '../vault/vault-contract.service.js';
+import { DelegateService } from '../vault/delegate.service.js';
 
 type TaskRow = Prisma.TaskGetPayload<{
   include: { steps: { select: { id: true; status: true } }; payments: true };
@@ -18,6 +26,7 @@ export interface CreateTaskParams {
   mode: TaskMode;
   budget: number;
   serviceId?: string;
+  policyId?: string;
   description?: string;
 }
 
@@ -50,10 +59,46 @@ function serialize(t: TaskRow) {
 export class TasksService {
   // QueueService is optional so the service can be constructed directly in tests
   // without Redis; in the app, Nest injects it (QueueModule is global).
+  private readonly logger = new Logger(TasksService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly queue?: QueueService,
+    @Optional() private readonly vault?: VaultContractService,
+    @Optional() private readonly delegates?: DelegateService,
   ) {}
+
+  /**
+   * If the task carries a policy and the buyer has an authorized delegate and
+   * funds, lock the budget on-chain under that policy commitment so the delegate
+   * can later settle released steps. Best-effort: any failure (no delegate, not
+   * registered, insufficient funds, chain error) leaves the task running
+   * off-chain rather than failing the hire. Returns the on-chain task id if locked.
+   */
+  private async lockOnChain(
+    userId: string,
+    taskId: string,
+    policyId: string,
+    budget: number,
+  ): Promise<void> {
+    if (!this.vault?.active || !this.delegates?.available) return;
+    const policy = await this.prisma.policy.findFirst({ where: { id: policyId, userId } });
+    if (!policy) return;
+    const delegate = await this.prisma.agentDelegate.findUnique({ where: { userId } });
+    if (!delegate?.registered) return; // delegate must be authorized on-chain first
+    try {
+      const kp = await this.delegates.keypairFor(userId);
+      if (!kp) return;
+      const vaultTaskId = await this.vault.createTaskWithPolicy(kp, budget, policy.commitment);
+      await this.prisma.task.update({
+        where: { id: taskId },
+        data: { vaultTaskId, policy: { connect: { id: policyId } } },
+      });
+      this.logger.log(`Locked task ${taskId} on-chain as vault task ${vaultTaskId}`);
+    } catch (err) {
+      this.logger.warn(`On-chain lock skipped for task ${taskId}: ${(err as Error).message}`);
+    }
+  }
 
   /**
    * Create a task for the current buyer. The task starts in DRAFT; no money
@@ -99,6 +144,11 @@ export class TasksService {
       data,
       include: { steps: { select: { id: true, status: true } }, payments: true },
     });
+    // If a policy is attached, lock the budget on-chain under it before running,
+    // so released steps can settle to providers via the delegate. Best-effort.
+    if (params.policyId) {
+      await this.lockOnChain(userId, created.id, params.policyId, params.budget);
+    }
     // A task with steps (a DIRECT hire) is ready to run now; hand it to the
     // worker queue. SEARCH/COMPOSE have no steps yet (planning is a later job).
     if (created.steps.length > 0) await this.queue?.enqueueTaskExecution(created.id);

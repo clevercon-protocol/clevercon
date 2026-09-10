@@ -18,6 +18,7 @@ const createSchema = z.object({
   mode: z.nativeEnum(TaskMode),
   budget: z.number().positive(),
   serviceId: z.string().optional(),
+  policyId: z.string().optional(),
   description: z.string().max(2000).optional(),
 });
 
