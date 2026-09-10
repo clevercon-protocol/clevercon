@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { Prisma, PaymentStatus, PricingModel, Role, ServiceStatus } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { RegistryContractService } from './registry-contract.service.js';
 
 const ZERO = new Prisma.Decimal(0);
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -88,7 +89,10 @@ function serializeService(s: ServiceWithRep) {
 
 @Injectable()
 export class ProviderService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly registry?: RegistryContractService,
+  ) {}
 
   /**
    * Register a service under the current user and grant them the PROVIDER role,
@@ -131,6 +135,13 @@ export class ProviderService {
       });
       return service;
     });
+    // Anchor the manifest hash on-chain (best-effort, background). The DB hash is
+    // already the cache; the chain anchor makes it publicly verifiable.
+    void this.registry?.anchorManifest(
+      created.agentId,
+      created.manifestHash ?? '',
+      created.stellarAddress,
+    );
     return serializeService(created);
   }
 
@@ -173,6 +184,12 @@ export class ProviderService {
       data,
       include: { reputation: true },
     });
+    // Re-anchor the refreshed manifest hash on-chain (best-effort, background).
+    void this.registry?.anchorManifest(
+      updated.agentId,
+      updated.manifestHash ?? '',
+      updated.stellarAddress,
+    );
     return serializeService(updated);
   }
 

@@ -37,6 +37,11 @@ export const envSchema = z.object({
   // verifier gates proof-backed releases; the vault's set_policy_verifier must
   // point here for release_payment_proved to succeed.
   POLICY_VERIFIER_CONTRACT_ID: z.string().optional(),
+  // On-chain agent registry (Phase 4). When REGISTRY_CONTRACT_ID and
+  // REGISTRY_ADMIN_KEY are set, the API anchors service manifest hashes and
+  // reputation on-chain (the platform is the registry admin/owner). KMS in prod.
+  REGISTRY_CONTRACT_ID: z.string().optional(),
+  REGISTRY_ADMIN_KEY: z.string().optional(),
   // At-rest encryption key for per-user delegate secrets (32-byte hex or base64;
   // KMS in production). When set, the platform can provision per-user spending
   // delegates and automatic settlement is enabled; when unset, tasks run
