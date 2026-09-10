@@ -33,6 +33,10 @@ export const envSchema = z.object({
   AGENT_VAULT_CONTRACT_ID: z.string().optional(),
   STELLAR_RPC_URL: z.string().url().default('https://soroban-testnet.stellar.org'),
   USDC_SAC: z.string().optional(),
+  // Deployed policy-verifier (Phase 3). When set, the app knows which on-chain
+  // verifier gates proof-backed releases; the vault's set_policy_verifier must
+  // point here for release_payment_proved to succeed.
+  POLICY_VERIFIER_CONTRACT_ID: z.string().optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
