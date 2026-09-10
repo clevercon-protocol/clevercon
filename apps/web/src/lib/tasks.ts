@@ -64,6 +64,7 @@ export interface TaskStepView {
   service: string | null;
   latencyMs: number | null;
   error: string | null;
+  output: string | null;
 }
 
 export interface Receipt {
@@ -99,6 +100,7 @@ export async function getTask(id: string): Promise<TaskDetail> {
         service: 'Stellar Oracle',
         latencyMs: i < base.completedSteps ? 820 : null,
         error: null,
+        output: i < base.completedSteps ? '{"result":"Fulfilled (demo)"}' : null,
       })),
       receipts:
         base.spent > 0

@@ -211,6 +211,9 @@ export class TasksService {
         service: s.service?.name ?? null,
         latencyMs: s.latencyMs,
         error: s.error,
+        // The provider's returned result for this step, so the buyer sees what
+        // they paid for (truncated to 2000 chars at execution time).
+        output: s.output,
       })),
       receipts: t.payments.map((p) => ({
         id: p.id,
