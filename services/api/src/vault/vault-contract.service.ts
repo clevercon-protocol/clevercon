@@ -5,7 +5,9 @@ import {
   rpc as SorobanRpc,
   TransactionBuilder,
   BASE_FEE,
+  Keypair,
   nativeToScVal,
+  scValToNative,
   Address,
   xdr,
 } from '@stellar/stellar-sdk';
@@ -35,6 +37,7 @@ export class VaultContractService {
   private readonly contractId: string;
   private readonly rpcUrl: string;
   private readonly usdcSac: string;
+  private readonly orchestratorKey: string;
   readonly passphrase: string;
   readonly active: boolean;
   /** The deployed vault contract id, or '' when not configured. */
@@ -51,6 +54,7 @@ export class VaultContractService {
     this.contractId = config.get('AGENT_VAULT_CONTRACT_ID', { infer: true }) ?? '';
     this.rpcUrl = config.get('STELLAR_RPC_URL', { infer: true });
     this.usdcSac = config.get('USDC_SAC', { infer: true }) ?? '';
+    this.orchestratorKey = config.get('SERVER_ORCHESTRATOR_KEY', { infer: true }) ?? '';
     this.passphrase = config.get('NETWORK_PASSPHRASE', { infer: true });
     this.active = this.contractId.length > 10 && !this.contractId.startsWith('C...');
     if (!this.active) {
@@ -147,5 +151,130 @@ export class VaultContractService {
       }
     }
     throw new ServiceUnavailableException(`Vault transaction timed out: ${response.hash}`);
+  }
+
+  // ── Bounded-delegate settlement (the orchestrator the user authorizes once) ──
+
+  /** Whether a platform delegate key is configured (automatic settlement on). */
+  get settlementEnabled(): boolean {
+    return this.active && this.orchestratorKey.length > 0;
+  }
+
+  private orchestratorKeypair(): Keypair {
+    if (!this.orchestratorKey) {
+      throw new ServiceUnavailableException('SERVER_ORCHESTRATOR_KEY not configured');
+    }
+    return Keypair.fromSecret(this.orchestratorKey);
+  }
+
+  /** The platform delegate's public address (what the user registers + authorizes). */
+  orchestratorPublicKey(): string | null {
+    return this.settlementEnabled ? this.orchestratorKeypair().publicKey() : null;
+  }
+
+  /**
+   * Unsigned `register_orchestrator(user, orchestrator, name)` XDR for the user
+   * to sign once, authorizing the platform delegate to lock/release within the
+   * user's policy. User-custodied: the user signs, the API submits.
+   */
+  async buildRegisterOrchestratorXdr(userAddress: string, name = 'clevercon'): Promise<string> {
+    this.ensureActive();
+    const orchestrator = this.orchestratorPublicKey();
+    if (!orchestrator) throw new ServiceUnavailableException('Settlement delegate not configured');
+    return this.buildUnsignedXdr(userAddress, 'register_orchestrator', [
+      new Address(userAddress).toScVal(),
+      new Address(orchestrator).toScVal(),
+      nativeToScVal(name, { type: 'string' }),
+    ]);
+  }
+
+  /**
+   * Sign a contract call with the delegate key and submit it; returns the tx
+   * hash and the decoded contract return value (e.g. the new task id).
+   */
+  private async signAndSubmitAsOrchestrator(
+    method: string,
+    args: xdr.ScVal[],
+  ): Promise<{ hash: string; returnValue: unknown }> {
+    const server = this.server();
+    const kp = this.orchestratorKeypair();
+    const account = await server.getAccount(kp.publicKey());
+    const contract = new Contract(this.contractId);
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.passphrase,
+    })
+      .addOperation(contract.call(method, ...args))
+      .setTimeout(300)
+      .build();
+    const simulated = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simulated)) {
+      throw new ServiceUnavailableException(`${method} simulation failed: ${simulated.error}`);
+    }
+    const prepared = SorobanRpc.assembleTransaction(tx, simulated).build();
+    prepared.sign(kp);
+    const response = await server.sendTransaction(prepared);
+    if (response.status === 'ERROR') {
+      throw new ServiceUnavailableException(`${method} rejected on submit`);
+    }
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const result = await server.getTransaction(response.hash);
+      if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+        const returnValue = result.returnValue ? scValToNative(result.returnValue) : null;
+        return { hash: response.hash, returnValue };
+      }
+      if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        throw new ServiceUnavailableException(`${method} failed on-chain: ${response.hash}`);
+      }
+    }
+    throw new ServiceUnavailableException(`${method} timed out: ${response.hash}`);
+  }
+
+  /**
+   * Lock a task's budget on-chain as the delegate, binding a policy commitment.
+   * Returns the on-chain task id. Signed by the platform delegate (the user must
+   * have registered it first), bounded by the committed policy.
+   */
+  async createTaskWithPolicy(planCostUsdc: number, commitmentHex: string): Promise<bigint> {
+    this.ensureActive();
+    const commitment = Buffer.from(commitmentHex, 'hex');
+    if (commitment.length !== 32)
+      throw new ServiceUnavailableException('commitment must be 32 bytes');
+    const { returnValue } = await this.signAndSubmitAsOrchestrator('create_task_with_policy', [
+      new Address(this.orchestratorKeypair().publicKey()).toScVal(),
+      this.usdcSacScVal(),
+      nativeToScVal(usdcToStroops(planCostUsdc), { type: 'i128' }),
+      nativeToScVal(commitment, { type: 'bytes' }),
+    ]);
+    return BigInt(returnValue as string | number | bigint);
+  }
+
+  /**
+   * Settle one released step: the delegate submits `release_payment_proved` with
+   * the binding proof. The vault calls the verifier and only moves funds on a
+   * true verdict, so the delegate can never pay outside the policy.
+   */
+  async releasePaymentProved(params: {
+    taskId: bigint;
+    stepId: bigint;
+    amountUsdc: number;
+    payee: string;
+    nullifierHex: string;
+    proof: Buffer;
+  }): Promise<string> {
+    this.ensureActive();
+    const nullifier = Buffer.from(params.nullifierHex, 'hex');
+    const { hash } = await this.signAndSubmitAsOrchestrator('release_payment_proved', [
+      new Address(this.orchestratorKeypair().publicKey()).toScVal(),
+      nativeToScVal(params.taskId, { type: 'u64' }),
+      nativeToScVal(params.stepId, { type: 'u64' }),
+      this.usdcSacScVal(),
+      nativeToScVal(usdcToStroops(params.amountUsdc), { type: 'i128' }),
+      new Address(params.payee).toScVal(),
+      nativeToScVal(nullifier, { type: 'bytes' }),
+      nativeToScVal(params.proof, { type: 'bytes' }),
+    ]);
+    return hash;
   }
 }
