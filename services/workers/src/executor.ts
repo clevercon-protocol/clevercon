@@ -1,4 +1,5 @@
 import { type PrismaClient, StepStatus, TaskStatus } from '@clevercon/db';
+import { enqueueSettlement } from './queue.js';
 
 export interface ExecuteResult {
   status: 'completed' | 'failed' | 'skipped';
@@ -119,6 +120,16 @@ export async function executeTask(
         data: { status: StepStatus.RELEASED, output, latencyMs, error: null },
       });
       if (step.serviceId) await recordOutcome(prisma, step.serviceId, true, latencyMs);
+      // If the task is locked on-chain under a policy, settle this step (pay the
+      // provider via a proof-gated release) out of band. Non-fatal: execution
+      // never fails because settlement could not be enqueued.
+      if (task.vaultTaskId && step.serviceId) {
+        try {
+          await enqueueSettlement(step.id);
+        } catch {
+          // settlement can be retried/driven later; do not fail the step
+        }
+      }
       stepsRun += 1;
     } catch (err) {
       const latencyMs = Date.now() - started;

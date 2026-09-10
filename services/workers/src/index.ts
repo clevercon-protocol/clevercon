@@ -8,13 +8,16 @@ import { PrismaClient } from '@clevercon/db';
 import {
   TASK_QUEUE,
   PROOF_QUEUE,
+  SETTLEMENT_QUEUE,
   redisConnection,
   redisUrl,
   type TaskExecutionJob,
   type ProofGenerationJob,
+  type SettlementJob,
 } from './queue.js';
 import { executeTask } from './executor.js';
 import { generateProof } from './prover.js';
+import { settleStep } from './settlement.js';
 import { logger } from './logger.js';
 
 // Load the repo-root .env (DATABASE_URL, REDIS_URL) so this runs standalone.
@@ -76,11 +79,37 @@ function main(): void {
     logger.error({ proofId: job?.data.proofId, err: err.message }, 'proof generation failed'),
   );
 
-  logger.info({ concurrency: CONCURRENCY }, 'task-execution + proof-generation workers up');
+  const settlementWorker = new Worker<SettlementJob>(
+    SETTLEMENT_QUEUE,
+    async (job) => {
+      const result = await settleStep(prisma, job.data.stepId);
+      if (result.buyerId && result.status === 'settled') {
+        emitter.to(`user:${result.buyerId}`).emit('task.updated', {
+          stepId: job.data.stepId,
+          settled: true,
+          txHash: result.txHash,
+        });
+      }
+      return result;
+    },
+    { connection: redisConnection(), concurrency: CONCURRENCY },
+  );
+  settlementWorker.on('completed', (job, result) =>
+    logger.info({ stepId: job.data.stepId, result }, 'settlement processed'),
+  );
+  settlementWorker.on('failed', (job, err) =>
+    logger.error({ stepId: job?.data.stepId, err: err.message }, 'settlement job failed'),
+  );
+
+  logger.info(
+    { concurrency: CONCURRENCY },
+    'task-execution + proof-generation + settlement workers up',
+  );
 
   const shutdown = async () => {
     await worker.close();
     await proofWorker.close();
+    await settlementWorker.close();
     await prisma.$disconnect();
     process.exit(0);
   };
