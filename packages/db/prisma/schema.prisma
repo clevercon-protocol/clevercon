@@ -118,10 +118,11 @@ model ApiKey {
   userId     String
   name       String
   prefix     String    @unique // shown to the user; the rest is secret
-  keyHash    String
-  scopes     String[]  @default([])
-  lastUsedAt DateTime?
-  expiresAt  DateTime?
+  keyHash      String
+  scopes       String[]  @default([])
+  lastUsedAt   DateTime?
+  requestCount Int       @default(0) // total authenticated calls (usage metering)
+  expiresAt    DateTime?
   revokedAt  DateTime?
   createdAt  DateTime  @default(now())
 

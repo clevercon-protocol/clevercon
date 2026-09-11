@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/co
 import { z } from 'zod';
 import { TaskMode, TaskStatus } from '@clevercon/db';
 import { TasksService } from './tasks.service.js';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
+import { ApiAuthGuard } from '../auth/api-auth.guard.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { parseBody } from '../auth/validate.js';
 import type { AuthUser } from '../auth/types.js';
@@ -24,9 +24,10 @@ const createSchema = z.object({
 
 const disputeSchema = z.object({ reason: z.string().max(1000).optional() });
 
-/** The current session's tasks (buyer-scoped). */
+/** The current session's tasks (buyer-scoped). Works with a JWT (console) or an
+ *  x-api-key (programmatic/SDK), so developers can hire + query on the rail. */
 @Controller('tasks')
-@UseGuards(JwtAuthGuard)
+@UseGuards(ApiAuthGuard)
 export class TasksController {
   constructor(private readonly tasks: TasksService) {}
 

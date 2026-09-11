@@ -8,6 +8,7 @@ export interface ApiKey {
   prefix: string;
   scopes: string[];
   lastUsedAt: string | null;
+  requestCount: number;
   createdAt: string;
   revokedAt: string | null;
 }
@@ -29,6 +30,7 @@ export async function getApiKeys(): Promise<ApiKey[]> {
       prefix: k.prefix,
       scopes: [],
       lastUsedAt: k.lastUsed,
+      requestCount: 0,
       createdAt: k.created,
       revokedAt: null,
     }));

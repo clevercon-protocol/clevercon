@@ -147,6 +147,7 @@ function ApiKeys() {
 function Stats() {
   const { data: keys = [] } = useQuery({ queryKey: ['apiKeys'], queryFn: getApiKeys });
   const activeKeys = keys.filter((k) => !k.revokedAt).length;
+  const totalCalls = keys.reduce((sum, k) => sum + (k.requestCount ?? 0), 0);
   const stats = isDemo()
     ? [
         { icon: Activity, label: 'Calls today', value: demoUsage.callsToday.toLocaleString() },
@@ -154,9 +155,9 @@ function Stats() {
         { icon: KeyRound, label: 'Active keys', value: String(demoUsage.keys) },
       ]
     : [
-        { icon: Activity, label: 'Calls today', value: 'n/a' },
-        { icon: Activity, label: 'Calls this week', value: 'n/a' },
+        { icon: Activity, label: 'Total calls', value: totalCalls.toLocaleString() },
         { icon: KeyRound, label: 'Active keys', value: String(activeKeys) },
+        { icon: KeyRound, label: 'All keys', value: String(keys.length) },
       ];
   const accents = ['sky', 'violet', 'emerald'];
   return (

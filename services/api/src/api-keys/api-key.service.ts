@@ -44,6 +44,7 @@ export class ApiKeyService {
         prefix: true,
         scopes: true,
         lastUsedAt: true,
+        requestCount: true,
         createdAt: true,
         revokedAt: true,
       },
@@ -67,7 +68,11 @@ export class ApiKeyService {
     if (!record || record.revokedAt) return null;
     if (record.expiresAt && record.expiresAt < new Date()) return null;
     if (!safeEqualHex(sha256(parsed.secret), record.keyHash)) return null;
-    await this.prisma.apiKey.update({ where: { id: record.id }, data: { lastUsedAt: new Date() } });
+    // Meter usage: stamp last-used and increment the call counter atomically.
+    await this.prisma.apiKey.update({
+      where: { id: record.id },
+      data: { lastUsedAt: new Date(), requestCount: { increment: 1 } },
+    });
     return { apiKeyId: record.id, userId: record.userId, scopes: record.scopes };
   }
 }
