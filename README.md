@@ -17,7 +17,7 @@
 
 CleverCon is payment infrastructure for AI agents on Stellar. You hand an agent a budget, a non-custodial smart contract holds the money and enforces the limit, and the agent pays for the data, compute, and services it needs to do real work. It never holds your funds and never spends outside what you set.
 
-Two things define it. The differentiator is **privacy**: the spending rules are enforced on-chain but kept private. And it is not just a protocol, it is a **live marketplace** you can use today.
+Two things define it. The differentiator is **privacy**: spending rules enforced on-chain without exposing them (proof-gated hooks are built into the vault contract, with active zero-knowledge engine integration underway). And it is not just a protocol, it is a **live marketplace** you can use today.
 
 ## The marketplace
 
@@ -31,7 +31,7 @@ Most agent-payment tools put your budget, your approved payees, and every paymen
 
 For example: a trading firm funds an agent to buy research data and sets rules, only these five data providers, at most $100 per purchase, and $500 per week. Without privacy, a competitor reading the chain sees the firm's budget, which data providers it uses (its edge), and when it ramps spending before a trade. With CleverCon, the chain shows only "a payment happened and it was allowed", the budget, the providers, and the limits stay private, while the contract still refuses anything that breaks a rule. The mechanism is the same one that lets you prove you are over 21 without showing your birthdate: prove the spend followed the policy without revealing the policy.
 
-Scope, stated honestly: what stays private is the policy (your caps, allowlist, and limits) and the link between them. Fully hiding amounts and counterparties as well is the deeper end of the roadmap and leans on Stellar's upcoming confidential-token support.
+Scope, stated honestly: in this privacy model, what stays private is the policy (your caps, allowlist, and limits) and the link between them. Note that while the proof-gated verification hooks (`create_task_with_policy`, `release_payment_proved`) are implemented in CleverVault, live on-chain zero-knowledge policy enforcement is currently being wired to the CipherMit engine on testnet (see Roadmap below). Fully hiding amounts and counterparties as well is the deeper end of the roadmap and leans on Stellar's upcoming confidential-token support.
 
 ## For builders: SDK and MCP
 
@@ -40,7 +40,7 @@ CleverCon is also infrastructure others build on. A reusable SDK lets any app or
 ## How it works
 
 1. Connect a wallet and deposit USDC into CleverVault, a non-custodial contract.
-2. Set your spending rules: a total budget, and optionally a per-payment cap and an allowlist of payees, kept private (see below).
+2. Set your spending rules: a total budget, and (via the upcoming private policy integration) optional per-payment caps and payee allowlists kept private.
 3. Spend, at whatever complexity the job needs (see "How you use it"). A delegate pays services in USDC, and the vault checks every release against your rules.
 4. The vault caps spending and refunds the rest. You can withdraw anytime. The platform never holds your money.
 
@@ -52,19 +52,19 @@ The payment rail is always the same: bounded, private, per-step spending. How mu
 - **Find and pay one service.** Describe what you need; the open registry returns matching providers by capability, price, and reputation. Pick one, or take the top-ranked, and pay.
 - **Compose a multi-service job.** For work that genuinely spans services (gather data, analyze it, write a report), a delegate plans the steps, hires a provider for each, and pays them in sequence as each completes. This is the only case that needs planning, and it stays optional and overridable.
 
-In every case the vault enforces your budget and your private policy. The thing doing the spending, CleverCon's orchestrator, your own agent via the SDK, or an MCP client, is just a **delegate**. The rail is what makes delegation safe: even a compromised or careless delegate cannot spend outside the rule you set. That, not the planning, is the point.
+In every case the vault enforces your budget (and, once private policies are active, your confidential spending rules). The thing doing the spending, CleverCon's orchestrator, your own agent via the SDK, or an MCP client, is just a **delegate**. The rail is what makes delegation safe: even a compromised or careless delegate cannot spend outside the rule you set. That, not the planning, is the point.
 
 The full fund-flow sequence and trust model are in [docs/architecture.md](docs/architecture.md).
 
 ## What runs today
 
-- **CleverVault**, a non-custodial Soroban contract on testnet: deposits, budget locking, per-step release, refunds, multi-asset support, and admin controls, with a 100+ case test suite.
+- **CleverVault**, a non-custodial Soroban contract on testnet: deposits, budget locking, per-step release, refunds, multi-asset support, admin controls, and proof-gated release hooks (`create_task_with_policy`, `release_payment_proved`), with a 100+ case test suite.
 - **A usable dApp**: connect a wallet, add a USDC trustline, deposit, check balance, and withdraw, all signed in your wallet and settled directly against the contract with no server in the middle.
 - **The marketplace**: browse, search, filter, and sort a catalog of services across seven categories and three provider types.
 - **Orchestrator and open registry**, with **x402 and MPP payments** to services.
 - Placed 2nd in the Stellar Agents hackathon.
 
-Roadmap: the private spending policies described above (from the CipherMit engine), an on-chain registry, the SDK, and the MCP server.
+Roadmap: full integration of the private spending policies described above (wiring the CipherMit zero-knowledge engine into CleverVault), an on-chain registry, the SDK, and the MCP server. See [ROADMAP.md](ROADMAP.md).
 
 ## Project structure
 
