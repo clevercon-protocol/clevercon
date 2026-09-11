@@ -84,6 +84,24 @@ function settlementConfigured(): boolean {
   return !!(env('DELEGATE_ENCRYPTION_KEY') && env('AGENT_VAULT_CONTRACT_ID') && env('USDC_SAC'));
 }
 
+/** The signature of the on-chain release; injectable so settleStep is unit-testable. */
+export type ReleaseFn = (
+  kp: Keypair,
+  params: {
+    taskId: bigint;
+    stepId: bigint;
+    amountStroops: bigint;
+    payee: string;
+    nullifier: Buffer;
+    proof: Buffer;
+  },
+) => Promise<string>;
+
+/** A Postgres unique-constraint violation (Prisma P2002), duck-typed to avoid a hard import. */
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'P2002';
+}
+
 const STROOPS_PER_USDC = 10_000_000;
 
 /**
@@ -97,7 +115,11 @@ const STROOPS_PER_USDC = 10_000_000;
  * locked on-chain, that has no policy commitment or payee, or that was already
  * settled, is a no-op. Settlement never fails task execution.
  */
-export async function settleStep(prisma: PrismaClient, stepId: string): Promise<SettleResult> {
+export async function settleStep(
+  prisma: PrismaClient,
+  stepId: string,
+  release: ReleaseFn = releasePaymentProved,
+): Promise<SettleResult> {
   const step = await prisma.taskStep.findUnique({
     where: { id: stepId },
     include: { service: true, task: { include: { policy: true } } },
@@ -122,7 +144,10 @@ export async function settleStep(prisma: PrismaClient, stepId: string): Promise<
   if (!delegate) return { status: 'skipped', reason: 'buyer has no delegate', buyerId };
   const delegateKp = Keypair.fromSecret(decryptSecret(delegate.secretCipher));
 
-  // Idempotency: one vault-release payment per step.
+  // Fast path: one vault-release payment per step. Skips the common
+  // already-settled case (idempotent replay of executeTask, a re-enqueued job)
+  // WITHOUT an on-chain call. A genuine concurrent race that slips past this is
+  // still caught below by the unique idempotencyKey.
   const existing = await prisma.payment.findFirst({
     where: { stepId, method: PaymentMethod.VAULT_RELEASE },
   });
@@ -138,8 +163,13 @@ export async function settleStep(prisma: PrismaClient, stepId: string): Promise<
     nullifier,
   });
 
+  // (1) On-chain release. Exactly-once for FUNDS is guaranteed by the vault:
+  // release_payment_proved is idempotent by (task_id, step_id), so a retry after
+  // a crash (or a concurrent submit) that re-runs this returns success without
+  // moving funds a second time. A failure here is retryable, so report `failed`.
+  let txHash: string;
   try {
-    const txHash = await releasePaymentProved(delegateKp, {
+    txHash = await release(delegateKp, {
       taskId: step.task.vaultTaskId,
       stepId: BigInt(step.index),
       amountStroops,
@@ -147,6 +177,18 @@ export async function settleStep(prisma: PrismaClient, stepId: string): Promise<
       nullifier,
       proof,
     });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    logger.error({ stepId, err: reason }, 'settlement failed');
+    return { status: 'failed', reason, buyerId };
+  }
+
+  // (2) Record the mirror. Exactly-once for the RECORD is guaranteed by the
+  // unique idempotencyKey: if a concurrent settlement recorded this step first,
+  // the create hits P2002. That is a benign race (the on-chain release above was
+  // idempotent, so funds moved exactly once), so treat it as an already-settled
+  // skip rather than a `failed` that would make the queue retry and re-submit.
+  try {
     await prisma.payment.create({
       data: {
         taskId: step.taskId,
@@ -161,11 +203,16 @@ export async function settleStep(prisma: PrismaClient, stepId: string): Promise<
         idempotencyKey: `settle-${stepId}`,
       },
     });
-    logger.info({ stepId, txHash, amountUsdc }, 'step settled');
-    return { status: 'settled', txHash, buyerId };
   } catch (err) {
+    if (isUniqueViolation(err)) {
+      logger.info({ stepId, txHash }, 'settlement raced; step already recorded');
+      return { status: 'skipped', reason: 'already settled', buyerId };
+    }
     const reason = err instanceof Error ? err.message : String(err);
-    logger.error({ stepId, err: reason }, 'settlement failed');
+    logger.error({ stepId, err: reason }, 'settlement recorded on-chain but mirror failed');
     return { status: 'failed', reason, buyerId };
   }
+
+  logger.info({ stepId, txHash, amountUsdc }, 'step settled');
+  return { status: 'settled', txHash, buyerId };
 }
