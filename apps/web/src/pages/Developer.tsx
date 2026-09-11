@@ -10,8 +10,102 @@ import {
   type ApiKey,
   type CreatedApiKey,
 } from '../lib/apiKeys';
+import {
+  getWebhooks,
+  createWebhook,
+  deleteWebhook,
+  WEBHOOK_EVENTS,
+  type Webhook as WebhookRow,
+  type CreatedWebhook,
+} from '../lib/webhooks';
 import { refreshRoles } from '../lib/sessionSync';
 import { PageHeader, StatCard } from '../components/ui';
+
+function WebhooksCard() {
+  const qc = useQueryClient();
+  const [url, setUrl] = useState('');
+  const [created, setCreated] = useState<CreatedWebhook | null>(null);
+  const { data: hooks = [] } = useQuery({ queryKey: ['webhooks'], queryFn: getWebhooks });
+  const add = useMutation({
+    mutationFn: () => createWebhook(url.trim(), [...WEBHOOK_EVENTS]),
+    onSuccess: (w) => {
+      setUrl('');
+      setCreated(w);
+      qc.invalidateQueries({ queryKey: ['webhooks'] });
+    },
+  });
+  const del = useMutation({
+    mutationFn: (id: string) => deleteWebhook(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['webhooks'] }),
+  });
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+      <div className="flex items-center gap-2 text-slate-300">
+        <Webhook size={18} className="text-violet-300" />
+        <h2 className="font-semibold">Webhooks</h2>
+      </div>
+      <p className="mt-2 text-sm text-slate-400">
+        Get a signed POST (HMAC-SHA256 in x-clevercon-signature) when your tasks complete or fail.
+      </p>
+      {isDemo() ? (
+        <p className="mt-3 text-sm text-slate-500">Connect in full mode to register webhooks.</p>
+      ) : (
+        <>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (url.trim() && !add.isPending) add.mutate();
+            }}
+            className="mt-4 flex flex-wrap gap-2"
+          >
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://your-app.example.com/webhooks/clevercon"
+              className="min-w-64 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-500/40"
+            />
+            <button
+              type="submit"
+              disabled={!url.trim() || add.isPending}
+              className="rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {add.isPending ? 'Adding…' : 'Add webhook'}
+            </button>
+          </form>
+          {created && (
+            <div className="mt-3 rounded-xl border border-violet-500/40 bg-violet-500/10 p-3 text-xs">
+              <div className="text-slate-300">Signing secret (shown once):</div>
+              <div className="mt-1 break-all font-mono text-violet-200">{created.secret}</div>
+            </div>
+          )}
+          <div className="mt-4 space-y-2">
+            {hooks.map((h: WebhookRow) => (
+              <div
+                key={h.id}
+                className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+              >
+                <div className="min-w-0">
+                  <div className="truncate font-mono text-xs text-slate-300">{h.url}</div>
+                  <div className="text-xs text-slate-500">
+                    {h.events.length ? h.events.join(', ') : 'all events'}
+                  </div>
+                </div>
+                <button
+                  onClick={() => del.mutate(h.id)}
+                  disabled={del.isPending}
+                  className="rounded-lg border border-white/10 px-2.5 py-1 text-xs text-slate-400 hover:bg-white/10 disabled:opacity-50"
+                >
+                  Delete
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 function when(v: string | null): string {
   if (!v) return 'never';
@@ -178,15 +272,12 @@ export function Developer() {
       />
       <Stats />
       <ApiKeys />
+      <WebhooksCard />
 
       <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
-        <div className="flex items-center gap-2 text-slate-300">
-          <Webhook size={18} className="text-violet-300" />
-          <h2 className="font-semibold">Webhooks &amp; SDK</h2>
-        </div>
+        <h2 className="font-semibold text-slate-300">SDK &amp; MCP</h2>
         <p className="mt-2 text-sm text-slate-400">
-          Subscribe to task and payment events, and embed spending in your own agent with the SDK
-          and MCP server.
+          Embed bounded spending in your own agent with the SDK and MCP server.
         </p>
         <div className="mt-3 flex gap-3 text-sm">
           <a

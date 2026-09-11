@@ -18,6 +18,7 @@ import {
 import { executeTask } from './executor.js';
 import { generateProof } from './prover.js';
 import { settleStep } from './settlement.js';
+import { deliverWebhooks } from './webhooks.js';
 import { logger } from './logger.js';
 
 // Load the repo-root .env (DATABASE_URL, REDIS_URL) so this runs standalone.
@@ -40,6 +41,14 @@ function main(): void {
         emitter
           .to(`user:${result.buyerId}`)
           .emit('task.updated', { taskId: job.data.taskId, status: result.status });
+        // Notify the buyer's registered webhooks of the terminal outcome.
+        if (result.status === 'completed' || result.status === 'failed') {
+          await deliverWebhooks(prisma, result.buyerId, `task.${result.status}`, {
+            taskId: job.data.taskId,
+            status: result.status,
+            stepsRun: result.stepsRun,
+          });
+        }
       }
       return result;
     },

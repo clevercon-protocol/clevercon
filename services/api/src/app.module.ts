@@ -13,6 +13,7 @@ import { ProviderModule } from './provider/provider.module.js';
 import { PoliciesModule } from './policies/policies.module.js';
 import { ActivityModule } from './activity/activity.module.js';
 import { AdminModule } from './admin/admin.module.js';
+import { WebhooksModule } from './webhooks/webhooks.module.js';
 import { QueueModule } from './queue/queue.module.js';
 import { EventsModule } from './events/events.module.js';
 import { RateLimitModule } from './throttler/rate-limit.module.js';
@@ -42,6 +43,7 @@ import { AppLoggerModule } from './logging/logger.module.js';
     PoliciesModule,
     ActivityModule,
     AdminModule,
+    WebhooksModule,
   ],
 })
 export class AppModule {}
