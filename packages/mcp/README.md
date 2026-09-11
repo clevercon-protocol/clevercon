@@ -1,14 +1,15 @@
 # CleverCon MCP Server
 
-A Model Context Protocol (MCP) server that exposes CleverCon's agent discovery, vault operations, and payment building capabilities as MCP tools. This enables AI agents and other MCP-compatible clients to discover and pay for services on the CleverCon network without custom integration.
+A Model Context Protocol (MCP) server that exposes CleverCon's marketplace rail (hire a service, track a task) and lower-level agent discovery, vault views, and payment building as MCP tools. This enables AI agents and other MCP-compatible clients to discover, hire, and pay for services on the CleverCon network without custom integration.
 
 ## Features
 
+- **Hire the rail**: Create tasks (hire a service) and track them through to completion via the API, authenticated with a scoped API key. This is the path most agents want.
 - **Agent Discovery**: Search and retrieve agent manifests with reputation data
 - **Vault Operations**: Read vault balances and states (view-only)
 - **Payment Building**: Generate unsigned XDR for deposits and payment releases
 - **Cost Estimation**: Get pricing estimates for capabilities
-- **Keyless by Design**: Server never holds keys or signs transactions - all payment operations return unsigned XDR
+- **Keyless payment building**: The XDR builders never hold keys or sign; they return unsigned XDR the client's wallet signs. (The hire-flow tools authenticate to the API with a scoped key, which grants no signing authority over funds.)
 
 ## Installation
 
@@ -23,7 +24,11 @@ npm run build
 Set these environment variables:
 
 ```bash
-# Registry API endpoint
+# CleverCon API (the live rail used by the hire-flow tools)
+CLEVERCON_API_URL=http://localhost:4100
+CLEVERCON_API_KEY=cc_yourprefix.yoursecret   # required for hire_agent/list_tasks/get_task/dispute_task
+
+# Registry API endpoint (used by the discovery tools)
 REGISTRY_URL=http://localhost:3001
 
 # Stellar network configuration
@@ -63,6 +68,8 @@ Add this to your Claude Desktop `config.json`:
     "clevercon": {
       "command": "/path/to/clevercon/packages/mcp/dist/server.js",
       "env": {
+        "CLEVERCON_API_URL": "http://localhost:4100",
+        "CLEVERCON_API_KEY": "cc_yourprefix.yoursecret",
         "REGISTRY_URL": "https://registry.clevercon.net",
         "STELLAR_RPC_URL": "https://soroban-testnet.stellar.org",
         "AGENT_VAULT_CONTRACT_ID": "CC4QX7ZVME7PO25GELU5VIM6BOSU7UBNJF56D46VMGBWQBBFQVIXYRZO",
@@ -74,6 +81,38 @@ Add this to your Claude Desktop `config.json`:
 ```
 
 ## Available Tools
+
+### Hire-flow tools (the live rail)
+
+These drive the CleverCon API and require `CLEVERCON_API_KEY`.
+
+#### `hire_agent`
+
+Create a task (hire a service). `DIRECT` pays a chosen `serviceId`; `SEARCH` finds and pays one service; `COMPOSE` runs a multi-service job.
+
+**Parameters:**
+- `title` (required): human-readable task title
+- `mode` (required): `DIRECT` | `SEARCH` | `COMPOSE`
+- `budget` (required): max spend in USDC
+- `serviceId` (required for `DIRECT`), `policyId`, `description` (optional)
+
+```json
+{ "title": "Summarize XLM news", "mode": "SEARCH", "budget": 1.0 }
+```
+
+#### `list_tasks`
+
+List the caller's tasks, optionally filtered by `status` (`DRAFT`, `PENDING`, `RUNNING`, `COMPLETED`, `CANCELLED`, `DISPUTED`, `FAILED`), with `limit`/`offset`.
+
+#### `get_task`
+
+Fetch one of the caller's tasks by `id`, including its steps and their outputs.
+
+#### `dispute_task`
+
+Raise a dispute on one of the caller's tasks. Parameters: `id` (required), `reason` (optional).
+
+### Discovery and vault tools
 
 ### `search_agents`
 
@@ -183,7 +222,7 @@ npm run dev
 npm test
 ```
 
-Expected response should list all 6 tools: `search_agents`, `get_agent`, `get_vault_balance`, `build_deposit`, `build_release`, and `estimate_cost`.
+Expected response should list all 10 tools: the hire-flow tools `hire_agent`, `list_tasks`, `get_task`, `dispute_task`, plus the discovery/vault tools `search_agents`, `get_agent`, `get_vault_balance`, `build_deposit`, `build_release`, and `estimate_cost`.
 
 **Note**: Direct JSON-RPC requests require proper MCP initialization handshake first.
 

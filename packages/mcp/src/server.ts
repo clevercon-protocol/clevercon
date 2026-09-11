@@ -32,6 +32,10 @@ import { getVaultBalanceHandler, getVaultBalanceSchema } from './tools/get-vault
 import { buildDepositHandler, buildDepositSchema } from './tools/build-deposit.js';
 import { buildReleaseHandler, buildReleaseSchema } from './tools/build-release.js';
 import { estimateCostHandler, estimateCostSchema } from './tools/estimate-cost.js';
+import { hireAgentHandler, hireAgentSchema } from './tools/hire-agent.js';
+import { listTasksHandler, listTasksSchema } from './tools/list-tasks.js';
+import { getTaskHandler, getTaskSchema } from './tools/get-task.js';
+import { disputeTaskHandler, disputeTaskSchema } from './tools/dispute-task.js';
 
 interface ServerConfig {
   registry_url: string;
@@ -39,6 +43,9 @@ interface ServerConfig {
   network_passphrase: string;
   vault_contract_id: string;
   usdc_sac: string;
+  // The live rail: the API the hire-flow tools drive with a scoped key.
+  api_url: string;
+  api_key?: string;
 }
 
 function getConfig(): ServerConfig {
@@ -49,6 +56,8 @@ function getConfig(): ServerConfig {
       process.env.STELLAR_NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015',
     vault_contract_id: process.env.AGENT_VAULT_CONTRACT_ID || '',
     usdc_sac: process.env.USDC_SAC || '',
+    api_url: process.env.CLEVERCON_API_URL || 'http://localhost:4100',
+    api_key: process.env.CLEVERCON_API_KEY,
   };
 }
 
@@ -83,6 +92,10 @@ class CleverConMCPServer {
         buildDepositSchema,
         buildReleaseSchema,
         estimateCostSchema,
+        hireAgentSchema,
+        listTasksSchema,
+        getTaskSchema,
+        disputeTaskSchema,
       ],
     }));
 
@@ -109,6 +122,18 @@ class CleverConMCPServer {
 
           case 'estimate_cost':
             return await estimateCostHandler(args || {}, this.config);
+
+          case 'hire_agent':
+            return await hireAgentHandler(args || {}, this.config);
+
+          case 'list_tasks':
+            return await listTasksHandler(args || {}, this.config);
+
+          case 'get_task':
+            return await getTaskHandler(args || {}, this.config);
+
+          case 'dispute_task':
+            return await disputeTaskHandler(args || {}, this.config);
 
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
