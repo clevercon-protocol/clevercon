@@ -121,7 +121,10 @@ model ApiKey {
   keyHash      String
   scopes       String[]  @default([])
   lastUsedAt   DateTime?
-  requestCount Int       @default(0) // total authenticated calls (usage metering)
+  requestCount Int       @default(0) // lifetime authenticated calls (usage metering)
+  quotaPerDay  Int       @default(0) // max calls per UTC day; 0 = unlimited
+  usageDay     String? // current quota window, YYYY-MM-DD (UTC)
+  usageToday   Int       @default(0) // calls in the current window
   expiresAt    DateTime?
   revokedAt  DateTime?
   createdAt  DateTime  @default(now())

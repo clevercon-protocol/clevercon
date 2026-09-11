@@ -1,6 +1,8 @@
 import {
   type CanActivate,
   type ExecutionContext,
+  HttpException,
+  HttpStatus,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -17,9 +19,14 @@ export class ApiKeyGuard implements CanActivate {
     const header = req.headers['x-api-key'];
     const raw = Array.isArray(header) ? header[0] : header;
     if (!raw) throw new UnauthorizedException('Missing API key');
-    const identity = await this.apiKeys.verify(raw);
-    if (!identity) throw new UnauthorizedException('Invalid API key');
-    req.apiKey = identity;
+    const result = await this.apiKeys.verify(raw);
+    if (!result.ok) {
+      if (result.reason === 'quota') {
+        throw new HttpException('Daily API quota exceeded', HttpStatus.TOO_MANY_REQUESTS);
+      }
+      throw new UnauthorizedException('Invalid API key');
+    }
+    req.apiKey = result.identity;
     return true;
   }
 }

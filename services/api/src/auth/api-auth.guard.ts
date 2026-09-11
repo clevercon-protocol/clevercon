@@ -1,6 +1,8 @@
 import {
   type CanActivate,
   type ExecutionContext,
+  HttpException,
+  HttpStatus,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -36,8 +38,14 @@ export class ApiAuthGuard implements CanActivate {
     const apiKeyHeader = req.headers['x-api-key'];
     const rawKey = Array.isArray(apiKeyHeader) ? apiKeyHeader[0] : apiKeyHeader;
     if (rawKey) {
-      const identity = await this.apiKeys.verify(rawKey);
-      if (!identity) throw new UnauthorizedException('Invalid API key');
+      const result = await this.apiKeys.verify(rawKey);
+      if (!result.ok) {
+        if (result.reason === 'quota') {
+          throw new HttpException('Daily API quota exceeded', HttpStatus.TOO_MANY_REQUESTS);
+        }
+        throw new UnauthorizedException('Invalid API key');
+      }
+      const { identity } = result;
       const roles = await this.prisma.userRole.findMany({ where: { userId: identity.userId } });
       req.apiKey = identity;
       req.user = { userId: identity.userId, roles: roles.map((r) => r.role) };

@@ -9,6 +9,9 @@ export interface ApiKey {
   scopes: string[];
   lastUsedAt: string | null;
   requestCount: number;
+  quotaPerDay: number; // 0 = unlimited
+  usageToday: number;
+  usageDay: string | null;
   createdAt: string;
   revokedAt: string | null;
 }
@@ -18,6 +21,7 @@ export interface CreatedApiKey {
   name: string;
   prefix: string;
   scopes: string[];
+  quotaPerDay: number;
   key: string; // the full secret, shown exactly once
 }
 
@@ -31,6 +35,9 @@ export async function getApiKeys(): Promise<ApiKey[]> {
       scopes: [],
       lastUsedAt: k.lastUsed,
       requestCount: 0,
+      quotaPerDay: 0,
+      usageToday: 0,
+      usageDay: null,
       createdAt: k.created,
       revokedAt: null,
     }));
@@ -38,8 +45,11 @@ export async function getApiKeys(): Promise<ApiKey[]> {
   return apiFetch<ApiKey[]>('/api-keys');
 }
 
-/** Create a key. In demo mode this fabricates a plausible secret to show the UX. */
-export async function createApiKey(name: string): Promise<CreatedApiKey> {
+/**
+ * Create a key. Pass quotaPerDay to cap calls per UTC day (0 = unlimited). In
+ * demo mode this fabricates a plausible secret to show the UX.
+ */
+export async function createApiKey(name: string, quotaPerDay = 0): Promise<CreatedApiKey> {
   if (isDemo()) {
     const prefix = 'cc_' + Math.random().toString(36).slice(2, 8);
     return {
@@ -47,10 +57,11 @@ export async function createApiKey(name: string): Promise<CreatedApiKey> {
       name,
       prefix,
       scopes: [],
+      quotaPerDay,
       key: `${prefix}.${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`,
     };
   }
-  return apiPost<CreatedApiKey>('/api-keys', { name });
+  return apiPost<CreatedApiKey>('/api-keys', { name, quotaPerDay });
 }
 
 export async function revokeApiKey(id: string): Promise<void> {

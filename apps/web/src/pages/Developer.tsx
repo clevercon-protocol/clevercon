@@ -143,6 +143,7 @@ function SecretReveal({ created }: { created: CreatedApiKey }) {
 function ApiKeys() {
   const qc = useQueryClient();
   const [name, setName] = useState('');
+  const [quota, setQuota] = useState('');
   const [created, setCreated] = useState<CreatedApiKey | null>(null);
   const {
     data: keys = [],
@@ -151,10 +152,12 @@ function ApiKeys() {
   } = useQuery({ queryKey: ['apiKeys'], queryFn: getApiKeys });
 
   const createMut = useMutation({
-    mutationFn: (n: string) => createApiKey(n),
+    mutationFn: (args: { name: string; quotaPerDay: number }) =>
+      createApiKey(args.name, args.quotaPerDay),
     onSuccess: async (key) => {
       setCreated(key);
       setName('');
+      setQuota('');
       await refreshRoles();
       qc.invalidateQueries({ queryKey: ['apiKeys'] });
     },
@@ -177,7 +180,10 @@ function ApiKeys() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (name.trim()) createMut.mutate(name.trim());
+          if (name.trim()) {
+            const q = Math.max(0, Math.trunc(Number(quota) || 0));
+            createMut.mutate({ name: name.trim(), quotaPerDay: q });
+          }
         }}
         className="mt-4 flex gap-2"
       >
@@ -186,6 +192,14 @@ function ApiKeys() {
           onChange={(e) => setName(e.target.value)}
           placeholder="Key name (e.g. prod-agent)"
           className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
+        />
+        <input
+          value={quota}
+          onChange={(e) => setQuota(e.target.value.replace(/[^0-9]/g, ''))}
+          inputMode="numeric"
+          placeholder="Daily cap (0 = unlimited)"
+          title="Maximum calls per UTC day. Leave blank or 0 for unlimited."
+          className="w-44 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
         />
         <button
           type="submit"
@@ -215,6 +229,16 @@ function ApiKeys() {
                 {!active(k) && <span className="ml-2 text-xs text-red-300">revoked</span>}
               </div>
               <div className="font-mono text-xs text-slate-500">{k.prefix}…</div>
+              <div className="mt-1 text-xs text-slate-500">
+                {k.quotaPerDay > 0 ? (
+                  <span className={k.usageToday >= k.quotaPerDay ? 'text-amber-300' : ''}>
+                    {k.usageToday}/{k.quotaPerDay} today
+                  </span>
+                ) : (
+                  <span>unlimited</span>
+                )}
+                <span className="text-slate-600"> · {k.requestCount} total</span>
+              </div>
             </div>
             <div className="flex items-center gap-3">
               <div className="text-right text-xs text-slate-500">
