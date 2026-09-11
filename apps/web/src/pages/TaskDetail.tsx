@@ -1,7 +1,28 @@
 import { Link, useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, ListChecks, Receipt as ReceiptIcon } from 'lucide-react';
-import { getTask } from '../lib/tasks';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ArrowLeft, ListChecks, Receipt as ReceiptIcon, Flag } from 'lucide-react';
+import { getTask, raiseDispute } from '../lib/tasks';
+
+function DisputeButton({ taskId }: { taskId: string }) {
+  const qc = useQueryClient();
+  const raise = useMutation({
+    mutationFn: () => raiseDispute(taskId, 'Buyer disputes the outcome'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['task', taskId] }),
+  });
+  if (raise.isSuccess) {
+    return <span className="text-xs text-amber-300">Dispute raised (under review)</span>;
+  }
+  return (
+    <button
+      onClick={() => raise.mutate()}
+      disabled={raise.isPending}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs text-slate-300 hover:bg-white/10 disabled:opacity-50"
+      title="Raise a dispute for an operator to review"
+    >
+      <Flag size={12} /> {raise.isPending ? 'Raising…' : 'Raise dispute'}
+    </button>
+  );
+}
 
 const STATUS_TINT: Record<string, string> = {
   RUNNING: 'text-sky-300',
@@ -53,9 +74,12 @@ export function TaskDetail() {
       {task && (
         <>
           <div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-2xl font-bold">{task.title}</h1>
               <span className={`text-sm ${tint(task.status)}`}>{task.status}</span>
+              <div className="ml-auto">
+                <DisputeButton taskId={task.id} />
+              </div>
             </div>
             {task.description && <p className="mt-1 text-slate-400">{task.description}</p>}
             <p className="mt-1 text-sm text-slate-500">

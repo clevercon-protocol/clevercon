@@ -80,6 +80,34 @@ export async function moderateService(
   return apiPost<{ id: string; status: string }>(`/admin/services/${id}/moderate`, { active });
 }
 
+export interface AdminDispute {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  budget: number;
+  raisedBy: string;
+  status: string;
+  reason: string | null;
+  resolution: string | null;
+  refundToUser: number | null;
+  payoutToProvider: number | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export async function getDisputes(): Promise<AdminDispute[]> {
+  if (isDemo()) return [];
+  const res = await apiFetch<{ items: AdminDispute[] }>('/admin/disputes');
+  return res.items;
+}
+
+export async function resolveDispute(
+  id: string,
+  body: { resolution: string; refundToUser?: number; payoutToProvider?: number; reject?: boolean },
+): Promise<{ id: string; status: string }> {
+  return apiPost<{ id: string; status: string }>(`/admin/disputes/${id}/resolve`, body);
+}
+
 export interface FeeConfig {
   enabled: boolean;
   bps: number;

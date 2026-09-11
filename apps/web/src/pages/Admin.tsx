@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Users, Boxes, Coins, Landmark, Briefcase, Percent } from 'lucide-react';
-import { demoDisputes } from '../lib/demo';
 import {
   getAdminStats,
   getAdminUsers,
@@ -10,7 +9,83 @@ import {
   setFee,
   getAdminServices,
   moderateService,
+  getDisputes,
+  resolveDispute,
 } from '../lib/admin';
+
+function DisputesCard() {
+  const qc = useQueryClient();
+  const {
+    data: disputes = [],
+    isLoading,
+    error,
+  } = useQuery({ queryKey: ['admin-disputes'], queryFn: getDisputes });
+  const act = useMutation({
+    mutationFn: (v: { id: string; reject: boolean; budget: number }) =>
+      resolveDispute(v.id, {
+        resolution: v.reject ? 'Rejected by operator' : 'Refunded to buyer',
+        reject: v.reject,
+        refundToUser: v.reject ? undefined : v.budget,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-disputes'] }),
+  });
+  const open = disputes.filter((d) => d.status === 'OPEN');
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+      <h2 className="font-semibold text-slate-300">Disputes</h2>
+      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading disputes…</p>}
+      {error && <p className="mt-4 text-sm text-red-400">Could not load disputes.</p>}
+      {!isLoading && !error && disputes.length === 0 && (
+        <p className="mt-4 text-sm text-slate-500">No disputes.</p>
+      )}
+      <div className="mt-4 space-y-2">
+        {disputes.map((d) => (
+          <div
+            key={d.id}
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+          >
+            <div className="min-w-0">
+              <div className="truncate font-medium">{d.taskTitle}</div>
+              <div className="truncate text-xs text-slate-500">
+                {d.raisedBy.slice(0, 6)}…{d.raisedBy.slice(-4)}
+                {d.reason ? ` · ${d.reason}` : ''}
+                {d.status !== 'OPEN' && d.resolution ? ` · ${d.resolution}` : ''}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-slate-300">${d.budget.toFixed(2)}</span>
+              {d.status === 'OPEN' ? (
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => act.mutate({ id: d.id, reject: false, budget: d.budget })}
+                    disabled={act.isPending}
+                    className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                  >
+                    Refund buyer
+                  </button>
+                  <button
+                    onClick={() => act.mutate({ id: d.id, reject: true, budget: d.budget })}
+                    disabled={act.isPending}
+                    className="rounded-lg border border-white/10 px-2.5 py-1 text-xs text-slate-400 hover:bg-white/10 disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
+                </div>
+              ) : (
+                <span
+                  className={`text-xs ${d.status === 'RESOLVED' ? 'text-emerald-300' : 'text-slate-500'}`}
+                >
+                  {d.status}
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {open.length > 0 && <p className="mt-3 text-xs text-slate-500">{open.length} open</p>}
+    </div>
+  );
+}
 
 const MANAGEABLE_ROLES = ['PROVIDER', 'DEVELOPER', 'ADMIN'] as const;
 
@@ -244,40 +319,7 @@ export function Admin() {
       <FeesCard />
       <ServicesModerationCard />
       <UsersCard />
-
-      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
-        <h2 className="font-semibold text-slate-300">Disputes</h2>
-        <p className="mt-1 text-xs text-slate-500">
-          Dispute arbitration is on the roadmap; this is a preview.
-        </p>
-        <div className="mt-4 space-y-2">
-          {demoDisputes.map((d) => (
-            <div
-              key={d.id}
-              className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
-            >
-              <div>
-                <div className="font-medium">{d.task}</div>
-                <div className="text-xs text-slate-500">{d.parties}</div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-slate-300">${d.amountUsdc}</span>
-                <span
-                  className={`text-xs capitalize ${d.status === 'open' ? 'text-amber-300' : 'text-emerald-300'}`}
-                >
-                  {d.status}
-                </span>
-                <button
-                  disabled
-                  className="cursor-not-allowed rounded-lg bg-white/10 px-2.5 py-1 text-xs text-slate-400"
-                >
-                  Resolve
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      <DisputesCard />
     </section>
   );
 }

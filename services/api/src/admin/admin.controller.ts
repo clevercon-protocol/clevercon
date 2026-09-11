@@ -24,6 +24,17 @@ const feeSchema = z.object({
 
 const moderateSchema = z.object({ active: z.boolean() });
 
+const resolveSchema = z.object({
+  resolution: z.string().min(1).max(1000),
+  refundToUser: z.number().nonnegative().optional(),
+  payoutToProvider: z.number().nonnegative().optional(),
+  reject: z.boolean().optional(),
+});
+
+const disputeQuery = z.object({
+  status: z.enum(['OPEN', 'RESOLVED', 'REJECTED']).optional(),
+});
+
 /** Operator console API. Every route requires the ADMIN role. */
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -60,6 +71,19 @@ export class AdminController {
   moderate(@Param('id') id: string, @Body() body: unknown) {
     const { active } = parseBody(moderateSchema, body);
     return this.admin.moderateService(id, active);
+  }
+
+  /** Dispute queue (optionally filter by status). */
+  @Get('disputes')
+  disputes(@Query() query: unknown) {
+    const { status } = parseBody(disputeQuery, query);
+    return this.admin.listDisputes(status);
+  }
+
+  /** Resolve or reject an open dispute. */
+  @Post('disputes/:id/resolve')
+  resolveDispute(@Param('id') id: string, @Body() body: unknown) {
+    return this.admin.resolveDispute(id, parseBody(resolveSchema, body));
   }
 
   /** Current protocol fee + accrued fees. */

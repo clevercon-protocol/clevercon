@@ -150,3 +150,12 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
   }
   return apiPost<Task>('/tasks', input);
 }
+
+/** Raise a dispute on one of the caller's tasks. */
+export async function raiseDispute(
+  taskId: string,
+  reason?: string,
+): Promise<{ id: string; status: string }> {
+  if (isDemo()) return { id: 'dispute-' + Date.now(), status: 'OPEN' };
+  return apiPost<{ id: string; status: string }>(`/tasks/${taskId}/dispute`, { reason });
+}

@@ -112,6 +112,42 @@ describe.skipIf(!DB)('Admin (integration, real Postgres)', () => {
     await expect(admin.moderateService('nope', false)).rejects.toThrow();
   });
 
+  it('dispute flow: buyer raises, operator lists + resolves, double-open guarded', async () => {
+    const { TasksService } = await import('../tasks/tasks.service.js');
+    const tasks = new TasksService(prisma);
+    const buyer = await prisma.user.create({
+      data: { wallets: { create: { address: 'GBUYERWALLET', isPrimary: true } } },
+    });
+    const task = await prisma.task.create({
+      data: {
+        buyerId: buyer.id,
+        title: 'Disputed job',
+        mode: 'DIRECT',
+        budget: '5',
+        asset: 'USDC',
+      },
+    });
+
+    const raised = await tasks.raiseDispute(buyer.id, task.id, 'Bad output');
+    expect(raised.status).toBe('OPEN');
+    // One open dispute per task.
+    await expect(tasks.raiseDispute(buyer.id, task.id, 'again')).rejects.toThrow();
+
+    const list = await admin.listDisputes('OPEN');
+    expect(list.items.find((d: { id: string }) => d.id === raised.id)).toMatchObject({
+      taskTitle: 'Disputed job',
+      raisedBy: 'GBUYERWALLET',
+    });
+
+    const resolved = await admin.resolveDispute(raised.id, {
+      resolution: 'Refunded',
+      refundToUser: 5,
+    });
+    expect(resolved.status).toBe('RESOLVED');
+    // Cannot resolve twice.
+    await expect(admin.resolveDispute(raised.id, { resolution: 'x' })).rejects.toThrow();
+  });
+
   it('grants and revokes roles, and refuses to remove the last admin', async () => {
     const u = await prisma.user.create({ data: {} });
     const granted = await admin.setUserRole(u.id, 'PROVIDER', true);

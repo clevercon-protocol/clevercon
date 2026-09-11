@@ -155,6 +155,34 @@ export class TasksService {
     return serialize(created);
   }
 
+  /**
+   * Raise a dispute on one of the caller's tasks. One open dispute per task;
+   * records the buyer's wallet as the raiser. Operators resolve it from the
+   * admin console.
+   */
+  async raiseDispute(userId: string, taskId: string, reason?: string) {
+    const task = await this.prisma.task.findFirst({ where: { id: taskId, buyerId: userId } });
+    if (!task) throw new NotFoundException('Task not found');
+    const open = await this.prisma.dispute.findFirst({
+      where: { taskId, status: 'OPEN' },
+    });
+    if (open) throw new BadRequestException('This task already has an open dispute');
+    const wallet = await this.prisma.wallet.findFirst({
+      where: { userId },
+      orderBy: { isPrimary: 'desc' },
+      select: { address: true },
+    });
+    const d = await this.prisma.dispute.create({
+      data: {
+        taskId,
+        raisedBy: wallet?.address ?? userId,
+        reason: reason ?? null,
+        status: 'OPEN',
+      },
+    });
+    return { id: d.id, status: d.status, createdAt: d.createdAt };
+  }
+
   /** The current user's tasks, newest first. */
   async listForUser(userId: string, params: ListTasksParams) {
     const where: Prisma.TaskWhereInput = { buyerId: userId };

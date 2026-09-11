@@ -117,6 +117,67 @@ export class AdminService {
     }
   }
 
+  /** Disputes for the operator queue, newest first (optionally by status). */
+  async listDisputes(status?: 'OPEN' | 'RESOLVED' | 'REJECTED') {
+    const rows = await this.prisma.dispute.findMany({
+      where: status ? { status } : {},
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      include: { task: { select: { title: true, budget: true, buyerId: true } } },
+    });
+    return {
+      items: rows.map((d) => ({
+        id: d.id,
+        taskId: d.taskId,
+        taskTitle: d.task.title,
+        budget: Number(d.task.budget),
+        raisedBy: d.raisedBy,
+        status: d.status,
+        reason: d.reason,
+        resolution: d.resolution,
+        refundToUser: d.refundToUser != null ? Number(d.refundToUser) : null,
+        payoutToProvider: d.payoutToProvider != null ? Number(d.payoutToProvider) : null,
+        createdAt: d.createdAt,
+        resolvedAt: d.resolvedAt,
+      })),
+      total: rows.length,
+    };
+  }
+
+  /**
+   * Resolve an open dispute (operator/arbiter). Either reject it (no split) or
+   * record a split of the task's value between a refund to the buyer and a
+   * payout to the provider. DB is the record of the arbiter's decision; the
+   * on-chain split (vault resolve_dispute on a locked task) is a follow-up that
+   * needs the configured dispute-resolver key.
+   */
+  async resolveDispute(
+    disputeId: string,
+    params: {
+      resolution: string;
+      refundToUser?: number;
+      payoutToProvider?: number;
+      reject?: boolean;
+    },
+  ) {
+    const dispute = await this.prisma.dispute.findUnique({ where: { id: disputeId } });
+    if (!dispute) throw new NotFoundException('Dispute not found');
+    if (dispute.status !== 'OPEN') {
+      throw new BadRequestException('Dispute is already resolved');
+    }
+    const updated = await this.prisma.dispute.update({
+      where: { id: disputeId },
+      data: {
+        status: params.reject ? 'REJECTED' : 'RESOLVED',
+        resolution: params.resolution,
+        refundToUser: params.reject ? null : (params.refundToUser ?? null),
+        payoutToProvider: params.reject ? null : (params.payoutToProvider ?? null),
+        resolvedAt: new Date(),
+      },
+    });
+    return { id: updated.id, status: updated.status, resolvedAt: updated.resolvedAt };
+  }
+
   /** Paginated user list with roles, wallet, and role-relevant counts. */
   async listUsers(limit = 25, offset = 0) {
     const take = Math.min(limit, 100);
