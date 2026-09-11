@@ -2,9 +2,74 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Users, Boxes, Coins, Landmark, Briefcase, Percent } from 'lucide-react';
 import { demoDisputes } from '../lib/demo';
-import { getAdminStats, getAdminUsers, setUserRole, getFees, setFee } from '../lib/admin';
+import {
+  getAdminStats,
+  getAdminUsers,
+  setUserRole,
+  getFees,
+  setFee,
+  getAdminServices,
+  moderateService,
+} from '../lib/admin';
 
 const MANAGEABLE_ROLES = ['PROVIDER', 'DEVELOPER', 'ADMIN'] as const;
+
+function ServicesModerationCard() {
+  const qc = useQueryClient();
+  const {
+    data: services = [],
+    isLoading,
+    error,
+  } = useQuery({ queryKey: ['admin-services'], queryFn: getAdminServices });
+  const moderate = useMutation({
+    mutationFn: (v: { id: string; active: boolean }) => moderateService(v.id, v.active),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-services'] });
+      qc.invalidateQueries({ queryKey: ['admin-stats'] });
+      qc.invalidateQueries({ queryKey: ['services'] });
+    },
+  });
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+      <h2 className="font-semibold text-slate-300">Services (moderation)</h2>
+      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading services…</p>}
+      {error && <p className="mt-4 text-sm text-red-400">Could not load services.</p>}
+      {!isLoading && !error && services.length === 0 && (
+        <p className="mt-4 text-sm text-slate-500">No services yet.</p>
+      )}
+      <div className="mt-4 space-y-2">
+        {services.map((s) => {
+          const active = s.status === 'ACTIVE';
+          return (
+            <div
+              key={s.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+            >
+              <div className="min-w-0">
+                <div className="truncate font-medium">{s.name}</div>
+                <div className="text-xs text-slate-500">
+                  {s.category ?? 'Uncategorised'} · ${s.pricePerCall}/call · {s.totalJobs} jobs
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className={`text-xs ${active ? 'text-emerald-300' : 'text-slate-500'}`}>
+                  {s.status}
+                </span>
+                <button
+                  onClick={() => moderate.mutate({ id: s.id, active: !active })}
+                  disabled={moderate.isPending}
+                  className="rounded-lg border border-white/10 px-2.5 py-1 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
+                >
+                  {active ? 'Take down' : 'Restore'}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function FeesCard() {
   const qc = useQueryClient();
@@ -177,6 +242,7 @@ export function Admin() {
 
       <StatTiles />
       <FeesCard />
+      <ServicesModerationCard />
       <UsersCard />
 
       <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">

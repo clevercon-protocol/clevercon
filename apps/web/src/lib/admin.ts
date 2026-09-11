@@ -56,6 +56,30 @@ export async function setUserRole(
   });
 }
 
+export interface AdminServiceItem {
+  id: string;
+  agentId: string;
+  name: string;
+  category: string | null;
+  status: string;
+  pricePerCall: number;
+  score: number;
+  totalJobs: number;
+}
+
+export async function getAdminServices(): Promise<AdminServiceItem[]> {
+  if (isDemo()) return [];
+  const res = await apiFetch<{ items: AdminServiceItem[] }>('/admin/services');
+  return res.items;
+}
+
+export async function moderateService(
+  id: string,
+  active: boolean,
+): Promise<{ id: string; status: string }> {
+  return apiPost<{ id: string; status: string }>(`/admin/services/${id}/moderate`, { active });
+}
+
 export interface FeeConfig {
   enabled: boolean;
   bps: number;

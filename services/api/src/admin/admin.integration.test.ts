@@ -82,6 +82,36 @@ describe.skipIf(!DB)('Admin (integration, real Postgres)', () => {
     expect(res.items[0].roles).toEqual(['BUYER']);
   });
 
+  it('lists and moderates any service (takedown hides it from the marketplace)', async () => {
+    const p = await prisma.user.create({ data: {} });
+    const svc = await prisma.service.create({
+      data: {
+        providerId: p.id,
+        agentId: 'mod-svc',
+        name: 'Moderatable',
+        description: 'd',
+        pricingModel: 'X402',
+        pricePerCall: '0.05',
+        endpoint: 'http://m',
+        stellarAddress: 'GMOD',
+        status: 'ACTIVE',
+      },
+    });
+    const listed = await admin.listServices();
+    expect(listed.items.find((s: { id: string }) => s.id === svc.id)).toBeDefined();
+
+    const down = await admin.moderateService(svc.id, false);
+    expect(down.status).toBe('INACTIVE');
+    const { ServicesService } = await import('../services/services.service.js');
+    const market = new ServicesService(prisma);
+    const pub = await market.list({});
+    expect(pub.items.find((s: { id: string }) => s.id === svc.id)).toBeUndefined();
+
+    const up = await admin.moderateService(svc.id, true);
+    expect(up.status).toBe('ACTIVE');
+    await expect(admin.moderateService('nope', false)).rejects.toThrow();
+  });
+
   it('grants and revokes roles, and refuses to remove the last admin', async () => {
     const u = await prisma.user.create({ data: {} });
     const granted = await admin.setUserRole(u.id, 'PROVIDER', true);

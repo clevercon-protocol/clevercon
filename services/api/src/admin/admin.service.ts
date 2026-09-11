@@ -73,6 +73,50 @@ export class AdminService {
     };
   }
 
+  /** All services (any owner) for moderation, newest first. */
+  async listServices(limit = 50, offset = 0) {
+    const take = Math.min(limit, 100);
+    const [rows, total] = await Promise.all([
+      this.prisma.service.findMany({
+        orderBy: { registeredAt: 'desc' },
+        take,
+        skip: offset,
+        include: { reputation: { select: { score: true, totalJobs: true } } },
+      }),
+      this.prisma.service.count(),
+    ]);
+    return {
+      items: rows.map((s) => ({
+        id: s.id,
+        agentId: s.agentId,
+        name: s.name,
+        category: s.category,
+        status: s.status,
+        pricePerCall: Number(s.pricePerCall),
+        score: s.reputation?.score ?? 0,
+        totalJobs: s.reputation?.totalJobs ?? 0,
+      })),
+      total,
+      limit: take,
+      offset,
+    };
+  }
+
+  /**
+   * Moderate any service (operator takedown / restore), independent of its
+   * owner: ACTIVE is listed in the marketplace, INACTIVE is hidden. Does not
+   * delete it, so history and reputation are preserved.
+   */
+  async moderateService(serviceId: string, active: boolean) {
+    const status = active ? ServiceStatus.ACTIVE : ServiceStatus.INACTIVE;
+    try {
+      const s = await this.prisma.service.update({ where: { id: serviceId }, data: { status } });
+      return { id: s.id, status: s.status };
+    } catch {
+      throw new NotFoundException('Service not found');
+    }
+  }
+
   /** Paginated user list with roles, wallet, and role-relevant counts. */
   async listUsers(limit = 25, offset = 0) {
     const take = Math.min(limit, 100);

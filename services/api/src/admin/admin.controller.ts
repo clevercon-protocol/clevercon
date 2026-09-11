@@ -22,6 +22,8 @@ const feeSchema = z.object({
   recipient: z.string().min(1).optional(),
 });
 
+const moderateSchema = z.object({ active: z.boolean() });
+
 /** Operator console API. Every route requires the ADMIN role. */
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -44,6 +46,20 @@ export class AdminController {
   setRole(@Param('id') id: string, @Body() body: unknown) {
     const { role, grant } = parseBody(roleSchema, body);
     return this.admin.setUserRole(id, role, grant);
+  }
+
+  /** All services, for moderation. */
+  @Get('services')
+  services(@Query() query: unknown) {
+    const { limit, offset } = parseBody(listQuery, query);
+    return this.admin.listServices(limit, offset);
+  }
+
+  /** Take down or restore any service (operator moderation). */
+  @Post('services/:id/moderate')
+  moderate(@Param('id') id: string, @Body() body: unknown) {
+    const { active } = parseBody(moderateSchema, body);
+    return this.admin.moderateService(id, active);
   }
 
   /** Current protocol fee + accrued fees. */
