@@ -5,6 +5,11 @@ document) the **provider fulfillment contract**: what the worker sends a provide
 and what it expects back. Any endpoint that honours this contract is a valid
 provider, whether it is 40 lines or a full agent.
 
+It is built on `createProvider` from
+[`@clevercon/agent-sdk/provider`](../../packages/agent-sdk), so it doubles as the
+SDK's dogfood example: the SDK handles health, body parsing, encoding, and
+error-to-500 mapping, and the only thing written here is the work itself.
+
 ## Fulfillment contract
 
 The worker (`services/workers` executor) calls a service's `endpoint` per step:

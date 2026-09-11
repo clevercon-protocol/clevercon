@@ -6,6 +6,9 @@
   "scripts": {
     "start": "tsx src/index.ts"
   },
+  "dependencies": {
+    "@clevercon/agent-sdk": "*"
+  },
   "devDependencies": {
     "tsx": "^4.19.2"
   }
