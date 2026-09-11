@@ -37,6 +37,7 @@ export class VaultContractService {
   private readonly contractId: string;
   private readonly rpcUrl: string;
   private readonly usdcSac: string;
+  private readonly adminKey: string;
   readonly passphrase: string;
   readonly active: boolean;
   /** The deployed vault contract id, or '' when not configured. */
@@ -53,6 +54,7 @@ export class VaultContractService {
     this.contractId = config.get('AGENT_VAULT_CONTRACT_ID', { infer: true }) ?? '';
     this.rpcUrl = config.get('STELLAR_RPC_URL', { infer: true });
     this.usdcSac = config.get('USDC_SAC', { infer: true }) ?? '';
+    this.adminKey = config.get('VAULT_ADMIN_KEY', { infer: true }) ?? '';
     this.passphrase = config.get('NETWORK_PASSPHRASE', { infer: true });
     this.active = this.contractId.length > 10 && !this.contractId.startsWith('C...');
     if (!this.active) {
@@ -266,6 +268,69 @@ export class VaultContractService {
       new Address(params.payee).toScVal(),
       nativeToScVal(nullifier, { type: 'bytes' }),
       nativeToScVal(params.proof, { type: 'bytes' }),
+    ]);
+    return hash;
+  }
+
+  // ── Protocol fee administration (operator console) ──────────────────────────
+
+  /** Whether fee admin is available (a vault admin key is configured). */
+  get feeAdminEnabled(): boolean {
+    return this.active && this.adminKey.length > 0;
+  }
+
+  /** Simulate a read-only call and return its decoded return value. */
+  private async simulateRead(sourceAddress: string, method: string, args: xdr.ScVal[] = []) {
+    const server = this.server();
+    const account = await server.getAccount(sourceAddress);
+    const contract = new Contract(this.contractId);
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.passphrase,
+    })
+      .addOperation(contract.call(method, ...args))
+      .setTimeout(60)
+      .build();
+    const sim = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(sim)) {
+      throw new ServiceUnavailableException(`${method} read failed: ${sim.error}`);
+    }
+    const retval = sim.result?.retval;
+    return retval ? scValToNative(retval) : null;
+  }
+
+  /** Current protocol fee: { bps, recipient } (recipient null if unset). */
+  async getFee(): Promise<{ bps: number; recipient: string | null }> {
+    this.ensureActive();
+    const src = this.adminKey
+      ? Keypair.fromSecret(this.adminKey).publicKey()
+      : new Address(this.contractId).toString();
+    const [bps, recipient] = (await this.simulateRead(src, 'get_fee')) as [number, string | null];
+    return { bps: Number(bps), recipient: recipient ?? null };
+  }
+
+  /** Accrued (claimable) fees for the configured USDC asset, in USDC. */
+  async getAccruedFeesUsdc(): Promise<number> {
+    this.ensureActive();
+    const src = Keypair.fromSecret(this.adminKey).publicKey();
+    const stroops = (await this.simulateRead(src, 'get_accrued_fees', [this.usdcSacScVal()])) as
+      | bigint
+      | number;
+    return Number(stroops) / STROOPS_PER_USDC;
+  }
+
+  /** Set the protocol fee (admin). bps is capped on-chain; recipient optional. */
+  async setFee(bps: number, recipient?: string): Promise<string> {
+    if (!this.feeAdminEnabled) {
+      throw new ServiceUnavailableException('VAULT_ADMIN_KEY not configured');
+    }
+    const kp = Keypair.fromSecret(this.adminKey);
+    // Option<Address>: Some(addr) is the Address ScVal, None is ScVal::Void.
+    const recipientScVal = recipient ? new Address(recipient).toScVal() : nativeToScVal(null);
+    const { hash } = await this.signAndSubmitAsOrchestrator(kp, 'set_fee', [
+      new Address(kp.publicKey()).toScVal(),
+      nativeToScVal(bps, { type: 'u32' }),
+      recipientScVal,
     ]);
     return hash;
   }

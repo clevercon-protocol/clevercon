@@ -55,3 +55,19 @@ export async function setUserRole(
     grant,
   });
 }
+
+export interface FeeConfig {
+  enabled: boolean;
+  bps: number;
+  recipient: string | null;
+  accruedUsdc: number;
+}
+
+export async function getFees(): Promise<FeeConfig> {
+  if (isDemo()) return { enabled: false, bps: 30, recipient: null, accruedUsdc: 0 };
+  return apiFetch<FeeConfig>('/admin/fees');
+}
+
+export async function setFee(bps: number, recipient?: string): Promise<FeeConfig> {
+  return apiPost<FeeConfig>('/admin/fees', { bps, ...(recipient ? { recipient } : {}) });
+}

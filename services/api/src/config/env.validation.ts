@@ -42,6 +42,9 @@ export const envSchema = z.object({
   // reputation on-chain (the platform is the registry admin/owner). KMS in prod.
   REGISTRY_CONTRACT_ID: z.string().optional(),
   REGISTRY_ADMIN_KEY: z.string().optional(),
+  // Vault admin key (the address passed to the vault's init). Lets the operator
+  // console read + set the protocol fee and view accrued fees. KMS in prod.
+  VAULT_ADMIN_KEY: z.string().optional(),
   // At-rest encryption key for per-user delegate secrets (32-byte hex or base64;
   // KMS in production). When set, the platform can provision per-user spending
   // delegates and automatic settlement is enabled; when unset, tasks run

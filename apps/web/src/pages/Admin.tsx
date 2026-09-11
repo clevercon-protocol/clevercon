@@ -1,9 +1,81 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Users, Boxes, Coins, Landmark, Briefcase } from 'lucide-react';
+import { Users, Boxes, Coins, Landmark, Briefcase, Percent } from 'lucide-react';
 import { demoDisputes } from '../lib/demo';
-import { getAdminStats, getAdminUsers, setUserRole } from '../lib/admin';
+import { getAdminStats, getAdminUsers, setUserRole, getFees, setFee } from '../lib/admin';
 
 const MANAGEABLE_ROLES = ['PROVIDER', 'DEVELOPER', 'ADMIN'] as const;
+
+function FeesCard() {
+  const qc = useQueryClient();
+  const { data: fees } = useQuery({ queryKey: ['admin-fees'], queryFn: getFees });
+  const [bps, setBps] = useState('');
+  const save = useMutation({
+    mutationFn: () => setFee(Number(bps)),
+    onSuccess: () => {
+      setBps('');
+      qc.invalidateQueries({ queryKey: ['admin-fees'] });
+    },
+  });
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+      <div className="flex items-center gap-2 text-slate-300">
+        <Percent size={16} className="text-violet-300" />
+        <h2 className="font-semibold">Protocol fee</h2>
+      </div>
+      {!fees?.enabled ? (
+        <p className="mt-3 text-sm text-slate-500">
+          Fee administration is not configured in this environment.
+        </p>
+      ) : (
+        <>
+          <div className="mt-3 flex flex-wrap gap-6 text-sm">
+            <div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">Current fee</div>
+              <div className="text-lg font-bold">{(fees.bps / 100).toFixed(2)}%</div>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">Accrued</div>
+              <div className="text-lg font-bold">${fees.accruedUsdc.toFixed(2)}</div>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">Recipient</div>
+              <div className="font-mono text-sm text-slate-300">
+                {fees.recipient
+                  ? `${fees.recipient.slice(0, 6)}…${fees.recipient.slice(-4)}`
+                  : 'unset'}
+              </div>
+            </div>
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (bps !== '' && !save.isPending) save.mutate();
+            }}
+            className="mt-4 flex flex-wrap items-center gap-2"
+          >
+            <input
+              value={bps}
+              onChange={(e) => setBps(e.target.value)}
+              inputMode="numeric"
+              placeholder="New fee (bps, e.g. 30 = 0.30%)"
+              className="min-w-56 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-500/40"
+            />
+            <button
+              type="submit"
+              disabled={bps === '' || save.isPending}
+              className="rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {save.isPending ? 'Updating…' : 'Update fee'}
+            </button>
+          </form>
+          {save.error && <p className="mt-2 text-sm text-red-400">Could not update the fee.</p>}
+        </>
+      )}
+    </div>
+  );
+}
 
 function StatTiles() {
   const { data: s } = useQuery({ queryKey: ['admin-stats'], queryFn: getAdminStats });
@@ -104,6 +176,7 @@ export function Admin() {
       </div>
 
       <StatTiles />
+      <FeesCard />
       <UsersCard />
 
       <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">

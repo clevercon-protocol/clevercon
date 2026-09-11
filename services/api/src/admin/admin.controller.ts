@@ -17,6 +17,11 @@ const roleSchema = z.object({
   grant: z.boolean(),
 });
 
+const feeSchema = z.object({
+  bps: z.number().int().min(0).max(10000),
+  recipient: z.string().min(1).optional(),
+});
+
 /** Operator console API. Every route requires the ADMIN role. */
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -39,5 +44,18 @@ export class AdminController {
   setRole(@Param('id') id: string, @Body() body: unknown) {
     const { role, grant } = parseBody(roleSchema, body);
     return this.admin.setUserRole(id, role, grant);
+  }
+
+  /** Current protocol fee + accrued fees. */
+  @Get('fees')
+  fees() {
+    return this.admin.fees();
+  }
+
+  /** Set the protocol fee (bps) and optional recipient. */
+  @Post('fees')
+  setFee(@Body() body: unknown) {
+    const { bps, recipient } = parseBody(feeSchema, body);
+    return this.admin.setFee(bps, recipient);
   }
 }

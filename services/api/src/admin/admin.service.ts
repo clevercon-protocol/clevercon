@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, PaymentStatus, Role, ServiceStatus } from '@clevercon/db';
 import type { AppEnv } from '../config/env.validation.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { VaultContractService } from '../vault/vault-contract.service.js';
 
 /** Operator-facing platform data. All methods are ADMIN-gated at the controller. */
 @Injectable()
@@ -12,8 +13,30 @@ export class AdminService {
   constructor(
     private readonly prisma: PrismaService,
     config: ConfigService<AppEnv, true>,
+    @Optional() private readonly vault?: VaultContractService,
   ) {
     this.usdcSac = config.get('USDC_SAC', { infer: true }) ?? '';
+  }
+
+  /** Current protocol fee + claimable accrued fees (from the vault contract). */
+  async fees() {
+    if (!this.vault?.feeAdminEnabled) {
+      return { enabled: false, bps: 0, recipient: null, accruedUsdc: 0 };
+    }
+    const [fee, accruedUsdc] = await Promise.all([
+      this.vault.getFee(),
+      this.vault.getAccruedFeesUsdc(),
+    ]);
+    return { enabled: true, bps: fee.bps, recipient: fee.recipient, accruedUsdc };
+  }
+
+  /** Set the protocol fee on the vault (admin). */
+  async setFee(bps: number, recipient?: string) {
+    if (!this.vault?.feeAdminEnabled) {
+      throw new BadRequestException('Fee administration is not configured');
+    }
+    const txHash = await this.vault.setFee(bps, recipient);
+    return { txHash, ...(await this.fees()) };
   }
 
   /** Real platform metrics, read from the DB mirror (no fabricated numbers). */
