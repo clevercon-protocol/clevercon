@@ -199,6 +199,7 @@ Longer-term: confidential amounts and counterparties (pending Stellar confidenti
 
 - [Architecture](docs/architecture.md)
 - [Private policies spec](docs/private-policies.md)
+- [Operations and disaster recovery](docs/operations.md)
 - [Development guide](docs/development.md)
 - [Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
