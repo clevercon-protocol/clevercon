@@ -15,6 +15,32 @@ const STEP_TIMEOUT_MS = 15_000;
 const TERMINAL: TaskStatus[] = [TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.FAILED];
 
 /**
+ * Acceptance check: a step is paid only when the provider returned a usable
+ * result, not merely a 2xx. This is the minimal, provider-agnostic gate (a
+ * non-empty body that is not a soft error). A provider that answers 200 with an
+ * empty body or a JSON `{ error: ... }` is rejected, so the vault does not pay
+ * for a non-delivery. Richer, service-declared acceptance criteria build on this.
+ */
+export function isAcceptableOutput(output: string): boolean {
+  const trimmed = output.trim();
+  if (!trimmed) return false;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'error' in parsed &&
+      (parsed as { error: unknown }).error
+    ) {
+      return false;
+    }
+  } catch {
+    // Non-JSON, non-empty text is acceptable (e.g. a plain string result).
+  }
+  return true;
+}
+
+/**
  * Record a real job outcome against a service's reputation and health. Called
  * only when the provider endpoint was actually contacted, so these numbers
  * reflect genuine execution, never fabricated activity:
@@ -115,6 +141,8 @@ export async function executeTask(
       const latencyMs = Date.now() - started;
       if (!res.ok) throw new Error(`provider returned HTTP ${res.status}`);
       const output = (await res.text()).slice(0, 2000);
+      if (!isAcceptableOutput(output))
+        throw new Error('provider output rejected (acceptance check)');
       await prisma.taskStep.update({
         where: { id: step.id },
         data: { status: StepStatus.RELEASED, output, latencyMs, error: null },

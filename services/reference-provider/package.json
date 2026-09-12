@@ -7,7 +7,8 @@
     "start": "tsx src/index.ts"
   },
   "dependencies": {
-    "@clevercon/agent-sdk": "*"
+    "@clevercon/agent-sdk": "*",
+    "@stellar/stellar-sdk": "^14.6.1"
   },
   "devDependencies": {
     "tsx": "^4.19.2"

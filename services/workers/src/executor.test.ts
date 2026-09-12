@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { executeTask } from './executor.js';
+import { executeTask, isAcceptableOutput } from './executor.js';
 
 interface Step {
   id: string;
@@ -126,5 +126,43 @@ describe('executeTask', () => {
   it('skips a missing task', async () => {
     const res = await executeTask(mockPrisma(null), okFetch as unknown as typeof fetch, 'nope');
     expect(res.status).toBe('skipped');
+  });
+
+  it('fails a step whose 2xx output does not pass the acceptance check', async () => {
+    const task: Task = {
+      id: 't6',
+      status: 'PENDING',
+      steps: [
+        {
+          id: 's1',
+          index: 0,
+          action: 'x',
+          status: 'PENDING',
+          service: { endpoint: 'https://svc.test' },
+        },
+      ],
+    };
+    // A 200 with a soft-error JSON body is a non-delivery: do not pay for it.
+    const softError = vi.fn(
+      async () => new Response(JSON.stringify({ error: 'no data' }), { status: 200 }),
+    );
+    const res = await executeTask(mockPrisma(task), softError as unknown as typeof fetch, 't6');
+    expect(res.status).toBe('failed');
+    expect(task.steps[0].status).toBe('FAILED');
+    expect(task.steps[0].error).toContain('acceptance');
+  });
+});
+
+describe('isAcceptableOutput', () => {
+  it('accepts non-empty plain text and JSON without an error field', () => {
+    expect(isAcceptableOutput('result-body')).toBe(true);
+    expect(isAcceptableOutput(JSON.stringify({ price: '0.10' }))).toBe(true);
+    expect(isAcceptableOutput(JSON.stringify({ error: null }))).toBe(true);
+  });
+
+  it('rejects empty output and a soft JSON error', () => {
+    expect(isAcceptableOutput('')).toBe(false);
+    expect(isAcceptableOutput('   ')).toBe(false);
+    expect(isAcceptableOutput(JSON.stringify({ error: 'boom' }))).toBe(false);
   });
 });
