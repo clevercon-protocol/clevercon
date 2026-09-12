@@ -4,8 +4,45 @@ import { Layers, ShoppingBag, Store, ShieldCheck, Terminal } from 'lucide-react'
 import { useSession, type Role } from '../store/session';
 import { useWalletAuth } from '../auth/useWalletAuth';
 import { DemoBanner } from './DemoBanner';
+import { config } from '../config';
 
 type Icon = ComponentType<{ size?: number; className?: string }>;
+
+// Which Stellar network the app is pointed at. Testnet is amber (test funds, no
+// real value); mainnet is emerald (live). Driven by config, not hardcoded.
+const NETWORKS: Record<string, { label: string; dot: string; text: string; border: string }> = {
+  testnet: {
+    label: 'Stellar testnet',
+    dot: 'bg-amber-400',
+    text: 'text-amber-300',
+    border: 'border-amber-500/25',
+  },
+  mainnet: {
+    label: 'Stellar mainnet',
+    dot: 'bg-emerald-400',
+    text: 'text-emerald-300',
+    border: 'border-emerald-500/25',
+  },
+  local: {
+    label: 'Local',
+    dot: 'bg-slate-400',
+    text: 'text-slate-400',
+    border: 'border-white/10',
+  },
+};
+
+/** The active-network badge, shown across the app so the network is never ambiguous. */
+function NetworkBadge({ className = '' }: { className?: string }) {
+  const net = NETWORKS[config.network] ?? NETWORKS.testnet;
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border bg-white/[0.03] px-2.5 py-1 text-[11px] ${net.border} ${net.text} ${className}`}
+      title={`This app is operating against ${net.label}.`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${net.dot}`} /> {net.label}
+    </span>
+  );
+}
 
 // `selfServe` links are shown to any signed-in user (the console itself is the
 // place you acquire the role); the rest appear only once the role is held.
@@ -95,9 +132,7 @@ export function Shell({ children }: { children: ReactNode }) {
           )}
         </nav>
         <div className="mt-auto space-y-3">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] text-slate-400">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Stellar testnet
-          </span>
+          <NetworkBadge />
           <WalletButton full />
         </div>
       </aside>
@@ -106,6 +141,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <header className="sticky top-0 z-30 flex items-center justify-between border-b border-white/5 bg-[#0b0d13]/85 px-4 py-3 backdrop-blur lg:hidden">
         <Brand />
         <div className="flex items-center gap-3">
+          <NetworkBadge className="hidden sm:inline-flex" />
           {items.map((n) => (
             <Link
               key={n.to}
