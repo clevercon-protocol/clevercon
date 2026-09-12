@@ -2,7 +2,7 @@
 
 # CleverCon
 
-**The non-custodial, on-chain-enforced payment rail for AI agents on Stellar. Differentiated by spending policies that are enforced on-chain but kept private.**
+**The non-custodial spending-control layer for AI agents on Stellar. Fund a vault, set private spending rules, and your agent spends within them, enforced on-chain.**
 
 [![CI](https://github.com/clevercon-protocol/clevercon/actions/workflows/ci.yml/badge.svg)](https://github.com/clevercon-protocol/clevercon/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -16,20 +16,21 @@
 
 ## What it is
 
-CleverCon is payment infrastructure for AI agents on Stellar. You hand an agent a budget, a non-custodial Soroban contract holds the money and enforces the limit, and the agent pays for the data, compute, and services it needs to do real work. The platform never holds your funds and the agent can never spend outside the rules you set.
+CleverCon is a spending-control layer for AI agents on Stellar. You fund a non-custodial vault, set private spending rules, and your agent spends within them. The contract holds the money and refuses any payment that breaks a rule, so the platform never has custody and the agent can never exceed the budget or pay an unapproved party.
 
-Two things define it:
+Three things define it:
 
-1. **The rail is non-custodial and enforced on-chain.** A vault holds the funds and releases each payment only if it passes an on-chain policy check. Even a compromised or careless agent cannot exceed the budget or pay an unapproved party.
-2. **The spending policy stays private.** The rules (your caps, allowlist, and limits) are committed and checked on-chain without being published, so the ledger shows that a payment was allowed without revealing the rule that allowed it. This is what separates CleverCon from transparent, custodial, or SDK-only alternatives.
+1. **Non-custodial, enforced on-chain.** A vault holds the funds and releases each payment only if it passes an on-chain policy check. Even a compromised or careless agent cannot exceed the budget or pay an unapproved party.
+2. **The policy stays private.** The rules (your caps, allowlist, and limits) are committed and checked on-chain without being published, so the ledger shows that a payment was allowed without revealing the rule that allowed it. This is what separates CleverCon from transparent, custodial, or SDK-only alternatives.
+3. **Useful from day one, no marketplace required.** Value is one-sided: a single developer with a single agent gets the full benefit immediately, even paying one endpoint. There is no two-sided liquidity to bootstrap.
 
-It is live on Stellar testnet today: deployed contracts, a usable app, a reference provider, an SDK, and an MCP server that lets any AI agent drive the rail natively.
+It is live on Stellar testnet today: deployed contracts, a usable app, an SDK, and an MCP server that gives any AI agent a bounded, non-custodial spending account in minutes.
 
 ## Why it matters
 
 Agents are starting to transact. The hard part is not moving money, Stellar already settles USDC in seconds for a fraction of a cent. The hard part is **letting an agent spend autonomously without handing it unbounded access to your funds**, and doing so without broadcasting your budget and business relationships to every competitor reading the chain.
 
-CleverCon is the missing control layer: non-custodial custody of the funds, on-chain enforcement of what the agent may spend, and privacy of the policy itself. It composes the ecosystem's payment primitives (x402 and MPP) rather than replacing them, and exposes the whole thing through an SDK and a Stellar MCP server so other apps and agents build on it instead of only visiting it.
+CleverCon is the missing control layer: non-custodial custody of the funds, on-chain enforcement of what the agent may spend, and privacy of the policy itself. The fastest way in is MCP: point any MCP-capable agent (Claude Desktop, Cursor, a custom agent) at CleverCon and it gets a bounded spending account without custom integration. The SDK and dApp are the other two doors.
 
 ## Vision and goal
 
@@ -75,8 +76,10 @@ The thing doing the spending is always just a **delegate**. The rail is what mak
 ### Three ways to spend
 
 - **Pay a provider you already chose.** Point CleverCon at a specific service and make a single bounded, private payment. No planning.
-- **Find and pay one service.** Describe what you need; the registry returns matching providers by capability, price, and reputation. Pick one and pay.
-- **Compose a multi-service job.** For work that spans services (gather data, analyze it, write a report), a delegate plans the steps, hires a provider for each, and pays as each completes. Planning is optional and overridable; the rail underneath is identical.
+- **Find and pay one service.** Describe what you need; the curated directory returns matching services by capability, price, and reputation. Pick one and pay.
+- **Compose a multi-service job.** For work that spans services (gather data, analyze it, write a report), a delegate plans the steps, hires a service for each, and pays as each completes. Planning is optional and overridable; the rail underneath is identical.
+
+The directory is a convenience for discovery, not the product. The product is the spending-control layer, which works whether you pay one endpoint or many.
 
 ## What runs today (Stellar testnet)
 
@@ -93,7 +96,7 @@ The thing doing the spending is always just a **delegate**. The rail is what mak
 
 **Product surfaces:**
 - **Web app**: connect a wallet, add a USDC trustline, fund the vault, create a private policy, hire services, request a compliance proof, and watch releases settle, all live.
-- **Marketplace**: browse, search, filter, and sort services across categories and provider types.
+- **Service directory**: browse, search, filter, and sort a curated set of automated services an agent can hire (discovery, not a two-sided marketplace).
 - **Admin console**: monitoring, user and role management, on-chain protocol-fee config, service moderation, and dispute arbitration.
 - **Developer platform**: API keys with quotas, signed webhooks, a provider **SDK** (`@clevercon/agent-sdk`), and a Stellar **MCP server** (`@clevercon/mcp`, 10 tools) that hires and tracks tasks on the live rail.
 
@@ -135,7 +138,7 @@ Public demo: [`packages/dashboard`](packages/dashboard) is a lightweight wallet-
 | Frontend | React 19, Vite, Tailwind, TanStack Query, Zustand |
 | API | NestJS 11 (ESM + swc), PostgreSQL + Prisma, SEP-10 auth, RBAC |
 | Async | Redis + BullMQ (execution, proofs, settlement), Socket.IO + Redis adapter |
-| Payments | x402 and MPP to services; USDC over Stellar |
+| Payments | Vault-settled USDC release per step, proof-gated; x402 / MPP interop for external services on the roadmap |
 | Wallets | `@creit.tech/stellar-wallets-kit` (Freighter, xBull, Albedo, LOBSTR, Rabet) |
 | Chain access | `@stellar/stellar-sdk`, Soroban RPC, Horizon |
 
