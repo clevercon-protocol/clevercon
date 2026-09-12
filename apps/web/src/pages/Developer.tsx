@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { KeyRound, Activity, Webhook, Copy, Check } from 'lucide-react';
-import { isDemo } from '../config';
+import { KeyRound, Activity, Webhook, Copy, Check, Terminal } from 'lucide-react';
+import { isDemo, config } from '../config';
 import { demoUsage } from '../lib/demo';
 import {
   getApiKeys,
@@ -113,6 +113,47 @@ function when(v: string | null): string {
   return Number.isNaN(t) ? v : new Date(t).toLocaleDateString();
 }
 
+/** The ready-to-paste MCP client config that points an agent at this rail. */
+function mcpServerConfig(apiUrl: string, apiKey: string): string {
+  return JSON.stringify(
+    {
+      mcpServers: {
+        clevercon: {
+          command: 'npx',
+          args: ['-y', '@clevercon/mcp'],
+          env: { CLEVERCON_API_URL: apiUrl, CLEVERCON_API_KEY: apiKey },
+        },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+/** A code block with a copy button, for configs and snippets. */
+function CopyBlock({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="relative">
+      <pre className="overflow-x-auto rounded-lg bg-black/40 p-3 text-xs text-slate-200">
+        <code>{text}</code>
+      </pre>
+      <button
+        onClick={() => {
+          navigator.clipboard?.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }}
+        className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-1 text-xs hover:bg-white/20"
+        aria-label={`Copy ${label}`}
+      >
+        {copied ? <Check size={12} /> : <Copy size={12} />}
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+  );
+}
+
 function SecretReveal({ created }: { created: CreatedApiKey }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -135,6 +176,14 @@ function SecretReveal({ created }: { created: CreatedApiKey }) {
           {copied ? <Check size={14} /> : <Copy size={14} />}
           {copied ? 'Copied' : 'Copy'}
         </button>
+      </div>
+      <div className="mt-3">
+        <div className="text-xs text-slate-300">
+          Connect your agent: paste this into your MCP client config, then restart it.
+        </div>
+        <div className="mt-1">
+          <CopyBlock text={mcpServerConfig(config.apiUrl, created.key)} label="MCP config" />
+        </div>
       </div>
     </div>
   );
@@ -298,26 +347,46 @@ export function Developer() {
       <ApiKeys />
       <WebhooksCard />
 
-      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
-        <h2 className="font-semibold text-slate-300">SDK &amp; MCP</h2>
-        <p className="mt-2 text-sm text-slate-400">
-          Embed bounded spending in your own agent with the SDK and MCP server.
-        </p>
-        <div className="mt-3 flex gap-3 text-sm">
-          <a
-            href="https://github.com/clevercon-protocol/clevercon"
-            className="text-violet-300 hover:text-violet-200"
-          >
-            SDK docs
-          </a>
-          <a
-            href="https://github.com/clevercon-protocol/clevercon"
-            className="text-violet-300 hover:text-violet-200"
-          >
-            MCP server
-          </a>
-        </div>
-      </div>
+      <McpConnectCard />
     </section>
+  );
+}
+
+/** The two-minute MCP quickstart: paste a config, restart, your agent can spend. */
+function McpConnectCard() {
+  const cfg = mcpServerConfig(config.apiUrl, 'cc_yourprefix.yoursecret');
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+      <div className="flex items-center gap-2 text-slate-300">
+        <Terminal size={18} className="text-violet-300" />
+        <h2 className="font-semibold">Connect an agent over MCP</h2>
+      </div>
+      <p className="mt-2 text-sm text-slate-400">
+        Give any MCP-capable agent (Claude Desktop, Cursor, your own) a bounded, non-custodial
+        spending account. It can search the directory, hire a service, and track the task, always
+        within your policy.
+      </p>
+      <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-slate-400">
+        <li>Create an API key above and copy it into CLEVERCON_API_KEY.</li>
+        <li>
+          Paste this into your MCP client config (Claude Desktop: Settings, Developer, Edit Config).
+        </li>
+        <li>Restart the client. The clevercon tools appear and spend on the rail.</li>
+      </ol>
+      <div className="mt-3">
+        <CopyBlock text={cfg} label="MCP config" />
+      </div>
+      <p className="mt-2 text-xs text-slate-600">
+        Running from source before the npm publish? Set command to node and point args at the built
+        packages/mcp/dist/server.js path. Full SDK and MCP docs:{' '}
+        <a
+          href="https://github.com/clevercon-protocol/clevercon/tree/main/packages/mcp"
+          className="text-violet-300 hover:text-violet-200"
+        >
+          packages/mcp
+        </a>
+        .
+      </p>
+    </div>
   );
 }
