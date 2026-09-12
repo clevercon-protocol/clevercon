@@ -60,7 +60,7 @@ What is private today: the policy (your caps, allowlist, and per-payment limits)
 
 What is not yet private: the v1 on-chain verifier is a binding check, not a full pairing verification, so v1 trusts the proving stack for soundness of the predicate. Fully hiding payment amounts and counterparties as well is the deeper end of the roadmap and depends on Stellar's upcoming confidential-token support. The normative threat model and limitations are frozen in [docs/private-policies.md](docs/private-policies.md). We state this plainly because precision here is a feature, not a caveat.
 
-The zero-knowledge engine this builds on already runs on Stellar testnet as a separate project, [CipherMit](https://github.com/Bosun-Josh121/ciphermit); folding its full circuit into CleverVault is the headline roadmap item.
+Landing the full zero-knowledge policy circuit, so soundness is formal and the binding-proof caveat is retired, is the headline roadmap item.
 
 ## How it works
 
@@ -131,7 +131,7 @@ Public demo: [`packages/dashboard`](packages/dashboard) is a lightweight wallet-
 | Layer | Technology |
 |---|---|
 | Smart contracts | Rust / Soroban (CleverVault, PolicyVerifier, Registry) |
-| Zero-knowledge | Binding-proof prover today; full Noir/RISC Zero circuit (CipherMit) on the roadmap, verified on-chain |
+| Zero-knowledge | Binding-proof prover today; full Noir / RISC Zero circuit on the roadmap, verified on-chain |
 | Frontend | React 19, Vite, Tailwind, TanStack Query, Zustand |
 | API | NestJS 11 (ESM + swc), PostgreSQL + Prisma, SEP-10 auth, RBAC |
 | Async | Redis + BullMQ (execution, proofs, settlement), Socket.IO + Redis adapter |
@@ -184,7 +184,7 @@ Point any MCP client at `@clevercon/mcp` with `CLEVERCON_API_URL` and a scoped `
 
 Near-term, toward mainnet:
 
-1. **Full ZK policy circuit** folding the CipherMit engine into CleverVault, so policy soundness is formal and the binding-proof caveat is retired.
+1. **Full ZK policy circuit** in CleverVault, so policy soundness is formal and the binding-proof caveat is retired.
 2. **Security audit** of the contracts and API, plus a documented threat model and disaster-recovery runbook.
 3. **Mainnet deploy** with a clear testnet/mainnet network switch.
 4. **Real traction** with design partners, measured in on-chain payments.
