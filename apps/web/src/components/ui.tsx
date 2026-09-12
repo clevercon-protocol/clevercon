@@ -107,6 +107,29 @@ export function EmptyState({ children }: { children: ReactNode }) {
   );
 }
 
+/** Skeleton placeholder while a list or panel loads. */
+export function Loading({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="space-y-2" role="status" aria-busy="true" aria-label="Loading">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div
+          key={i}
+          className="h-12 animate-pulse rounded-xl border border-white/[0.06] bg-white/[0.03]"
+        />
+      ))}
+    </div>
+  );
+}
+
+/** Recoverable error state for a failed fetch. */
+export function ErrorState({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-xl border border-red-500/20 bg-red-500/[0.04] px-4 py-6 text-center text-sm text-red-300">
+      {children}
+    </div>
+  );
+}
+
 /** Small pill badge. */
 export function Badge({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (

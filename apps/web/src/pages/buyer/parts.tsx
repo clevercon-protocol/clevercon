@@ -46,7 +46,15 @@ import {
 } from '../../lib/policies';
 import { getWalletBalances, addUsdcTrustline, explorerAccount } from '../../lib/stellar';
 import { getApiKeys } from '../../lib/apiKeys';
-import { Card, CardHeader, StatCard, EmptyState, Badge } from '../../components/ui';
+import {
+  Card,
+  CardHeader,
+  StatCard,
+  EmptyState,
+  ErrorState,
+  Loading,
+  Badge,
+} from '../../components/ui';
 
 type Mode = 'direct' | 'search' | 'compose';
 
@@ -525,8 +533,8 @@ export function TasksCard({ limit }: { limit?: number }) {
         }
       />
       <div className="p-5 pt-4">
-        {isLoading && <p className="text-sm text-slate-500">Loading jobs…</p>}
-        {error && <p className="text-sm text-red-400">Could not load your jobs.</p>}
+        {isLoading && <Loading rows={limit ?? 3} />}
+        {error && <ErrorState>Could not load your jobs.</ErrorState>}
         {!isLoading && !error && tasks.length === 0 && (
           <EmptyState>No jobs yet. Start one to get going.</EmptyState>
         )}
@@ -642,8 +650,16 @@ export function PoliciesCard() {
             Could not create the policy. Please try again.
           </p>
         )}
-        {isLoading && <p className="mt-4 text-sm text-slate-500">Loading policies…</p>}
-        {error && <p className="mt-4 text-sm text-red-400">Could not load your policies.</p>}
+        {isLoading && (
+          <div className="mt-4">
+            <Loading rows={2} />
+          </div>
+        )}
+        {error && (
+          <div className="mt-4">
+            <ErrorState>Could not load your policies.</ErrorState>
+          </div>
+        )}
         {!isLoading && !error && policies.length === 0 && (
           <div className="mt-4">
             <EmptyState>No policies yet.</EmptyState>
@@ -916,8 +932,16 @@ export function Marketplace() {
             ))}
           </select>
         </div>
-        {isLoading && <p className="mt-4 text-sm text-slate-500">Loading services…</p>}
-        {error && <p className="mt-4 text-sm text-red-400">Could not load services.</p>}
+        {isLoading && (
+          <div className="mt-4">
+            <Loading rows={4} />
+          </div>
+        )}
+        {error && (
+          <div className="mt-4">
+            <ErrorState>Could not load services.</ErrorState>
+          </div>
+        )}
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           {items.map((s) => (
             <Link
