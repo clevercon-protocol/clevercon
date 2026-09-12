@@ -1,5 +1,5 @@
 import { isDemo } from '../../config';
-import { WalletCard, VaultCard, DelegateCard } from './parts';
+import { WalletCard, VaultCard, DelegateCard, AgentWalletCard } from './parts';
 
 export function VaultPage() {
   return (
@@ -9,6 +9,11 @@ export function VaultPage() {
         <VaultCard />
         <DelegateCard />
       </div>
+      {!isDemo() && (
+        <div className="max-w-4xl">
+          <AgentWalletCard />
+        </div>
+      )}
     </div>
   );
 }

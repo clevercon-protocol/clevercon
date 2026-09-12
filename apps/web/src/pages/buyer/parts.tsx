@@ -35,6 +35,8 @@ import {
   withdrawFromVault,
   getDelegate,
   authorizeDelegate,
+  getAgentWallet,
+  setAgentWallet,
 } from '../../lib/vault';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import {
@@ -1214,6 +1216,81 @@ export function GettingStarted() {
             );
           })}
         </ol>
+      </div>
+    </Card>
+  );
+}
+
+// ── Agent wallet (agent-key mode, for paying external x402/MPP services) ─────────
+
+/**
+ * Register the user's OWN agent key. We store only the public key; the agent
+ * holds the secret and signs its own payments, so it stays non-custodial. The
+ * vault will top this address up in bounded amounts under the user's policy
+ * (agent-key mode). Top-up + x402 payment are a later slice.
+ */
+export function AgentWalletCard() {
+  const qc = useQueryClient();
+  const [value, setValue] = useState('');
+  const { data } = useQuery({ queryKey: ['agent-wallet'], queryFn: getAgentWallet });
+  const registered = data?.publicKey ?? null;
+
+  const save = useMutation({
+    mutationFn: () => setAgentWallet(value.trim()),
+    onSuccess: () => {
+      setValue('');
+      qc.invalidateQueries({ queryKey: ['agent-wallet'] });
+    },
+  });
+
+  if (isDemo()) return null;
+
+  return (
+    <Card className="p-0">
+      <CardHeader
+        icon={KeyRound}
+        title="Agent wallet"
+        hint="Your agent's own key for paying external x402/MPP services"
+      />
+      <div className="p-5 pt-4">
+        <p className="text-sm text-slate-400">
+          To spend at services outside CleverCon (the open x402/MPP economy), your agent needs its
+          own key. You register only its public key here. The vault tops it up in bounded amounts
+          under your policy, and your agent signs its own payments. We never hold its secret or your
+          funds.
+        </p>
+        {registered ? (
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] p-3">
+            <span className="font-mono text-xs text-slate-300">
+              {registered.slice(0, 6)}…{registered.slice(-4)}
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300">
+              <Check size={13} /> Registered
+            </span>
+          </div>
+        ) : null}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (value.trim() && !save.isPending) save.mutate();
+          }}
+          className="mt-3 flex gap-2"
+        >
+          <input
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="Agent public key (G…)"
+            className={inputCls}
+          />
+          <button type="submit" disabled={!value.trim() || save.isPending} className={primaryBtn}>
+            {save.isPending ? 'Saving…' : registered ? 'Update' : 'Register'}
+          </button>
+        </form>
+        {save.error && <p className="mt-2 text-sm text-red-400">{readError(save.error)}</p>}
+        <p className="mt-2 text-[11px] text-slate-600">
+          Bounded top-up and the x402 payment flow are coming next. Registered services are paid
+          directly by the vault and do not need this.
+        </p>
       </div>
     </Card>
   );

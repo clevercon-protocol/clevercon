@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { StrKey } from '@stellar/stellar-sdk';
 import { Prisma } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { VaultContractService } from './vault-contract.service.js';
@@ -83,6 +84,33 @@ export class VaultService {
   }
 
   /** Mark the caller's delegate as authorized (called after the register tx submits). */
+  /**
+   * The user's registered agent key (for the agent-key payment mode). Returns
+   * only the public key; the platform never holds the secret.
+   */
+  async getAgentWallet(userId: string): Promise<{ publicKey: string | null }> {
+    const w = await this.prisma.agentWallet.findUnique({ where: { userId } });
+    return { publicKey: w?.publicKey ?? null };
+  }
+
+  /**
+   * Register (or update) the user's OWN agent key. We store only the public
+   * key: the user's agent holds the secret and signs its own payments, so this
+   * stays non-custodial. The vault will top this address up in bounded amounts
+   * under the user's policy (agent-key mode, paying external x402/MPP services).
+   */
+  async setAgentWallet(userId: string, publicKey: string): Promise<{ publicKey: string }> {
+    if (!StrKey.isValidEd25519PublicKey(publicKey)) {
+      throw new BadRequestException('Invalid Stellar public key (expected a G... address)');
+    }
+    const w = await this.prisma.agentWallet.upsert({
+      where: { userId },
+      create: { userId, publicKey },
+      update: { publicKey },
+    });
+    return { publicKey: w.publicKey };
+  }
+
   async confirmDelegateRegistered(userId: string) {
     await this.delegates.markRegistered(userId);
     return { ok: true as const };

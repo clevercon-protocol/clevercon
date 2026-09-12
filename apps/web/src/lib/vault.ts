@@ -107,3 +107,17 @@ export async function authorizeDelegate(): Promise<{ txHash: string }> {
   await apiPost('/vault/delegate/confirm', {});
   return res;
 }
+
+/**
+ * The user's own agent key (for the agent-key payment mode: paying external
+ * x402/MPP services). The platform stores only the public key; the user's agent
+ * holds the secret, so it stays non-custodial.
+ */
+export async function getAgentWallet(): Promise<{ publicKey: string | null }> {
+  if (isDemo()) return { publicKey: null };
+  return apiFetch<{ publicKey: string | null }>('/vault/agent-wallet');
+}
+
+export async function setAgentWallet(publicKey: string): Promise<{ publicKey: string }> {
+  return apiPost<{ publicKey: string }>('/vault/agent-wallet', { publicKey });
+}

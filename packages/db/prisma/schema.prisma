@@ -29,8 +29,9 @@ model User {
   services  Service[]  @relation("ProviderServices")
   policies  Policy[]
   webhooks  Webhook[]
-  auditLogs AuditLog[]
-  delegate  AgentDelegate?
+  auditLogs   AuditLog[]
+  delegate    AgentDelegate?
+  agentWallet AgentWallet?
 
   @@map("users")
 }
@@ -50,6 +51,23 @@ model AgentDelegate {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("agent_delegates")
+}
+
+/// The user's OWN agent key (for the agent-key payment mode: paying external
+/// x402/MPP services). The platform stores ONLY the public key and NEVER the
+/// secret, so it is non-custodial by construction: the vault tops this address
+/// up in bounded amounts under the user's policy, and the user's agent signs
+/// its own payments. Distinct from AgentDelegate (a platform-held authorizer
+/// that never holds funds).
+model AgentWallet {
+  userId    String   @id
+  publicKey String   @unique // the agent's Stellar G... address; secret held by the user, not us
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("agent_wallets")
 }
 
 model Wallet {

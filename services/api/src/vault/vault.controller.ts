@@ -9,6 +9,7 @@ import type { AuthUser } from '../auth/types.js';
 
 const amountSchema = z.object({ amountUsdc: z.number().positive() });
 const submitSchema = z.object({ signedXdr: z.string().min(1) });
+const agentWalletSchema = z.object({ publicKey: z.string().min(1) });
 
 /** The current session's vault position and on-chain deposit/withdraw. */
 @Controller('vault')
@@ -47,6 +48,19 @@ export class VaultController {
   @Post('delegate/confirm')
   confirmDelegate(@CurrentUser() user: AuthUser) {
     return this.vault.confirmDelegateRegistered(user.userId);
+  }
+
+  /** The caller's registered agent key (public key only), for agent-key mode. */
+  @Get('agent-wallet')
+  getAgentWallet(@CurrentUser() user: AuthUser) {
+    return this.vault.getAgentWallet(user.userId);
+  }
+
+  /** Register the caller's own agent key. Only the public key is stored. */
+  @Post('agent-wallet')
+  setAgentWallet(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { publicKey } = parseBody(agentWalletSchema, body);
+    return this.vault.setAgentWallet(user.userId, publicKey);
   }
 
   /**
