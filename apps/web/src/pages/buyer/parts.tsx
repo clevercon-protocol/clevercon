@@ -20,6 +20,9 @@ import {
   ArrowRight,
   Rocket,
   KeyRound,
+  Eye,
+  EyeOff,
+  Fingerprint,
 } from 'lucide-react';
 import { isDemo } from '../../config';
 import { useSession } from '../../store/session';
@@ -719,6 +722,8 @@ export function ProveReleaseCard() {
   });
 
   const usable = policies.filter((p: Policy) => p.isPrivate);
+  const selected = usable.find((p: Policy) => p.id === policyId);
+  const revealed = status?.status === 'READY' || status?.status === 'VERIFIED';
   const canProve =
     policyId !== '' && payee.trim().length > 0 && Number(amount) > 0 && !prove.isPending;
 
@@ -781,6 +786,48 @@ export function ProveReleaseCard() {
               {status?.status ?? 'REQUESTED'}
               {status?.status === 'READY' && ' · ready to release'}
             </span>
+          </div>
+        )}
+        {revealed && (
+          <div className="mt-4">
+            <p className="text-xs uppercase tracking-wider text-slate-500">
+              What this payment reveals
+            </p>
+            <div className="mt-2 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-slate-300">
+                  <Eye size={14} className="text-slate-400" /> On the public ledger
+                </div>
+                <ul className="mt-2 space-y-1 font-mono text-xs text-slate-400">
+                  <li>
+                    payment: {Number(amount).toFixed(2)} USDC to {payee.slice(0, 6)}…
+                    {payee.slice(-4)}
+                  </li>
+                  <li className="break-all">
+                    policy: {selected ? selected.commitment.slice(0, 18) + '…' : 'n/a'}
+                  </li>
+                  <li className="text-emerald-300">proof: verified, payment allowed</li>
+                </ul>
+              </div>
+              <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.04] p-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-violet-200">
+                  <EyeOff size={14} /> Stays private
+                </div>
+                <ul className="mt-2 space-y-1 text-xs text-slate-400">
+                  <li>your budget, caps, and allowlist</li>
+                  <li>the rule that authorized this payment</li>
+                  <li className="flex items-start gap-1.5 text-slate-300">
+                    <Fingerprint size={13} className="mt-0.5 shrink-0 text-violet-400" />
+                    the chain stores only the commitment, never the rule
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-600">
+              The ledger shows the payment happened and was allowed. The rule behind it is committed
+              as a hash and never published. (Amounts and counterparties are public in v1; hiding
+              those is on the roadmap.)
+            </p>
           </div>
         )}
       </div>
@@ -1004,9 +1051,7 @@ export function GettingStarted() {
   const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
   const { data: apiKeys = [] } = useQuery({ queryKey: ['apiKeys'], queryFn: getApiKeys });
   const { data: tasks = [] } = useQuery({ queryKey: ['tasks'], queryFn: getTasks });
-  const [hidden, setHidden] = useState(
-    () => localStorage.getItem(ONBOARDING_HIDDEN_KEY) === '1',
-  );
+  const [hidden, setHidden] = useState(() => localStorage.getItem(ONBOARDING_HIDDEN_KEY) === '1');
 
   const steps = [
     {
