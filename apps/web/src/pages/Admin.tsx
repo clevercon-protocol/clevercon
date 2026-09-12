@@ -13,6 +13,7 @@ import {
   getDisputes,
   resolveDispute,
 } from '../lib/admin';
+import { Loading, ErrorState } from '../components/ui';
 
 function DisputesCard() {
   const qc = useQueryClient();
@@ -34,8 +35,16 @@ function DisputesCard() {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
       <h2 className="font-semibold text-slate-300">Disputes</h2>
-      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading disputes…</p>}
-      {error && <p className="mt-4 text-sm text-red-400">Could not load disputes.</p>}
+      {isLoading && (
+        <div className="mt-4">
+          <Loading rows={2} />
+        </div>
+      )}
+      {error && (
+        <div className="mt-4">
+          <ErrorState>Could not load disputes.</ErrorState>
+        </div>
+      )}
       {!isLoading && !error && disputes.length === 0 && (
         <p className="mt-4 text-sm text-slate-500">No disputes.</p>
       )}
@@ -108,8 +117,16 @@ function ServicesModerationCard() {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
       <h2 className="font-semibold text-slate-300">Services (moderation)</h2>
-      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading services…</p>}
-      {error && <p className="mt-4 text-sm text-red-400">Could not load services.</p>}
+      {isLoading && (
+        <div className="mt-4">
+          <Loading rows={3} />
+        </div>
+      )}
+      {error && (
+        <div className="mt-4">
+          <ErrorState>Could not load services.</ErrorState>
+        </div>
+      )}
       {!isLoading && !error && services.length === 0 && (
         <p className="mt-4 text-sm text-slate-500">No services yet.</p>
       )}
@@ -303,8 +320,16 @@ function UsersCard() {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
       <h2 className="font-semibold text-slate-300">Users &amp; roles</h2>
-      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading users…</p>}
-      {error && <p className="mt-4 text-sm text-red-400">Could not load users.</p>}
+      {isLoading && (
+        <div className="mt-4">
+          <Loading rows={3} />
+        </div>
+      )}
+      {error && (
+        <div className="mt-4">
+          <ErrorState>Could not load users.</ErrorState>
+        </div>
+      )}
       {!isLoading && !error && users.length === 0 && (
         <p className="mt-4 text-sm text-slate-500">No users yet.</p>
       )}

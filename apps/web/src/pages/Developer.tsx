@@ -19,7 +19,7 @@ import {
   type CreatedWebhook,
 } from '../lib/webhooks';
 import { refreshRoles } from '../lib/sessionSync';
-import { PageHeader, StatCard } from '../components/ui';
+import { PageHeader, StatCard, Loading, ErrorState } from '../components/ui';
 
 function WebhooksCard() {
   const qc = useQueryClient();
@@ -261,8 +261,16 @@ function ApiKeys() {
       {createMut.error && <p className="mt-2 text-sm text-red-400">Could not create the key.</p>}
       {created && <SecretReveal created={created} />}
 
-      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading keys…</p>}
-      {error && <p className="mt-4 text-sm text-red-400">Could not load your keys.</p>}
+      {isLoading && (
+        <div className="mt-4">
+          <Loading rows={2} />
+        </div>
+      )}
+      {error && (
+        <div className="mt-4">
+          <ErrorState>Could not load your keys.</ErrorState>
+        </div>
+      )}
       {!isLoading && !error && keys.length === 0 && (
         <p className="mt-4 text-sm text-slate-500">No keys yet. Create one to get API access.</p>
       )}
