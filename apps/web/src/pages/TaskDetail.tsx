@@ -1,7 +1,19 @@
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ListChecks, Receipt as ReceiptIcon, Flag } from 'lucide-react';
+import {
+  ArrowLeft,
+  ListChecks,
+  Receipt as ReceiptIcon,
+  Flag,
+  ShieldCheck,
+  ExternalLink,
+} from 'lucide-react';
 import { getTask, raiseDispute } from '../lib/tasks';
+import { config } from '../config';
+
+const EXPLORER_NET = config.network === 'mainnet' ? 'public' : 'testnet';
+const explorerTx = (hash: string) => `https://stellar.expert/explorer/${EXPLORER_NET}/tx/${hash}`;
+const shortHash = (h: string) => (h.length > 16 ? `${h.slice(0, 8)}…${h.slice(-6)}` : h);
 
 function DisputeButton({ taskId }: { taskId: string }) {
   const qc = useQueryClient();
@@ -157,21 +169,42 @@ export function TaskDetail() {
                 {task.receipts.map((r) => (
                   <div
                     key={r.id}
-                    className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+                    className="rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
                   >
-                    <div className="min-w-0">
-                      <div className="font-medium">
-                        ${r.amount.toFixed(2)} {r.asset} · {r.method}
+                    <div className="flex items-center justify-between">
+                      <div className="min-w-0">
+                        <div className="font-medium">
+                          ${r.amount.toFixed(2)} {r.asset} · {r.method}
+                        </div>
+                        <div className="truncate font-mono text-xs text-slate-500">
+                          to {r.toAddress}
+                          {r.txHash && (
+                            <>
+                              {' · '}
+                              <a
+                                href={explorerTx(r.txHash)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-violet-300 hover:text-violet-200"
+                              >
+                                {shortHash(r.txHash)} <ExternalLink size={11} />
+                              </a>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      <div className="truncate font-mono text-xs text-slate-500">
-                        to {r.toAddress}
-                        {r.txHash && ` · ${r.txHash}`}
+                      <div className="text-right">
+                        <div className={`text-xs ${tint(r.status)}`}>{r.status}</div>
+                        <div className="text-xs text-slate-500">{fmt(r.createdAt)}</div>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className={`text-xs ${tint(r.status)}`}>{r.status}</div>
-                      <div className="text-xs text-slate-500">{fmt(r.createdAt)}</div>
-                    </div>
+                    {r.method === 'VAULT_RELEASE' && (
+                      <div className="mt-2 flex items-start gap-1.5 text-[11px] text-violet-300">
+                        <ShieldCheck size={12} className="mt-0.5 shrink-0" />
+                        Proof-gated release: the ledger shows this payment and that it passed your
+                        policy check. The rule itself is committed as a hash and never published.
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
