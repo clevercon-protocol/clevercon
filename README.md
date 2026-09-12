@@ -178,7 +178,7 @@ Point any MCP client at `@clevercon/mcp` with `CLEVERCON_API_URL` and a scoped `
 | CleverVault | [`CD3RTRZQ...TOKEMLA`](https://stellar.expert/explorer/testnet/contract/CD3RTRZQE6ZU3FPU5GTMIS3II3C22OP22RTCAZ6AE3T3BI7XMTOKEMLA) |
 | PolicyVerifier | [`CBILHCY4...N4LZQ2D`](https://stellar.expert/explorer/testnet/contract/CBILHCY4FEYU7RMWBHJX42QJ5TILHZ33HNOD7A6FXTXKB7X57N4LZQ2D) |
 | Registry | [`CAN2A7GA...AQ4H6RM`](https://stellar.expert/explorer/testnet/contract/CAN2A7GA2PNL4BYEBN3DZM3G74CNMJ2WAB2WTEMO4L6MIY5F2AQ4H6RM) |
-| USDC (testnet SAC) | [`CDAO5BU3...R7ZBT4SDK`](https://stellar.expert/explorer/testnet/contract/CDAO5BU3EJ7M5OER4VNYMHOXUJ4A6B6JZXOHSIIMMCG3MLXR7ZBT4SDK) |
+| USDC (Circle testnet SAC) | [`CBIELTK6...HMXQDAMA`](https://stellar.expert/explorer/testnet/contract/CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA) |
 
 ## Roadmap
 
