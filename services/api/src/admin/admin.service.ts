@@ -73,6 +73,61 @@ export class AdminService {
     };
   }
 
+  /**
+   * Activation funnel: how many users have reached each step of the core path
+   * (connected, funded, set a policy, created a key, created a task, made a
+   * bounded payment). First-party and aggregate, computed from data we already
+   * hold (no external analytics, no PII). "Funded" is based on indexed on-chain
+   * vault balances, so it reflects what the indexer has observed.
+   */
+  async activation() {
+    const [total, policyUsers, keyUsers, taskUsers, fundedAccounts, paidPayments] =
+      await Promise.all([
+        this.prisma.user.count(),
+        this.prisma.policy.findMany({ distinct: ['userId'], select: { userId: true } }),
+        this.prisma.apiKey.findMany({ distinct: ['userId'], select: { userId: true } }),
+        this.prisma.task.findMany({ distinct: ['buyerId'], select: { buyerId: true } }),
+        this.prisma.vaultAccount.findMany({
+          where: { balance: { gt: 0 } },
+          select: { address: true },
+        }),
+        this.prisma.payment.findMany({
+          where: { status: PaymentStatus.CONFIRMED },
+          select: { taskId: true },
+        }),
+      ]);
+
+    // Funded users: wallets whose address has an indexed vault balance > 0.
+    const fundedAddrs = fundedAccounts.map((a) => a.address);
+    const fundedWallets = fundedAddrs.length
+      ? await this.prisma.wallet.findMany({
+          where: { address: { in: fundedAddrs } },
+          distinct: ['userId'],
+          select: { userId: true },
+        })
+      : [];
+
+    // Paid users: buyers of the tasks that have a confirmed payment.
+    const paidTaskIds = [...new Set(paidPayments.map((p) => p.taskId).filter(Boolean) as string[])];
+    const paidTasks = paidTaskIds.length
+      ? await this.prisma.task.findMany({
+          where: { id: { in: paidTaskIds } },
+          distinct: ['buyerId'],
+          select: { buyerId: true },
+        })
+      : [];
+
+    const steps = [
+      { key: 'connected', label: 'Connected a wallet', count: total },
+      { key: 'funded', label: 'Funded a vault', count: fundedWallets.length },
+      { key: 'policy', label: 'Set a spending policy', count: policyUsers.length },
+      { key: 'agent', label: 'Created an API key', count: keyUsers.length },
+      { key: 'hired', label: 'Created a task', count: taskUsers.length },
+      { key: 'paid', label: 'Made a bounded payment', count: paidTasks.length },
+    ];
+    return { total, steps };
+  }
+
   /** All services (any owner) for moderation, newest first. */
   async listServices(limit = 50, offset = 0) {
     const take = Math.min(limit, 100);

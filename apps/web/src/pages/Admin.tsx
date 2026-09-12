@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Users, Boxes, Coins, Landmark, Briefcase, Percent } from 'lucide-react';
+import { Users, Boxes, Coins, Landmark, Briefcase, Percent, Rocket } from 'lucide-react';
 import {
   getAdminStats,
+  getActivation,
   getAdminUsers,
   setUserRole,
   getFees,
@@ -239,6 +240,47 @@ function StatTiles() {
   );
 }
 
+function ActivationFunnelCard() {
+  const { data } = useQuery({ queryKey: ['admin-activation'], queryFn: getActivation });
+  const steps = data?.steps ?? [];
+  const top = steps[0]?.count ?? 0;
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+      <div className="flex items-center gap-2 text-slate-300">
+        <Rocket size={18} className="text-violet-300" />
+        <h2 className="font-semibold">Activation funnel</h2>
+      </div>
+      <p className="mt-2 text-sm text-slate-400">
+        How many users reached each step of the core path. First-party and aggregate, no external
+        analytics.
+      </p>
+      <div className="mt-4 space-y-2">
+        {steps.map((s) => {
+          const pct = top > 0 ? Math.round((s.count / top) * 100) : 0;
+          return (
+            <div key={s.key}>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-300">{s.label}</span>
+                <span className="text-slate-400">
+                  {s.count}
+                  <span className="ml-1 text-xs text-slate-600">({pct}%)</span>
+                </span>
+              </div>
+              <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-white/[0.06]">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+        {steps.length === 0 && <p className="text-sm text-slate-500">No activation data yet.</p>}
+      </div>
+    </div>
+  );
+}
+
 function UsersCard() {
   const qc = useQueryClient();
   const {
@@ -316,6 +358,7 @@ export function Admin() {
       </div>
 
       <StatTiles />
+      <ActivationFunnelCard />
       <FeesCard />
       <ServicesModerationCard />
       <UsersCard />

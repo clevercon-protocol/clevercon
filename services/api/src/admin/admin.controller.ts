@@ -47,6 +47,11 @@ export class AdminController {
     return this.admin.stats();
   }
 
+  @Get('activation')
+  activation() {
+    return this.admin.activation();
+  }
+
   @Get('users')
   users(@Query() query: unknown) {
     const { limit, offset } = parseBody(listQuery, query);

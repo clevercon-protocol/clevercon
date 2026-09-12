@@ -39,6 +39,42 @@ export async function getAdminStats(): Promise<AdminStats> {
   return apiFetch<AdminStats>('/admin/stats');
 }
 
+export interface ActivationStep {
+  key: string;
+  label: string;
+  count: number;
+}
+export interface Activation {
+  total: number;
+  steps: ActivationStep[];
+}
+
+/** The activation funnel: how many users reached each step of the core path. */
+export async function getActivation(): Promise<Activation> {
+  if (isDemo()) {
+    return {
+      total: demoPlatform.users,
+      steps: [
+        { key: 'connected', label: 'Connected a wallet', count: demoPlatform.users },
+        { key: 'funded', label: 'Funded a vault', count: Math.round(demoPlatform.users * 0.6) },
+        {
+          key: 'policy',
+          label: 'Set a spending policy',
+          count: Math.round(demoPlatform.users * 0.5),
+        },
+        { key: 'agent', label: 'Created an API key', count: Math.round(demoPlatform.users * 0.35) },
+        { key: 'hired', label: 'Created a task', count: Math.round(demoPlatform.users * 0.3) },
+        {
+          key: 'paid',
+          label: 'Made a bounded payment',
+          count: Math.round(demoPlatform.users * 0.2),
+        },
+      ],
+    };
+  }
+  return apiFetch<Activation>('/admin/activation');
+}
+
 export async function getAdminUsers(): Promise<AdminUser[]> {
   if (isDemo()) return [];
   const res = await apiFetch<{ items: AdminUser[] }>('/admin/users');
