@@ -11,12 +11,15 @@ import {
   ShieldCheck,
   Copy,
   Check,
+  CheckCircle2,
   ExternalLink,
   Plus,
   Vault as VaultIcon,
   Coins,
   Briefcase,
   ArrowRight,
+  Rocket,
+  KeyRound,
 } from 'lucide-react';
 import { isDemo } from '../../config';
 import { useSession } from '../../store/session';
@@ -39,6 +42,7 @@ import {
   type Policy,
 } from '../../lib/policies';
 import { getWalletBalances, addUsdcTrustline, explorerAccount } from '../../lib/stellar';
+import { getApiKeys } from '../../lib/apiKeys';
 import { Card, CardHeader, StatCard, EmptyState, Badge } from '../../components/ui';
 
 type Mode = 'direct' | 'search' | 'compose';
@@ -979,6 +983,168 @@ export function DelegateCard() {
             Agent authorized. Jobs can now settle automatically.
           </p>
         )}
+      </div>
+    </Card>
+  );
+}
+
+// ── Activation funnel (getting started) ─────────────────────────────────────────
+
+const ONBOARDING_HIDDEN_KEY = 'cc:onboarding:hidden';
+
+/**
+ * Guided first-run checklist: connect, fund, set a policy, connect an agent, make
+ * a bounded payment. Detects progress from live data and points at the next
+ * action, so a new buyer reaches their first policy-bounded payment without help.
+ * Collapses to a slim confirmation once complete (dismissible).
+ */
+export function GettingStarted() {
+  const session = useSession((s) => s.session);
+  const { data: vault } = useQuery({ queryKey: ['vault'], queryFn: getVault });
+  const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
+  const { data: apiKeys = [] } = useQuery({ queryKey: ['apiKeys'], queryFn: getApiKeys });
+  const { data: tasks = [] } = useQuery({ queryKey: ['tasks'], queryFn: getTasks });
+  const [hidden, setHidden] = useState(
+    () => localStorage.getItem(ONBOARDING_HIDDEN_KEY) === '1',
+  );
+
+  const steps = [
+    {
+      icon: Wallet,
+      title: 'Connect your wallet',
+      desc: 'Sign in with a Stellar wallet to open your account.',
+      done: !!session,
+      href: '/connect',
+      cta: 'Connect',
+    },
+    {
+      icon: VaultIcon,
+      title: 'Fund your vault',
+      desc: 'Deposit USDC into the non-custodial vault. The platform never holds it.',
+      done: (vault?.balance ?? 0) > 0,
+      href: '/app/vault',
+      cta: 'Fund vault',
+    },
+    {
+      icon: ShieldCheck,
+      title: 'Set a spending policy',
+      desc: 'A budget and limits the vault enforces on-chain, kept private.',
+      done: policies.length > 0,
+      href: '/app/policies',
+      cta: 'Create policy',
+    },
+    {
+      icon: KeyRound,
+      title: 'Connect your agent',
+      desc: 'Create an API key (also used in the MCP config) so your agent can spend.',
+      done: apiKeys.length > 0,
+      href: '/developers',
+      cta: 'Create API key',
+    },
+    {
+      icon: Briefcase,
+      title: 'Make a bounded payment',
+      desc: 'Hire a service; the vault releases payment per step, within your policy.',
+      done: tasks.some((t) => t.spent > 0 || t.status === 'COMPLETED'),
+      href: '/app/marketplace',
+      cta: 'Hire a service',
+    },
+  ];
+
+  const doneCount = steps.filter((s) => s.done).length;
+  const allDone = doneCount === steps.length;
+  const currentIndex = steps.findIndex((s) => !s.done);
+
+  if (hidden) return null;
+
+  if (allDone) {
+    return (
+      <Card className="p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-sm text-emerald-300">
+            <CheckCircle2 size={18} /> Setup complete. Your agent can spend within your policy.
+          </div>
+          <button
+            onClick={() => {
+              localStorage.setItem(ONBOARDING_HIDDEN_KEY, '1');
+              setHidden(true);
+            }}
+            className="text-xs text-slate-500 hover:text-slate-300"
+          >
+            Hide
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-0">
+      <CardHeader
+        icon={Rocket}
+        title="Get started"
+        hint="A few steps to your first bounded, private payment"
+        action={
+          <span className="text-xs text-slate-500">
+            {doneCount}/{steps.length} done
+          </span>
+        }
+      />
+      <div className="p-5 pt-4">
+        <div className="mb-4 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all"
+            style={{ width: `${(doneCount / steps.length) * 100}%` }}
+          />
+        </div>
+        <ol className="space-y-2">
+          {steps.map((s, i) => {
+            const isCurrent = i === currentIndex;
+            return (
+              <li
+                key={s.title}
+                className={`flex items-center gap-3 rounded-xl border p-3 transition-colors ${
+                  isCurrent
+                    ? 'border-violet-500/40 bg-violet-500/[0.06]'
+                    : 'border-white/[0.08] bg-white/[0.02]'
+                }`}
+              >
+                <div
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                    s.done
+                      ? 'bg-emerald-500/15 text-emerald-300'
+                      : isCurrent
+                        ? 'bg-violet-500/15 text-violet-300'
+                        : 'bg-white/5 text-slate-500'
+                  }`}
+                >
+                  {s.done ? <Check size={15} /> : <s.icon size={15} />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div
+                    className={`text-sm font-medium ${s.done ? 'text-slate-400 line-through' : 'text-white'}`}
+                  >
+                    {s.title}
+                  </div>
+                  {!s.done && <div className="text-xs text-slate-500">{s.desc}</div>}
+                </div>
+                {!s.done &&
+                  (isCurrent ? (
+                    <Link to={s.href} className={`${primaryBtn} shrink-0 whitespace-nowrap`}>
+                      {s.cta}
+                    </Link>
+                  ) : (
+                    <Link
+                      to={s.href}
+                      className="shrink-0 whitespace-nowrap text-xs text-slate-500 hover:text-slate-300"
+                    >
+                      {s.cta}
+                    </Link>
+                  ))}
+              </li>
+            );
+          })}
+        </ol>
       </div>
     </Card>
   );
