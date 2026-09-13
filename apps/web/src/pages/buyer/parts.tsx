@@ -1022,13 +1022,14 @@ export function DelegateCard() {
     <Card className="p-0">
       <CardHeader
         icon={ShieldCheck}
-        title="Spending agent"
-        hint="Authorize a bounded delegate to pay for jobs within your policy"
+        title="Autopay"
+        hint="Let CleverCon settle your hires automatically, within your limits"
       />
       <div className="p-5 pt-4">
         <p className="text-sm text-slate-400">
-          Authorize the agent once so it can lock and release funds for your jobs automatically. The
-          vault enforces your policy, so even the agent cannot overspend.
+          Enable autopay once so your jobs settle automatically without a wallet prompt each time.
+          The vault enforces your spending limits on every payment, so autopay can never overspend
+          or pay an unapproved party. (This is CleverCon's bounded delegate; it holds no funds.)
         </p>
         <div className="mt-3 flex items-center justify-between gap-3">
           <span className="font-mono text-xs text-slate-500">
@@ -1036,7 +1037,7 @@ export function DelegateCard() {
           </span>
           {delegate.registered ? (
             <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-300">
-              <Check size={14} /> Authorized
+              <Check size={14} /> Enabled
             </span>
           ) : (
             <button
@@ -1044,7 +1045,7 @@ export function DelegateCard() {
               disabled={authorize.isPending}
               className={primaryBtn}
             >
-              {authorize.isPending ? 'Authorizing…' : 'Authorize agent'}
+              {authorize.isPending ? 'Enabling…' : 'Enable autopay'}
             </button>
           )}
         </div>
@@ -1053,7 +1054,7 @@ export function DelegateCard() {
         )}
         {authorize.isSuccess && !delegate.registered && (
           <p className="mt-2 text-sm text-emerald-300">
-            Agent authorized. Jobs can now settle automatically.
+            Autopay enabled. Jobs now settle automatically.
           </p>
         )}
       </div>
@@ -1249,8 +1250,8 @@ export function AgentWalletCard() {
     <Card className="p-0">
       <CardHeader
         icon={KeyRound}
-        title="Agent wallet"
-        hint="Your agent's own key for paying external x402/MPP services"
+        title="Your agent's wallet"
+        hint="For paying services outside CleverCon (x402); we store only the public key"
       />
       <div className="p-5 pt-4">
         <p className="text-sm text-slate-400">
