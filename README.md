@@ -16,15 +16,31 @@
 
 ## What it is
 
-CleverCon is a spending-control layer for AI agents on Stellar. You fund a non-custodial vault, set private spending rules, and your agent spends within them. The contract holds the money and refuses any payment that breaks a rule, so the platform never has custody and the agent can never exceed the budget or pay an unapproved party.
+CleverCon lets you safely put an AI agent in charge of your money. You fund a non-custodial vault, set the limits it must obey (a budget, per-payment caps, an allowlist of who it may pay, time windows), optionally keep those limits private, then instruct your agent in plain terms to spend and disburse funds however serves your goal. The vault guarantees on-chain that the agent can never spend outside your rules or reveal them, and the platform never holds your funds.
+
+It is delegation with hard limits: the agent owns the decisions (who to pay, when, how much, by whatever logic you give it); the contract owns the guarantee (bounds, privacy, non-custody). **Hiring services is one application of this, not the whole thing.**
 
 Three things define it:
 
-1. **Non-custodial, enforced on-chain.** A vault holds the funds and releases each payment only if it passes an on-chain policy check. Even a compromised or careless agent cannot exceed the budget or pay an unapproved party.
-2. **The policy stays private.** The rules (your caps, allowlist, and limits) are committed and checked on-chain without being published, so the ledger shows that a payment was allowed without revealing the rule that allowed it. This is what separates CleverCon from transparent, custodial, or SDK-only alternatives.
-3. **Useful from day one, no marketplace required.** Value is one-sided: a single developer with a single agent gets the full benefit immediately, even paying one endpoint. There is no two-sided liquidity to bootstrap.
+1. **Delegated decisions, hard limits.** The agent acts autonomously, but the vault releases a payment only if it passes an on-chain policy check, so even a compromised or careless agent cannot exceed the budget or pay an unapproved party.
+2. **The rules stay private.** Your caps, allowlist, and limits are committed and checked on-chain without being published: the ledger shows a payment was allowed without revealing the rule that allowed it. This is what transparent enforcers and escrows cannot do.
+3. **Useful from day one, no marketplace required.** Value is one-sided: a single developer with a single agent gets the full benefit immediately, even paying one address. There is no two-sided liquidity to bootstrap.
 
 It is live on Stellar testnet today: deployed contracts, a usable app, an SDK, and an MCP server that gives any AI agent a bounded, non-custodial spending account in minutes.
+
+## What you can use it for
+
+The same primitive, bounded and private agent-driven payments, covers many jobs, not just hiring:
+
+- **Autonomous disbursements and payouts** to a set of recipients, capped per payment and in total.
+- **Recurring vendor, subscription, and API payments** within a budget.
+- **Agent-to-agent payments**: one agent pays others for sub-tasks.
+- **Treasury and ops automation**: an agent moves funds within a policy you can keep private.
+- **Grant and bounty disbursement** to approved recipients, up to set limits.
+- **Bounded allowances**: give an agent (or a sub-account) a private, capped wallet.
+- **Buying data, compute, and services**: hire from the built-in directory or pay any provider.
+
+In every case you set the limits once, the agent decides within them, and the vault enforces the boundary and keeps your rules private.
 
 ## Why it matters
 
@@ -65,21 +81,28 @@ Landing the full zero-knowledge policy circuit, so soundness is formal and the b
 
 ## How it works
 
-1. **Fund.** Connect a wallet and deposit USDC into CleverVault, a non-custodial Soroban contract.
-2. **Set a policy.** Commit a spending rule (a total budget, and optionally a per-payment cap and an allowlist of payees). In private mode only the commitment is stored; the rule itself is never persisted.
-3. **Delegate spends.** A delegate (CleverCon's orchestrator, your own agent via the SDK, or an MCP client) pays services in USDC per step. The delegate holds no custody of the funds.
-4. **Vault enforces + proves.** Each release calls the on-chain policy verifier with a proof bound to the specific payee and amount, with replay protection. Only an explicit pass moves funds; anything breaking the rule is refused.
-5. **Settle exactly once.** Settlement is idempotent by (task, step) on-chain, so a retry or a race never double-pays. Unused budget is refunded and you can withdraw anytime.
+1. **Fund.** Connect a wallet and deposit USDC into CleverVault, a non-custodial Soroban contract. The platform never holds it.
+2. **Set limits.** Create a reusable spending policy: a budget, and optionally a per-payment cap, an allowlist of payees, and a time window. You apply a policy per job and can keep several. In private mode only a commitment to the rule is stored; the rule itself is never persisted.
+3. **Instruct your agent.** Point any agent at the vault (over MCP, the SDK, or the dApp) and tell it what to do. It decides who to pay, when, and how much within your limits; it never holds custody of your funds.
+4. **The vault enforces and proves.** Each payment calls the on-chain policy verifier with a proof bound to the exact payee and amount, with replay protection. Only an explicit pass moves funds; anything breaking a rule is refused.
+5. **Settle exactly once.** Releases are idempotent by (task, step) on-chain, so a retry or a race never double-pays. Unused budget is refunded, and you can withdraw anytime.
 
-The thing doing the spending is always just a **delegate**. The rail is what makes delegation safe: even a compromised delegate cannot spend outside the rule you set. The full fund-flow sequence and trust model are in [docs/architecture.md](docs/architecture.md).
+Two kinds of conditions: **spending bounds** (caps, allowlist, budget, time windows) are enforced on-chain by the policy; **event or business conditions** ("pay when X", on a schedule, "if approved") live in your agent, which triggers a payment the vault then checks. So the agent can be wrong about timing or choice within the allowed set, but never about the money boundary. The full fund-flow and trust model are in [docs/architecture.md](docs/architecture.md).
 
-### Three ways to spend
+### Two ways funds move
 
-- **Pay a provider you already chose.** Point CleverCon at a specific service and make a single bounded, private payment. No planning.
+- **Direct (registered services and any Stellar address you allowlist):** the vault pays the payee directly under your policy. Strongest guarantee: payee and amount are enforced on-chain, and the platform never holds funds.
+- **Agent-key (the open x402/MPP economy):** the vault tops up your agent's own key in bounded amounts under your policy, and your agent signs the external payment. This reaches services outside CleverCon while the budget and privacy stay enforced; the platform still never holds funds. (Foundation shipped; the top-up and external-payment leg is the next build.)
+
+### Hiring services (one application)
+
+When the payees are service providers, hiring takes three shapes:
+
+- **Pay a provider you chose.** Point CleverCon at a specific service and make a single bounded, private payment.
 - **Find and pay one service.** Describe what you need; the curated directory returns matching services by capability, price, and reputation. Pick one and pay.
-- **Compose a multi-service job.** For work that spans services (gather data, analyze it, write a report), a delegate plans the steps, hires a service for each, and pays as each completes. Planning is optional and overridable; the rail underneath is identical.
+- **Compose a multi-service job.** For work that spans services (gather data, analyze it, write a report), your agent plans the steps, hires a service for each, and pays as each completes.
 
-The directory is a convenience for discovery, not the product. The product is the spending-control layer, which works whether you pay one endpoint or many.
+The directory is discovery, not the product. The product is the spending-control layer, which works whether your agent pays one address or many, services or otherwise.
 
 ## What runs today (Stellar testnet)
 
@@ -138,7 +161,7 @@ Public demo: [`packages/dashboard`](packages/dashboard) is a lightweight wallet-
 | Frontend | React 19, Vite, Tailwind, TanStack Query, Zustand |
 | API | NestJS 11 (ESM + swc), PostgreSQL + Prisma, SEP-10 auth, RBAC |
 | Async | Redis + BullMQ (execution, proofs, settlement), Socket.IO + Redis adapter |
-| Payments | Vault-settled USDC release per step, proof-gated; x402 / MPP interop for external services on the roadmap |
+| Payments | Direct vault-settled USDC releases (proof-gated) to allowlisted addresses; agent-key mode for the external x402 / MPP economy (foundation shipped, payment leg on the roadmap) |
 | Wallets | `@creit.tech/stellar-wallets-kit` (Freighter, xBull, Albedo, LOBSTR, Rabet) |
 | Chain access | `@stellar/stellar-sdk`, Soroban RPC, Horizon |
 
