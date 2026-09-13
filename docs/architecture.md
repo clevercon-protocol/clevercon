@@ -1,13 +1,20 @@
 # Architecture
 
-How CleverCon's pieces fit together today, and where the architecture is headed
+How CleverCon's pieces fit together, and where the architecture is headed
 per [ROADMAP.md](../ROADMAP.md).
 
-CleverCon is the payment rail AI agents spend through on Stellar. You hand an
-agent a budget, a non-custodial Soroban vault holds the money and enforces the
-limit, and the agent pays for services in USDC per step. The privacy layer, a
-policy the contract enforces without revealing it, is the main work ahead. This
-document describes what runs today and marks planned work as such.
+CleverCon is the non-custodial spending-control layer that lets an AI agent spend
+money on Stellar within private, on-chain-enforced limits. Stellar is the rail;
+CleverCon governs how an agent may spend on it. You fund a vault, set a private
+policy, and your agent pays within it (to registered services, or to any address
+you allowlist).
+
+> **Note:** the system diagram and component tables below still describe the
+> earlier hackathon stack (a single Express orchestrator + dashboard + JSON
+> registry). The production stack is the NestJS API, event indexer, and BullMQ
+> workers behind `apps/web`, with deployed CleverVault + PolicyVerifier +
+> Registry contracts, see the [README](../README.md) "What runs today" and
+> "Architecture" for the current shape. This document is being updated to match.
 
 ## System overview
 
