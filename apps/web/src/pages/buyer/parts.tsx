@@ -490,7 +490,7 @@ export function HirePanel() {
               className={inputCls}
               aria-label="Spending policy"
             >
-              <option value="">No policy (off-chain only)</option>
+              <option value="">No limit (this hire is not bounded or private)</option>
               {policies.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.isPrivate ? 'Private' : 'Transparent'} policy {p.commitment.slice(0, 8)}…
@@ -604,8 +604,8 @@ export function PoliciesCard() {
     <Card className="p-0">
       <CardHeader
         icon={ShieldCheck}
-        title="Spending policies"
-        hint="Bound how funds can be spent"
+        title="Spending limits (policies)"
+        hint="Reusable rules you apply per hire, enforced on-chain, kept private"
       />
       <div className="p-5 pt-4">
         <form
@@ -1098,11 +1098,11 @@ export function GettingStarted() {
     },
     {
       icon: ShieldCheck,
-      title: 'Set a spending policy',
-      desc: 'A budget and limits the vault enforces on-chain, kept private.',
+      title: 'Set spending limits (optional but recommended)',
+      desc: 'A reusable rule (caps + allowlist) the vault enforces, kept private. You pick one per hire; you do not need a job yet.',
       done: policies.length > 0,
       href: '/app/policies',
-      cta: 'Create policy',
+      cta: 'Create a limit',
     },
     {
       icon: KeyRound,
