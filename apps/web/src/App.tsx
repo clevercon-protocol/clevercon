@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ComponentType } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './lib/queryClient';
 import { Shell } from './components/Shell';
@@ -18,10 +18,9 @@ const lazyFrom = <T extends Record<string, ComponentType>>(
 const BuyerLayout = lazyFrom(() => import('./pages/buyer/BuyerLayout'), 'BuyerLayout');
 const Overview = lazyFrom(() => import('./pages/buyer/Overview'), 'Overview');
 const VaultPage = lazyFrom(() => import('./pages/buyer/VaultPage'), 'VaultPage');
-const MarketplacePage = lazyFrom(() => import('./pages/buyer/MarketplacePage'), 'MarketplacePage');
+const HirePage = lazyFrom(() => import('./pages/buyer/HirePage'), 'HirePage');
 const JobsPage = lazyFrom(() => import('./pages/buyer/JobsPage'), 'JobsPage');
 const ActivityPage = lazyFrom(() => import('./pages/buyer/ActivityPage'), 'ActivityPage');
-const PoliciesPage = lazyFrom(() => import('./pages/buyer/PoliciesPage'), 'PoliciesPage');
 const TaskDetail = lazyFrom(() => import('./pages/TaskDetail'), 'TaskDetail');
 const ServiceDetail = lazyFrom(() => import('./pages/ServiceDetail'), 'ServiceDetail');
 const Provider = lazyFrom(() => import('./pages/Provider'), 'Provider');
@@ -52,13 +51,15 @@ export function App() {
                 }
               >
                 <Route index element={<Overview />} />
+                <Route path="hire" element={<HirePage />} />
                 <Route path="vault" element={<VaultPage />} />
-                <Route path="marketplace" element={<MarketplacePage />} />
-                <Route path="marketplace/:id" element={<ServiceDetail />} />
                 <Route path="jobs" element={<JobsPage />} />
                 <Route path="activity" element={<ActivityPage />} />
                 <Route path="tasks/:id" element={<TaskDetail />} />
-                <Route path="policies" element={<PoliciesPage />} />
+                <Route path="marketplace/:id" element={<ServiceDetail />} />
+                {/* Consolidated: browse+hire moved to /app/hire; limits moved to /app/vault. */}
+                <Route path="marketplace" element={<Navigate to="/app/hire" replace />} />
+                <Route path="policies" element={<Navigate to="/app/vault" replace />} />
               </Route>
 
               <Route

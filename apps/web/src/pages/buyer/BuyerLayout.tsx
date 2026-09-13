@@ -1,14 +1,14 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, Vault, Search, ListChecks, ShieldCheck, Activity } from 'lucide-react';
+import { LayoutDashboard, Vault, Search, ListChecks } from 'lucide-react';
 import { useRealtime } from '../../lib/useRealtime';
 
+// The core loop: see where you are, find and pay a service, track jobs, manage
+// money and setup. Fewer tabs, each mapping to one step of the loop.
 const TABS = [
   { to: '/app', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/app/vault', label: 'Vault', icon: Vault },
-  { to: '/app/marketplace', label: 'Marketplace', icon: Search },
+  { to: '/app/hire', label: 'Hire', icon: Search },
   { to: '/app/jobs', label: 'Jobs', icon: ListChecks },
-  { to: '/app/activity', label: 'Activity', icon: Activity },
-  { to: '/app/policies', label: 'Policies', icon: ShieldCheck },
+  { to: '/app/vault', label: 'Vault & setup', icon: Vault },
 ];
 
 export function BuyerLayout() {
