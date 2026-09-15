@@ -1,13 +1,13 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, Vault, Search, ListChecks } from 'lucide-react';
+import { MessagesSquare, Vault, Search, Activity } from 'lucide-react';
 import { useRealtime } from '../../lib/useRealtime';
 
-// The core loop: see where you are, find and pay a service, track jobs, manage
-// money and setup. Fewer tabs, each mapping to one step of the loop.
+// Chat-first: instruct your agent (Home), browse services it can pull from,
+// see everything it did (Activity), and manage money + limits (Vault & setup).
 const TABS = [
-  { to: '/app', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/app/hire', label: 'Hire', icon: Search },
-  { to: '/app/jobs', label: 'Jobs', icon: ListChecks },
+  { to: '/app', label: 'Home', icon: MessagesSquare, end: true },
+  { to: '/app/services', label: 'Services', icon: Search },
+  { to: '/app/activity', label: 'Activity', icon: Activity },
   { to: '/app/vault', label: 'Vault & setup', icon: Vault },
 ];
 
@@ -16,9 +16,9 @@ export function BuyerLayout() {
   return (
     <section className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-white">Buyer</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-white">Your agent</h1>
         <p className="mt-1 text-sm text-slate-400">
-          Fund a vault, hire services, and keep your spending rules private.
+          Put an AI agent in charge of your money, within private limits it cannot break.
         </p>
       </div>
 

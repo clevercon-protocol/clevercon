@@ -16,10 +16,9 @@ const lazyFrom = <T extends Record<string, ComponentType>>(
 ) => lazy(() => loader().then((m) => ({ default: m[key] })));
 
 const BuyerLayout = lazyFrom(() => import('./pages/buyer/BuyerLayout'), 'BuyerLayout');
-const Overview = lazyFrom(() => import('./pages/buyer/Overview'), 'Overview');
+const Home = lazyFrom(() => import('./pages/buyer/home'), 'Home');
 const VaultPage = lazyFrom(() => import('./pages/buyer/VaultPage'), 'VaultPage');
-const HirePage = lazyFrom(() => import('./pages/buyer/HirePage'), 'HirePage');
-const JobsPage = lazyFrom(() => import('./pages/buyer/JobsPage'), 'JobsPage');
+const ServicesPage = lazyFrom(() => import('./pages/buyer/ServicesPage'), 'ServicesPage');
 const ActivityPage = lazyFrom(() => import('./pages/buyer/ActivityPage'), 'ActivityPage');
 const TaskDetail = lazyFrom(() => import('./pages/TaskDetail'), 'TaskDetail');
 const ServiceDetail = lazyFrom(() => import('./pages/ServiceDetail'), 'ServiceDetail');
@@ -50,15 +49,16 @@ export function App() {
                   </RequireAuth>
                 }
               >
-                <Route index element={<Overview />} />
-                <Route path="hire" element={<HirePage />} />
+                <Route index element={<Home />} />
+                <Route path="services" element={<ServicesPage />} />
                 <Route path="vault" element={<VaultPage />} />
-                <Route path="jobs" element={<JobsPage />} />
                 <Route path="activity" element={<ActivityPage />} />
                 <Route path="tasks/:id" element={<TaskDetail />} />
                 <Route path="marketplace/:id" element={<ServiceDetail />} />
-                {/* Consolidated: browse+hire moved to /app/hire; limits moved to /app/vault. */}
-                <Route path="marketplace" element={<Navigate to="/app/hire" replace />} />
+                {/* Chat-first rework: hire lives in Home; browse in /app/services; limits in /app/vault. */}
+                <Route path="hire" element={<Navigate to="/app" replace />} />
+                <Route path="jobs" element={<Navigate to="/app/activity" replace />} />
+                <Route path="marketplace" element={<Navigate to="/app/services" replace />} />
                 <Route path="policies" element={<Navigate to="/app/vault" replace />} />
               </Route>
 
