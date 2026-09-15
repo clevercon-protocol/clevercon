@@ -61,6 +61,27 @@ export function describeRules(r: PolicyRules): string {
   return parts.length ? parts.join(' · ') : 'no caps';
 }
 
+// The owner's private rules are never kept by the server (only a commitment is),
+// so we cache the plaintext locally on the device that created the limit. This is
+// the key both the builder and the picker read/write.
+export const LIMIT_CACHE_PREFIX = 'cc:limit:';
+
+/**
+ * A readable summary of a saved limit for lists and pickers. Transparent limits
+ * describe their server-held rule; private limits fall back to this device's
+ * local copy, and only to "rule kept private" if there is none. Never a raw hash.
+ */
+export function describeSavedLimit(p: { rules?: PolicyRules | null; commitment: string }): string {
+  if (p.rules) return describeRules(p.rules);
+  try {
+    const cached = localStorage.getItem(LIMIT_CACHE_PREFIX + p.commitment);
+    if (cached) return describeRules(draftToRules(JSON.parse(cached) as Draft).rules);
+  } catch {
+    // ignore
+  }
+  return 'rule kept private';
+}
+
 // The owner's default limit is a local preference: the id of one saved limit that
 // pre-fills each new instruction. It is never a lock (every instruction can override
 // it), which matches the on-chain model where policy is bound per task.

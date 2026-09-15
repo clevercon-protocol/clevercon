@@ -10,10 +10,11 @@ export default {
         'line-strong': 'var(--cc-line-strong)',
       },
       boxShadow: {
-        // Soft, layered elevation for cards: a faint top highlight plus a wide,
-        // low shadow. Calmer than a hard drop shadow.
-        card: '0 1px 0 0 rgba(255,255,255,0.04) inset, 0 12px 34px -18px rgba(0,0,0,0.7)',
-        pop: '0 1px 0 0 rgba(255,255,255,0.05) inset, 0 20px 50px -20px rgba(0,0,0,0.8)',
+        // Soft, layered elevation for cards: a very faint top highlight plus a
+        // wide, low shadow that does the separation the border used to. Calmer
+        // than a hard drop shadow, and no grey outline.
+        card: '0 1px 0 0 rgba(255,255,255,0.025) inset, 0 14px 40px -22px rgba(0,0,0,0.8)',
+        pop: '0 1px 0 0 rgba(255,255,255,0.035) inset, 0 24px 60px -24px rgba(0,0,0,0.85)',
       },
     },
   },

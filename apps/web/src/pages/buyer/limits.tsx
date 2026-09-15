@@ -11,7 +11,7 @@ import {
   CalendarClock,
   Star,
 } from 'lucide-react';
-import { getPolicies, createPolicy, type Policy } from '../../lib/policies';
+import { getPolicies, createPolicy } from '../../lib/policies';
 import { Card, CardHeader, EmptyState, ErrorState, Loading, controls } from '../../components/ui';
 import {
   WINDOWS,
@@ -19,9 +19,10 @@ import {
   isStellarAddr,
   draftToRules,
   describeDraft,
-  describeRules,
+  describeSavedLimit,
   getDefaultLimitId,
   setDefaultLimitId,
+  LIMIT_CACHE_PREFIX,
   type Draft,
 } from './limits-model';
 
@@ -154,19 +155,7 @@ export function LimitsBuilder({ value, onChange }: { value: Draft; onChange: (d:
   );
 }
 
-const localKey = (commitment: string) => `cc:limit:${commitment}`;
-
-function describePolicy(p: Policy): string {
-  if (p.rules) return describeRules(p.rules);
-  // Private: the server did not keep the rule. Show the owner's local copy if we saved one.
-  try {
-    const cached = localStorage.getItem(localKey(p.commitment));
-    if (cached) return `${describeDraft(JSON.parse(cached) as Draft)} (from your device)`;
-  } catch {
-    // ignore
-  }
-  return 'private (rule kept off the server)';
-}
+const localKey = (commitment: string) => `${LIMIT_CACHE_PREFIX}${commitment}`;
 
 /** Manage reusable spending limits (policies): create with the full builder, list what you have. */
 export function LimitsManager() {
@@ -260,7 +249,9 @@ export function LimitsManager() {
                         </span>
                       )}
                     </div>
-                    <div className="mt-0.5 truncate text-xs text-slate-500">{describePolicy(p)}</div>
+                    <div className="mt-0.5 truncate text-xs text-slate-500">
+                      {describeSavedLimit(p)}
+                    </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-3">
                     <button

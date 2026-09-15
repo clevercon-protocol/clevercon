@@ -23,11 +23,20 @@ import { isDemo } from '../../config';
 import { useSession } from '../../store/session';
 import { getVault } from '../../lib/vault';
 import { getServices } from '../../lib/services';
-import { getPolicies, type Policy } from '../../lib/policies';
+import { getPolicies, createPolicy, type Policy } from '../../lib/policies';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import { explorerAccount } from '../../lib/stellar';
 import { Card, CardHeader, EmptyState, controls } from '../../components/ui';
-import { describeRules, getDefaultLimitId } from './limits-model';
+import { LimitsBuilder } from './limits';
+import {
+  describeRules,
+  describeSavedLimit,
+  draftToRules,
+  emptyDraft,
+  getDefaultLimitId,
+  LIMIT_CACHE_PREFIX,
+  type Draft,
+} from './limits-model';
 
 const inputCls = controls.field;
 const primaryBtn = controls.primary;
@@ -110,6 +119,9 @@ export function VaultHero() {
 
 // The limit the vault will enforce for one instruction, resolved to a short label.
 type Applied = { label: string; isPrivate: boolean };
+// How that limit binds to the task: an existing saved limit (policyId), an ad-hoc
+// custom rule (draft, saved-and-bound on approval), or nothing (budget only).
+type Bind = { policyId?: string; draft?: Draft };
 type Line = { payee: string; amount: string; reason: string };
 type PlanLine = { payee: string; amount: number; reason?: string };
 type Plan = {
@@ -117,6 +129,7 @@ type Plan = {
   summary: string;
   lines: PlanLine[];
   limit: Applied;
+  bind: Bind;
   serviceName?: string;
   serviceId?: string;
 };
@@ -126,11 +139,10 @@ type Msg =
   | { id: number; role: 'agent'; text: string; ok?: boolean };
 
 const short = (a: string) => (a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
-const labelPolicy = (p: Policy) =>
-  p.rules ? describeRules(p.rules) : `private ${p.commitment.slice(0, 8)}…`;
+const hasRule = (d: Draft) => !!d.perPaymentCeiling || !!d.rollingCap || d.allowlist.length > 0;
 
-// 'default' = use the owner's default (or budget-only if none); 'custom' = ad-hoc
-// fields below; 'none' = budget-only; otherwise a saved policy id.
+// 'default' = the owner's default (or budget-only if none); 'custom' = the builder
+// below; 'none' = budget-only; otherwise a saved limit's id.
 type LimitChoice = 'default' | 'custom' | 'none' | string;
 
 export function CommandChat() {
@@ -155,9 +167,7 @@ export function CommandChat() {
 
   // Limit for the next instruction. Sticky across instructions (not reset after send).
   const [limitChoice, setLimitChoice] = useState<LimitChoice>('default');
-  const [customCap, setCustomCap] = useState('');
-  const [customPrivate, setCustomPrivate] = useState(true);
-  const [customMode, setCustomMode] = useState<'caps' | 'allowlist'>('caps');
+  const [customDraft, setCustomDraft] = useState<Draft>(emptyDraft());
 
   const { data: servicePage } = useQuery({
     queryKey: ['services', { picker: true }],
@@ -167,27 +177,35 @@ export function CommandChat() {
   const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
   const defaultPolicy = policies.find((p) => p.id === getDefaultLimitId());
 
-  // Resolve the current selection to the limit the vault will enforce.
+  // Resolve the current selection to (a) what the vault enforces, and (b) how it binds.
+  const resolvedPolicyId =
+    limitChoice === 'default'
+      ? defaultPolicy?.id
+      : limitChoice === 'custom' || limitChoice === 'none'
+        ? undefined
+        : limitChoice;
+
   const applied: Applied = (() => {
-    if (limitChoice === 'custom') {
-      const bits: string[] = [];
-      if (customCap) bits.push(`max $${customCap}/payment`);
-      bits.push(customMode === 'allowlist' ? 'only listed addresses' : 'any address within caps');
-      return { label: bits.join(' · '), isPrivate: customPrivate };
-    }
+    if (limitChoice === 'custom')
+      return {
+        label: describeRules(draftToRules(customDraft).rules),
+        isPrivate: customDraft.isPrivate,
+      };
     if (limitChoice === 'none') return { label: 'within budget only', isPrivate: false };
-    const p = limitChoice === 'default' ? defaultPolicy : policies.find((x) => x.id === limitChoice);
-    if (p) return { label: labelPolicy(p), isPrivate: p.isPrivate };
+    const p: Policy | undefined =
+      limitChoice === 'default' ? defaultPolicy : policies.find((x) => x.id === limitChoice);
+    if (p) return { label: describeSavedLimit(p), isPrivate: p.isPrivate };
     return { label: 'within budget only', isPrivate: false };
   })();
 
   const hire = useMutation({
-    mutationFn: (p: { title: string; serviceId: string; budget: number }) =>
+    mutationFn: (p: { title: string; serviceId: string; budget: number; policyId?: string }) =>
       createTask({
         title: p.title,
         mode: 'DIRECT' as HireMode,
         budget: p.budget,
         serviceId: p.serviceId,
+        policyId: p.policyId,
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
   });
@@ -206,8 +224,14 @@ export function CommandChat() {
     setMessages((m) => [...m, ...msgs]);
   }
 
+  function currentBind(): Bind {
+    if (limitChoice === 'custom') return hasRule(customDraft) ? { draft: customDraft } : {};
+    return { policyId: resolvedPolicyId };
+  }
+
   function propose() {
     if (!action) return;
+    const bind = currentBind();
     let plan: Plan | null = null;
     let userText = '';
     if (action === 'pay') {
@@ -218,6 +242,7 @@ export function CommandChat() {
         summary: `Pay ${short(payee.trim())} $${amt.toFixed(2)}`,
         lines: [{ payee: payee.trim(), amount: amt, reason: reason.trim() || undefined }],
         limit: applied,
+        bind,
       };
       userText = `Pay $${amt.toFixed(2)} to ${short(payee.trim())}${reason.trim() ? ` for ${reason.trim()}` : ''}.`;
     } else if (action === 'disburse') {
@@ -235,6 +260,7 @@ export function CommandChat() {
         summary: `Disburse $${total.toFixed(2)} to ${valid.length} recipient${valid.length > 1 ? 's' : ''}`,
         lines: valid,
         limit: applied,
+        bind,
       };
       userText = `Disburse to ${valid.length} recipients (total $${total.toFixed(2)}), varying amounts.`;
     } else if (action === 'hire') {
@@ -246,6 +272,7 @@ export function CommandChat() {
         summary: `Hire ${svc.name} (budget $${bud.toFixed(2)})`,
         lines: [{ payee: svc.name, amount: bud, reason: 'service' }],
         limit: applied,
+        bind,
         serviceName: svc.name,
         serviceId: svc.id,
       };
@@ -263,20 +290,42 @@ export function CommandChat() {
     setMessages((m) => m.map((x) => (x.role === 'plan' && x.id === id ? { ...x, status } : x)));
   }
 
+  // Turn the plan's binding into a concrete policy id: an existing saved limit, or
+  // a fresh policy created from an ad-hoc custom rule (so custom limits bind too).
+  async function resolveBinding(bind: Bind): Promise<string | undefined> {
+    if (bind.policyId) return bind.policyId;
+    if (bind.draft && hasRule(bind.draft)) {
+      const { rules, isPrivate } = draftToRules(bind.draft);
+      const p = await createPolicy(rules, isPrivate);
+      if (isPrivate) {
+        try {
+          localStorage.setItem(LIMIT_CACHE_PREFIX + p.commitment, JSON.stringify(bind.draft));
+        } catch {
+          // ignore
+        }
+      }
+      qc.invalidateQueries({ queryKey: ['policies'] });
+      return p.id;
+    }
+    return undefined;
+  }
+
   async function approve(id: number, plan: Plan) {
     setPlanStatus(id, 'approved');
     if (plan.kind === 'hire' && plan.serviceId) {
       try {
+        const policyId = await resolveBinding(plan.bind);
         await hire.mutateAsync({
           title: `Hire ${plan.serviceName}`,
           serviceId: plan.serviceId,
           budget: plan.lines[0].amount,
+          policyId,
         });
         push({
           id: nextId(),
           role: 'agent',
           ok: true,
-          text: `Hired ${plan.serviceName}. The job is running; watch it in Activity.`,
+          text: `Hired ${plan.serviceName}${policyId ? ' under your limit' : ''}. The job is running; watch it in Activity.`,
         });
       } catch {
         push({
@@ -305,7 +354,7 @@ export function CommandChat() {
         title="Tell your agent what to do"
         hint="It proposes a plan; you approve; the vault enforces the limit you pick"
       />
-      <div className="p-5 pt-4">
+      <div className="p-5">
         {/* Transcript */}
         <div className="max-h-[22rem] space-y-3 overflow-y-auto pr-1">
           {messages.map((m) => (
@@ -319,7 +368,7 @@ export function CommandChat() {
         </div>
 
         {/* Composer */}
-        <div className="mt-4 border-t border-white/[0.06] pt-4">
+        <div className="mt-4 border-t border-line pt-4">
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => setAction('pay')}
@@ -342,7 +391,7 @@ export function CommandChat() {
           </div>
 
           {action && (
-            <div className="mt-3 rounded-xl border border-white/[0.08] bg-white/[0.02] p-3">
+            <div className="mt-3 rounded-xl border border-line bg-surface p-3">
               {action === 'pay' && (
                 <div className="grid gap-2 sm:grid-cols-[1fr_8rem]">
                   <input
@@ -405,7 +454,7 @@ export function CommandChat() {
                         onClick={() =>
                           setLines((ls) => (ls.length > 1 ? ls.filter((_, j) => j !== i) : ls))
                         }
-                        className="rounded-lg border border-white/10 px-2 text-slate-500 hover:text-red-300"
+                        className="rounded-lg border border-line-strong px-2 text-slate-500 hover:text-red-300"
                         aria-label="Remove row"
                       >
                         <Trash2 size={14} />
@@ -445,7 +494,7 @@ export function CommandChat() {
               )}
 
               {/* One clear limit control for this instruction */}
-              <div className="mt-3 border-t border-white/[0.06] pt-3">
+              <div className="mt-3 border-t border-line pt-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="inline-flex items-center gap-1.5 text-xs uppercase tracking-wider text-slate-500">
                     <SlidersHorizontal size={13} className="text-violet-300" /> Limit for this
@@ -454,17 +503,17 @@ export function CommandChat() {
                   <select
                     value={limitChoice}
                     onChange={(e) => setLimitChoice(e.target.value)}
-                    className="min-w-[14rem] flex-1 rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-sm text-slate-100 outline-none"
+                    className="min-w-[15rem] flex-1 rounded-lg border border-line-strong bg-black/25 px-2 py-1.5 text-sm text-slate-100 outline-none"
                     aria-label="Limit for this instruction"
                   >
                     <option value="default">
                       {defaultPolicy
-                        ? `Default · ${labelPolicy(defaultPolicy)}`
+                        ? `Default limit · ${describeSavedLimit(defaultPolicy)}`
                         : 'Budget only (no extra limit)'}
                     </option>
                     {policies.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.isPrivate ? 'Private' : 'Transparent'} · {labelPolicy(p)}
+                        {p.isPrivate ? 'Private' : 'Transparent'} · {describeSavedLimit(p)}
                       </option>
                     ))}
                     <option value="custom">Custom limit for this instruction…</option>
@@ -480,45 +529,16 @@ export function CommandChat() {
                 </div>
 
                 {limitChoice === 'custom' && (
-                  <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                    <label className="block">
-                      <span className="mb-1 block text-[11px] text-slate-500">
-                        Max per payment (USDC)
-                      </span>
-                      <input
-                        value={customCap}
-                        onChange={(e) => setCustomCap(e.target.value.replace(/[^0-9.]/g, ''))}
-                        inputMode="decimal"
-                        placeholder="none"
-                        className={inputCls}
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-1 block text-[11px] text-slate-500">Payees</span>
-                      <select
-                        value={customMode}
-                        onChange={(e) => setCustomMode(e.target.value as 'caps' | 'allowlist')}
-                        className={inputCls}
-                      >
-                        <option value="caps">Any address, within caps</option>
-                        <option value="allowlist">Only listed addresses</option>
-                      </select>
-                    </label>
-                    <label className="flex items-end gap-2 pb-2 text-sm text-slate-300">
-                      <input
-                        type="checkbox"
-                        checked={customPrivate}
-                        onChange={(e) => setCustomPrivate(e.target.checked)}
-                      />
-                      <span className="inline-flex items-center gap-1">
-                        {customPrivate ? (
-                          <EyeOff size={13} className="text-violet-300" />
-                        ) : (
-                          <Eye size={13} />
-                        )}
-                        Keep rule private
-                      </span>
-                    </label>
+                  <div className="mt-3 rounded-lg border border-line bg-black/20 p-3">
+                    <LimitsBuilder value={customDraft} onChange={setCustomDraft} />
+                    <p className="mt-3 text-[11px] text-slate-600">
+                      This one-off limit is saved and bound to this task when you approve. To reuse
+                      it later, it will appear in your{' '}
+                      <Link to="/app/limits" className="text-violet-300 hover:text-violet-200">
+                        Limits
+                      </Link>{' '}
+                      tab.
+                    </p>
                   </div>
                 )}
 
@@ -532,10 +552,7 @@ export function CommandChat() {
                 <button onClick={propose} className={primaryBtn}>
                   Propose to agent
                 </button>
-                <button
-                  onClick={resetComposer}
-                  className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-white/10"
-                >
+                <button onClick={resetComposer} className={controls.secondary}>
                   Cancel
                 </button>
               </div>
@@ -568,7 +585,7 @@ function ChatBubble({
   if (msg.role === 'agent') {
     return (
       <div className="flex justify-start">
-        <div className="max-w-[90%] rounded-2xl rounded-tl-sm border border-white/[0.08] bg-white/[0.02] px-3 py-2 text-sm text-slate-300">
+        <div className="max-w-[90%] rounded-2xl rounded-tl-sm border border-line bg-surface px-3 py-2 text-sm text-slate-300">
           {msg.text}
         </div>
       </div>
@@ -602,7 +619,8 @@ function ChatBubble({
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
           <span>total ${total.toFixed(2)}</span>
           <span className="inline-flex items-center gap-1 text-violet-300">
-            {plan.limit.isPrivate ? <EyeOff size={11} /> : <Eye size={11} />} limit: {plan.limit.label}
+            {plan.limit.isPrivate ? <EyeOff size={11} /> : <Eye size={11} />} limit:{' '}
+            {plan.limit.label}
           </span>
         </div>
         {msg.status === 'pending' ? (
@@ -615,7 +633,7 @@ function ChatBubble({
             </button>
             <button
               onClick={() => onCancel(msg.id)}
-              className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300 hover:bg-white/10"
+              className="rounded-lg border border-line-strong px-3 py-1.5 text-xs text-slate-300 hover:bg-white/10"
             >
               <X size={13} className="mr-1 inline" /> Cancel
             </button>
@@ -653,7 +671,7 @@ export function RecentActivity() {
           ) : undefined
         }
       />
-      <div className="p-5 pt-4">
+      <div className="p-5">
         {!isLoading && shown.length === 0 && (
           <EmptyState>Nothing yet. Instruct your agent above to get going.</EmptyState>
         )}
@@ -662,7 +680,7 @@ export function RecentActivity() {
             <Link
               key={t.id}
               to={`/app/tasks/${t.id}`}
-              className="flex items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 hover:border-violet-500/40 hover:bg-white/[0.04] transition-colors"
+              className="flex items-center justify-between rounded-xl border border-line bg-surface p-3 transition-colors hover:border-line-strong hover:bg-surface-2"
             >
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium">{t.title}</div>
@@ -670,9 +688,7 @@ export function RecentActivity() {
                   {t.mode} · ${t.spent.toFixed(2)} of ${t.budget.toFixed(2)}
                 </div>
               </div>
-              <span
-                className={`ml-3 shrink-0 text-xs ${STATUS_TINT[t.status] ?? 'text-slate-400'}`}
-              >
+              <span className={`ml-3 shrink-0 text-xs ${STATUS_TINT[t.status] ?? 'text-slate-400'}`}>
                 {t.status}
               </span>
             </Link>
