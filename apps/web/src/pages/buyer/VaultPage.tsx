@@ -1,12 +1,6 @@
 import { isDemo } from '../../config';
-import {
-  WalletCard,
-  VaultCard,
-  DelegateCard,
-  AgentWalletCard,
-  PoliciesCard,
-  ProveReleaseCard,
-} from './parts';
+import { WalletCard, VaultCard, DelegateCard, AgentWalletCard, ProveReleaseCard } from './parts';
+import { LimitsManager } from './limits';
 
 /**
  * Money and account setup in one place: fund the vault, authorize autopay,
@@ -26,7 +20,7 @@ export function VaultPage() {
         </div>
       )}
       <div className="max-w-4xl space-y-6">
-        <PoliciesCard />
+        <LimitsManager />
         <ProveReleaseCard />
       </div>
     </div>

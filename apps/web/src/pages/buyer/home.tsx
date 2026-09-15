@@ -22,6 +22,7 @@ import { isDemo } from '../../config';
 import { useSession } from '../../store/session';
 import { getVault } from '../../lib/vault';
 import { getServices } from '../../lib/services';
+import { getPolicies } from '../../lib/policies';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import { explorerAccount } from '../../lib/stellar';
 import { Card, CardHeader, EmptyState } from '../../components/ui';
@@ -89,7 +90,12 @@ export function VaultHero() {
 
 // ── Command / chat: instruct the agent, review a plan, approve ──────────────────
 
-type Constraints = { isPrivate: boolean; perPaymentCap: string; mode: 'caps' | 'allowlist' };
+type Constraints = {
+  isPrivate: boolean;
+  perPaymentCap: string;
+  mode: 'caps' | 'allowlist';
+  savedLimit?: string;
+};
 type Line = { payee: string; amount: string; reason: string };
 type PlanLine = { payee: string; amount: number; reason?: string };
 type Plan = {
@@ -126,6 +132,7 @@ export function CommandChat() {
   const [lines, setLines] = useState<Line[]>([{ payee: '', amount: '', reason: '' }]);
   const [serviceId, setServiceId] = useState('');
   const [budget, setBudget] = useState('');
+  const [policyId, setPolicyId] = useState('');
   const [cons, setCons] = useState<Constraints>({
     isPrivate: true,
     perPaymentCap: '',
@@ -137,6 +144,18 @@ export function CommandChat() {
     queryFn: () => getServices({ limit: 100 }),
   });
   const services = servicePage?.items ?? [];
+  const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
+
+  // The constraints applied to the next instruction: a saved limit if chosen, else ad-hoc.
+  const activeCons: Constraints = (() => {
+    const p = policies.find((x) => x.id === policyId);
+    if (p)
+      return {
+        ...cons,
+        savedLimit: `${p.isPrivate ? 'private' : 'transparent'} ${p.commitment.slice(0, 8)}…`,
+      };
+    return cons;
+  })();
 
   const hire = useMutation({
     mutationFn: (p: { title: string; serviceId: string; budget: number }) =>
@@ -157,6 +176,7 @@ export function CommandChat() {
     setLines([{ payee: '', amount: '', reason: '' }]);
     setServiceId('');
     setBudget('');
+    setPolicyId('');
   }
 
   function push(...msgs: Msg[]) {
@@ -174,7 +194,7 @@ export function CommandChat() {
         kind: 'pay',
         summary: `Pay ${short(payee.trim())} $${amt.toFixed(2)}`,
         lines: [{ payee: payee.trim(), amount: amt, reason: reason.trim() || undefined }],
-        constraints: cons,
+        constraints: activeCons,
       };
       userText = `Pay $${amt.toFixed(2)} to ${short(payee.trim())}${reason.trim() ? ` for ${reason.trim()}` : ''}.`;
     } else if (action === 'disburse') {
@@ -191,7 +211,7 @@ export function CommandChat() {
         kind: 'disburse',
         summary: `Disburse $${total.toFixed(2)} to ${valid.length} recipient${valid.length > 1 ? 's' : ''}`,
         lines: valid,
-        constraints: cons,
+        constraints: activeCons,
       };
       userText = `Disburse to ${valid.length} recipients (total $${total.toFixed(2)}), varying amounts.`;
     } else if (action === 'hire') {
@@ -202,7 +222,7 @@ export function CommandChat() {
         kind: 'hire',
         summary: `Hire ${svc.name} (budget $${bud.toFixed(2)})`,
         lines: [{ payee: svc.name, amount: bud, reason: 'service' }],
-        constraints: cons,
+        constraints: activeCons,
         serviceName: svc.name,
         serviceId: svc.id,
       };
@@ -407,6 +427,23 @@ export function CommandChat() {
                   Limits for this instruction
                 </span>
                 <label className="inline-flex items-center gap-1.5">
+                  <select
+                    value={policyId}
+                    onChange={(e) => setPolicyId(e.target.value)}
+                    className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100 outline-none"
+                    aria-label="Apply a saved limit"
+                  >
+                    <option value="">Ad-hoc limit</option>
+                    {policies.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        Saved: {p.isPrivate ? 'private' : 'transparent'} {p.commitment.slice(0, 8)}…
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label
+                  className={`inline-flex items-center gap-1.5 ${policyId ? 'opacity-40' : ''}`}
+                >
                   <input
                     type="checkbox"
                     checked={cons.isPrivate}
@@ -521,15 +558,21 @@ function ChatBubble({
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
           <span>total ${total.toFixed(2)}</span>
-          <span>{plan.constraints.isPrivate ? 'rule kept private' : 'transparent'}</span>
-          {plan.constraints.perPaymentCap && (
-            <span>cap ${plan.constraints.perPaymentCap}/payment</span>
+          {plan.constraints.savedLimit ? (
+            <span className="text-violet-300">limit: {plan.constraints.savedLimit}</span>
+          ) : (
+            <>
+              <span>{plan.constraints.isPrivate ? 'rule kept private' : 'transparent'}</span>
+              {plan.constraints.perPaymentCap && (
+                <span>cap ${plan.constraints.perPaymentCap}/payment</span>
+              )}
+              <span>
+                {plan.constraints.mode === 'allowlist'
+                  ? 'only listed addresses'
+                  : 'any address within caps'}
+              </span>
+            </>
           )}
-          <span>
-            {plan.constraints.mode === 'allowlist'
-              ? 'only listed addresses'
-              : 'any address within caps'}
-          </span>
         </div>
         {msg.status === 'pending' ? (
           <div className="mt-3 flex gap-2">
