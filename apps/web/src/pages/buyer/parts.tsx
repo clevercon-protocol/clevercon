@@ -56,6 +56,7 @@ import {
   ErrorState,
   Loading,
   Badge,
+  controls,
 } from '../../components/ui';
 
 type Mode = 'direct' | 'search' | 'compose';
@@ -81,10 +82,8 @@ const MODES: { id: Mode; icon: typeof UserCheck; label: string; blurb: string }[
   },
 ];
 
-const inputCls =
-  'w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-500/40';
-const primaryBtn =
-  'rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:from-violet-500 hover:to-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 transition-all';
+const inputCls = controls.field;
+const primaryBtn = controls.primary;
 
 const explorerContract = (id: string) => `https://stellar.expert/explorer/testnet/contract/${id}`;
 
@@ -367,7 +366,7 @@ export function VaultCard() {
               <button
                 onClick={() => canMove && move.mutate('withdraw')}
                 disabled={!canMove}
-                className="flex-1 rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                className={`flex-1 ${controls.secondary} disabled:cursor-not-allowed disabled:opacity-50`}
               >
                 Withdraw
               </button>
