@@ -19,7 +19,7 @@ import {
   type CreatedWebhook,
 } from '../lib/webhooks';
 import { refreshRoles } from '../lib/sessionSync';
-import { PageHeader, StatCard, Loading, ErrorState } from '../components/ui';
+import { PageHeader, StatCard, Loading, ErrorState, controls } from '../components/ui';
 
 function WebhooksCard() {
   const qc = useQueryClient();
@@ -63,12 +63,12 @@ function WebhooksCard() {
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://your-app.example.com/webhooks/clevercon"
-              className="min-w-64 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-500/40"
+              className={`min-w-64 flex-1 ${controls.field}`}
             />
             <button
               type="submit"
               disabled={!url.trim() || add.isPending}
-              className="rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              className={controls.primary}
             >
               {add.isPending ? 'Adding…' : 'Add webhook'}
             </button>

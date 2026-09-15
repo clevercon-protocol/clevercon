@@ -13,7 +13,7 @@ import {
   getDisputes,
   resolveDispute,
 } from '../lib/admin';
-import { Loading, ErrorState } from '../components/ui';
+import { Loading, ErrorState, controls } from '../components/ui';
 
 function DisputesCard() {
   const qc = useQueryClient();
@@ -218,12 +218,12 @@ function FeesCard() {
               onChange={(e) => setBps(e.target.value)}
               inputMode="numeric"
               placeholder="New fee (bps, e.g. 30 = 0.30%)"
-              className="min-w-56 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-500/40"
+              className={`min-w-56 flex-1 ${controls.field}`}
             />
             <button
               type="submit"
               disabled={bps === '' || save.isPending}
-              className="rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              className={controls.primary}
             >
               {save.isPending ? 'Updating…' : 'Update fee'}
             </button>
