@@ -26,15 +26,12 @@ import { getServices } from '../../lib/services';
 import { getPolicies, type Policy } from '../../lib/policies';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import { explorerAccount } from '../../lib/stellar';
-import { Card, CardHeader, EmptyState } from '../../components/ui';
+import { Card, CardHeader, EmptyState, controls } from '../../components/ui';
 import { describeRules, getDefaultLimitId } from './limits-model';
 
-const inputCls =
-  'w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-500/40';
-const primaryBtn =
-  'rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:from-violet-500 hover:to-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 transition-all';
-const chipBtn =
-  'inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-slate-300 hover:border-violet-500/40 hover:text-white transition-colors';
+const inputCls = controls.field;
+const primaryBtn = controls.primary;
+const chipBtn = controls.chip;
 
 const STATUS_TINT: Record<string, string> = {
   RUNNING: 'text-sky-300',
@@ -54,20 +51,39 @@ export function VaultHero() {
   const available = vault?.available ?? 0;
   const balance = vault?.balance ?? 0;
   const locked = vault?.locked ?? 0;
+  const pct = balance > 0 ? Math.min(100, Math.round((locked / balance) * 100)) : 0;
   return (
-    <Card className="p-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+    <Card className="relative overflow-hidden p-6">
+      {/* Signature wash to mark this as the primary surface. */}
+      <div
+        className="pointer-events-none absolute -right-16 -top-24 h-64 w-64 rounded-full bg-violet-600/15 blur-3xl"
+        aria-hidden
+      />
+      <div className="relative flex flex-wrap items-start justify-between gap-4">
         <div>
-          <div className="flex items-center gap-1.5 text-xs uppercase tracking-wider text-slate-500">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500">
             <VaultIcon size={13} className="text-violet-300" /> Your agent&apos;s budget
           </div>
-          <div className="mt-1 flex items-end gap-2">
-            <span className="text-4xl font-bold text-white">${available.toFixed(2)}</span>
-            <span className="pb-1 text-sm text-slate-500">available to spend</span>
+          <div className="mt-2 flex items-end gap-2">
+            <span className="text-5xl font-bold tracking-tight text-white">
+              ${available.toFixed(2)}
+            </span>
+            <span className="pb-1.5 text-sm text-slate-500">available to spend</span>
           </div>
-          <div className="mt-1 text-sm text-slate-400">
-            ${balance.toFixed(2)} in vault, ${locked.toFixed(2)} locked by active jobs
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-400">
+            <span>${balance.toFixed(2)} in vault</span>
+            <span className="text-slate-600">·</span>
+            <span>${locked.toFixed(2)} locked by active jobs</span>
           </div>
+          {balance > 0 && (
+            <div className="mt-3 h-1.5 w-56 max-w-full overflow-hidden rounded-full bg-white/[0.06]">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500"
+                style={{ width: `${pct}%` }}
+                title={`${pct}% of the vault is locked by active jobs`}
+              />
+            </div>
+          )}
         </div>
         <div className="flex flex-col items-end gap-2">
           <Link to="/app/vault" className={primaryBtn}>

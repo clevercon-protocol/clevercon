@@ -102,12 +102,13 @@ export function Shell({ children }: { children: ReactNode }) {
   const isActive = (to: string) => loc.pathname === to || loc.pathname.startsWith(to + '/');
 
   return (
-    <div className="min-h-screen bg-[#0b0d13] text-slate-100">
+    <div className="relative min-h-screen text-slate-100">
+      <div className="app-ambient" aria-hidden />
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-white/5 bg-[#0c0e15] px-4 py-5 lg:flex">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-white/5 bg-black/30 px-4 py-5 backdrop-blur-xl lg:flex">
         <Brand />
         <nav className="mt-8 flex flex-col gap-1">
-          <p className="px-3 pb-2 text-[11px] font-medium uppercase tracking-wider text-slate-600">
+          <p className="px-3 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-slate-600">
             Consoles
           </p>
           {items.map((n) => {
@@ -116,12 +117,15 @@ export function Shell({ children }: { children: ReactNode }) {
               <Link
                 key={n.to}
                 to={n.to}
-                className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                className={`relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
                   active
-                    ? 'bg-violet-500/10 text-white'
+                    ? 'bg-violet-500/[0.12] text-white'
                     : 'text-slate-400 hover:bg-white/[0.04] hover:text-white'
                 }`}
               >
+                {active && (
+                  <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-violet-400" />
+                )}
                 <n.icon size={16} className={active ? 'text-violet-300' : ''} />
                 {n.label}
               </Link>
@@ -138,7 +142,7 @@ export function Shell({ children }: { children: ReactNode }) {
       </aside>
 
       {/* Mobile top bar */}
-      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-white/5 bg-[#0b0d13]/85 px-4 py-3 backdrop-blur lg:hidden">
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-white/5 bg-black/50 px-4 py-3 backdrop-blur-xl lg:hidden">
         <Brand />
         <div className="flex items-center gap-3">
           <NetworkBadge className="hidden sm:inline-flex" />
@@ -156,7 +160,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <div className="lg:pl-60">
+      <div className="relative z-10 lg:pl-60">
         <DemoBanner />
         <main className="mx-auto max-w-6xl px-5 py-8 sm:px-8">{children}</main>
       </div>

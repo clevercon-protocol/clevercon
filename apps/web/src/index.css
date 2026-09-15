@@ -4,27 +4,52 @@
 
 :root {
   color-scheme: dark;
+  /* Semantic surface + line tokens. One place to retune the whole app's depth. */
+  --cc-bg: #090a10;
+  --cc-surface: rgba(255, 255, 255, 0.024);
+  --cc-surface-2: rgba(255, 255, 255, 0.045);
+  --cc-line: rgba(255, 255, 255, 0.07);
+  --cc-line-strong: rgba(255, 255, 255, 0.12);
 }
 body {
   margin: 0;
-  background: #0b0d13;
-  color: #e2e8f0;
+  background: var(--cc-bg);
+  color: #e6e9ef;
   font-family:
     system-ui,
     -apple-system,
     sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* A calm ambient wash behind the app content, so the page is not flat black.
+   Fixed and non-interactive; two soft violet/indigo pools near the top. */
+.app-ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(60rem 32rem at 12% -6%, rgba(124, 58, 237, 0.13), transparent 60%),
+    radial-gradient(52rem 30rem at 92% 2%, rgba(56, 100, 240, 0.1), transparent 62%);
 }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #12141c;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #374151;
-  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .text-balance {

@@ -12,7 +12,7 @@ import {
   Star,
 } from 'lucide-react';
 import { getPolicies, createPolicy, type Policy } from '../../lib/policies';
-import { Card, CardHeader, EmptyState, ErrorState, Loading } from '../../components/ui';
+import { Card, CardHeader, EmptyState, ErrorState, Loading, controls } from '../../components/ui';
 import {
   WINDOWS,
   emptyDraft,
@@ -25,10 +25,8 @@ import {
   type Draft,
 } from './limits-model';
 
-const inputCls =
-  'w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-500/40';
-const primaryBtn =
-  'rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:from-violet-500 hover:to-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 transition-all';
+const inputCls = controls.field;
+const primaryBtn = controls.primary;
 
 /** The full limits form: what the vault will enforce on every payment. */
 export function LimitsBuilder({ value, onChange }: { value: Draft; onChange: (d: Draft) => void }) {
