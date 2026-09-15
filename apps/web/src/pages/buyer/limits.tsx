@@ -1,62 +1,21 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ShieldCheck, Plus, Trash2, EyeOff, Eye, Users, Gauge, CalendarClock } from 'lucide-react';
-import { getPolicies, createPolicy, type Policy, type PolicyRules } from '../../lib/policies';
+import { getPolicies, createPolicy, type Policy } from '../../lib/policies';
 import { Card, CardHeader, EmptyState, ErrorState, Loading } from '../../components/ui';
+import {
+  WINDOWS,
+  emptyDraft,
+  isStellarAddr,
+  draftToRules,
+  describeDraft,
+  type Draft,
+} from './limits-model';
 
 const inputCls =
   'w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-500/40';
 const primaryBtn =
   'rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:from-violet-500 hover:to-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 transition-all';
-
-const WINDOWS: Record<string, { label: string; secs?: number }> = {
-  none: { label: 'no time window' },
-  day: { label: 'per day', secs: 86_400 },
-  week: { label: 'per week', secs: 604_800 },
-  month: { label: 'per 30 days', secs: 2_592_000 },
-};
-
-export type Draft = {
-  isPrivate: boolean;
-  perPaymentCeiling: string;
-  rollingCap: string;
-  rollingWindow: keyof typeof WINDOWS;
-  allowlist: string[];
-};
-
-export const emptyDraft = (): Draft => ({
-  isPrivate: true,
-  perPaymentCeiling: '',
-  rollingCap: '',
-  rollingWindow: 'week',
-  allowlist: [],
-});
-
-const isStellarAddr = (a: string) => /^G[A-Z2-7]{55}$/.test(a.trim());
-
-export function draftToRules(d: Draft): { rules: PolicyRules; isPrivate: boolean } {
-  const secs = WINDOWS[d.rollingWindow].secs;
-  return {
-    isPrivate: d.isPrivate,
-    rules: {
-      perPaymentCeilingUsdc: d.perPaymentCeiling ? Number(d.perPaymentCeiling) : undefined,
-      rollingCapUsdc: d.rollingCap ? Number(d.rollingCap) : undefined,
-      rollingWindowSecs: d.rollingCap && secs ? secs : undefined,
-      allowlist: d.allowlist.length ? d.allowlist : undefined,
-    },
-  };
-}
-
-export function describeDraft(d: Draft): string {
-  const parts: string[] = [];
-  if (d.perPaymentCeiling) parts.push(`max $${d.perPaymentCeiling}/payment`);
-  if (d.rollingCap) parts.push(`max $${d.rollingCap} ${WINDOWS[d.rollingWindow].label}`);
-  parts.push(
-    d.allowlist.length ? `only ${d.allowlist.length} allowed payee(s)` : 'any payee within caps',
-  );
-  parts.push(d.isPrivate ? 'rule private' : 'transparent');
-  return parts.join(' · ');
-}
 
 /** The full limits form: what the vault will enforce on every payment. */
 export function LimitsBuilder({ value, onChange }: { value: Draft; onChange: (d: Draft) => void }) {
