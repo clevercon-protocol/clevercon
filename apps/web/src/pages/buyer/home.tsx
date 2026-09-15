@@ -17,15 +17,17 @@ import {
   Trash2,
   ListChecks,
   ArrowRight,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { isDemo } from '../../config';
 import { useSession } from '../../store/session';
 import { getVault } from '../../lib/vault';
 import { getServices } from '../../lib/services';
-import { getPolicies } from '../../lib/policies';
+import { getPolicies, type Policy } from '../../lib/policies';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import { explorerAccount } from '../../lib/stellar';
 import { Card, CardHeader, EmptyState } from '../../components/ui';
+import { describeRules, getDefaultLimitId } from './limits-model';
 
 const inputCls =
   'w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-500/40';
@@ -90,19 +92,15 @@ export function VaultHero() {
 
 // ── Command / chat: instruct the agent, review a plan, approve ──────────────────
 
-type Constraints = {
-  isPrivate: boolean;
-  perPaymentCap: string;
-  mode: 'caps' | 'allowlist';
-  savedLimit?: string;
-};
+// The limit the vault will enforce for one instruction, resolved to a short label.
+type Applied = { label: string; isPrivate: boolean };
 type Line = { payee: string; amount: string; reason: string };
 type PlanLine = { payee: string; amount: number; reason?: string };
 type Plan = {
   kind: 'pay' | 'disburse' | 'hire';
   summary: string;
   lines: PlanLine[];
-  constraints: Constraints;
+  limit: Applied;
   serviceName?: string;
   serviceId?: string;
 };
@@ -112,6 +110,12 @@ type Msg =
   | { id: number; role: 'agent'; text: string; ok?: boolean };
 
 const short = (a: string) => (a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
+const labelPolicy = (p: Policy) =>
+  p.rules ? describeRules(p.rules) : `private ${p.commitment.slice(0, 8)}…`;
+
+// 'default' = use the owner's default (or budget-only if none); 'custom' = ad-hoc
+// fields below; 'none' = budget-only; otherwise a saved policy id.
+type LimitChoice = 'default' | 'custom' | 'none' | string;
 
 export function CommandChat() {
   const qc = useQueryClient();
@@ -121,7 +125,7 @@ export function CommandChat() {
     {
       id: 1,
       role: 'agent',
-      text: "I'm your spending agent. Tell me what to do with your budget, or use a quick action. I'll propose a plan and you approve before anything moves. The vault enforces your limits, so I can never overspend or pay outside your rules.",
+      text: "I'm your spending agent. Tell me what to do with your budget, or use a quick action. I'll propose a plan and you approve before anything moves. The vault enforces the limit you pick, so I can never overspend or pay outside your rules.",
     },
   ]);
 
@@ -132,12 +136,12 @@ export function CommandChat() {
   const [lines, setLines] = useState<Line[]>([{ payee: '', amount: '', reason: '' }]);
   const [serviceId, setServiceId] = useState('');
   const [budget, setBudget] = useState('');
-  const [policyId, setPolicyId] = useState('');
-  const [cons, setCons] = useState<Constraints>({
-    isPrivate: true,
-    perPaymentCap: '',
-    mode: 'caps',
-  });
+
+  // Limit for the next instruction. Sticky across instructions (not reset after send).
+  const [limitChoice, setLimitChoice] = useState<LimitChoice>('default');
+  const [customCap, setCustomCap] = useState('');
+  const [customPrivate, setCustomPrivate] = useState(true);
+  const [customMode, setCustomMode] = useState<'caps' | 'allowlist'>('caps');
 
   const { data: servicePage } = useQuery({
     queryKey: ['services', { picker: true }],
@@ -145,16 +149,20 @@ export function CommandChat() {
   });
   const services = servicePage?.items ?? [];
   const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
+  const defaultPolicy = policies.find((p) => p.id === getDefaultLimitId());
 
-  // The constraints applied to the next instruction: a saved limit if chosen, else ad-hoc.
-  const activeCons: Constraints = (() => {
-    const p = policies.find((x) => x.id === policyId);
-    if (p)
-      return {
-        ...cons,
-        savedLimit: `${p.isPrivate ? 'private' : 'transparent'} ${p.commitment.slice(0, 8)}…`,
-      };
-    return cons;
+  // Resolve the current selection to the limit the vault will enforce.
+  const applied: Applied = (() => {
+    if (limitChoice === 'custom') {
+      const bits: string[] = [];
+      if (customCap) bits.push(`max $${customCap}/payment`);
+      bits.push(customMode === 'allowlist' ? 'only listed addresses' : 'any address within caps');
+      return { label: bits.join(' · '), isPrivate: customPrivate };
+    }
+    if (limitChoice === 'none') return { label: 'within budget only', isPrivate: false };
+    const p = limitChoice === 'default' ? defaultPolicy : policies.find((x) => x.id === limitChoice);
+    if (p) return { label: labelPolicy(p), isPrivate: p.isPrivate };
+    return { label: 'within budget only', isPrivate: false };
   })();
 
   const hire = useMutation({
@@ -176,7 +184,6 @@ export function CommandChat() {
     setLines([{ payee: '', amount: '', reason: '' }]);
     setServiceId('');
     setBudget('');
-    setPolicyId('');
   }
 
   function push(...msgs: Msg[]) {
@@ -194,7 +201,7 @@ export function CommandChat() {
         kind: 'pay',
         summary: `Pay ${short(payee.trim())} $${amt.toFixed(2)}`,
         lines: [{ payee: payee.trim(), amount: amt, reason: reason.trim() || undefined }],
-        constraints: activeCons,
+        limit: applied,
       };
       userText = `Pay $${amt.toFixed(2)} to ${short(payee.trim())}${reason.trim() ? ` for ${reason.trim()}` : ''}.`;
     } else if (action === 'disburse') {
@@ -211,7 +218,7 @@ export function CommandChat() {
         kind: 'disburse',
         summary: `Disburse $${total.toFixed(2)} to ${valid.length} recipient${valid.length > 1 ? 's' : ''}`,
         lines: valid,
-        constraints: activeCons,
+        limit: applied,
       };
       userText = `Disburse to ${valid.length} recipients (total $${total.toFixed(2)}), varying amounts.`;
     } else if (action === 'hire') {
@@ -222,7 +229,7 @@ export function CommandChat() {
         kind: 'hire',
         summary: `Hire ${svc.name} (budget $${bud.toFixed(2)})`,
         lines: [{ payee: svc.name, amount: bud, reason: 'service' }],
-        constraints: activeCons,
+        limit: applied,
         serviceName: svc.name,
         serviceId: svc.id,
       };
@@ -271,7 +278,7 @@ export function CommandChat() {
       id: nextId(),
       role: 'agent',
       ok: true,
-      text: `Preview: this would release $${total.toFixed(2)} across ${plan.lines.length} payment${plan.lines.length > 1 ? 's' : ''}${plan.constraints.isPrivate ? ', with your rule kept private' : ''}, each checked against your limits on-chain. Live payments land when the pay/disburse primitive is wired (Phase 1).`,
+      text: `Preview: this would release $${total.toFixed(2)} across ${plan.lines.length} payment${plan.lines.length > 1 ? 's' : ''}${plan.limit.isPrivate ? ', with your rule kept private' : ''}, each checked against your limit on-chain. Live payments land when the pay/disburse primitive is wired (Phase 1).`,
     });
   }
 
@@ -280,7 +287,7 @@ export function CommandChat() {
       <CardHeader
         icon={Sparkles}
         title="Tell your agent what to do"
-        hint="It proposes a plan; you approve; the vault enforces your limits"
+        hint="It proposes a plan; you approve; the vault enforces the limit you pick"
       />
       <div className="p-5 pt-4">
         {/* Transcript */}
@@ -421,68 +428,88 @@ export function CommandChat() {
                 </div>
               )}
 
-              {/* Per-instruction constraints */}
-              <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-white/[0.06] pt-3 text-xs text-slate-400">
-                <span className="uppercase tracking-wider text-slate-500">
-                  Limits for this instruction
-                </span>
-                <label className="inline-flex items-center gap-1.5">
+              {/* One clear limit control for this instruction */}
+              <div className="mt-3 border-t border-white/[0.06] pt-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-xs uppercase tracking-wider text-slate-500">
+                    <SlidersHorizontal size={13} className="text-violet-300" /> Limit for this
+                    instruction
+                  </span>
                   <select
-                    value={policyId}
-                    onChange={(e) => setPolicyId(e.target.value)}
-                    className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100 outline-none"
-                    aria-label="Apply a saved limit"
+                    value={limitChoice}
+                    onChange={(e) => setLimitChoice(e.target.value)}
+                    className="min-w-[14rem] flex-1 rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-sm text-slate-100 outline-none"
+                    aria-label="Limit for this instruction"
                   >
-                    <option value="">Ad-hoc limit</option>
+                    <option value="default">
+                      {defaultPolicy
+                        ? `Default · ${labelPolicy(defaultPolicy)}`
+                        : 'Budget only (no extra limit)'}
+                    </option>
                     {policies.map((p) => (
                       <option key={p.id} value={p.id}>
-                        Saved: {p.isPrivate ? 'private' : 'transparent'} {p.commitment.slice(0, 8)}…
+                        {p.isPrivate ? 'Private' : 'Transparent'} · {labelPolicy(p)}
                       </option>
                     ))}
+                    <option value="custom">Custom limit for this instruction…</option>
+                    {defaultPolicy && <option value="none">No limit (within budget only)</option>}
                   </select>
-                </label>
-                <label
-                  className={`inline-flex items-center gap-1.5 ${policyId ? 'opacity-40' : ''}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={cons.isPrivate}
-                    onChange={(e) => setCons((c) => ({ ...c, isPrivate: e.target.checked }))}
-                  />
-                  {cons.isPrivate ? (
-                    <EyeOff size={13} className="text-violet-300" />
-                  ) : (
-                    <Eye size={13} />
-                  )}{' '}
-                  Private
-                </label>
-                <label className="inline-flex items-center gap-1.5">
-                  Max per payment
-                  <input
-                    value={cons.perPaymentCap}
-                    onChange={(e) =>
-                      setCons((c) => ({
-                        ...c,
-                        perPaymentCap: e.target.value.replace(/[^0-9.]/g, ''),
-                      }))
-                    }
-                    inputMode="decimal"
-                    placeholder="none"
-                    className="w-20 rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100 outline-none"
-                  />
-                </label>
-                <label className="inline-flex items-center gap-1.5">
-                  <select
-                    value={cons.mode}
-                    onChange={(e) =>
-                      setCons((c) => ({ ...c, mode: e.target.value as Constraints['mode'] }))
-                    }
-                    className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100 outline-none"
+                  <Link
+                    to="/app/limits"
+                    className="text-xs text-violet-300 hover:text-violet-200"
+                    title="Create and manage reusable limits"
                   >
-                    <option value="caps">Any address, within caps</option>
-                    <option value="allowlist">Only listed addresses</option>
-                  </select>
-                </label>
+                    Manage limits
+                  </Link>
+                </div>
+
+                {limitChoice === 'custom' && (
+                  <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] text-slate-500">
+                        Max per payment (USDC)
+                      </span>
+                      <input
+                        value={customCap}
+                        onChange={(e) => setCustomCap(e.target.value.replace(/[^0-9.]/g, ''))}
+                        inputMode="decimal"
+                        placeholder="none"
+                        className={inputCls}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] text-slate-500">Payees</span>
+                      <select
+                        value={customMode}
+                        onChange={(e) => setCustomMode(e.target.value as 'caps' | 'allowlist')}
+                        className={inputCls}
+                      >
+                        <option value="caps">Any address, within caps</option>
+                        <option value="allowlist">Only listed addresses</option>
+                      </select>
+                    </label>
+                    <label className="flex items-end gap-2 pb-2 text-sm text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={customPrivate}
+                        onChange={(e) => setCustomPrivate(e.target.checked)}
+                      />
+                      <span className="inline-flex items-center gap-1">
+                        {customPrivate ? (
+                          <EyeOff size={13} className="text-violet-300" />
+                        ) : (
+                          <Eye size={13} />
+                        )}
+                        Keep rule private
+                      </span>
+                    </label>
+                  </div>
+                )}
+
+                <p className="mt-2 text-[11px] text-slate-500">
+                  The vault will enforce: <span className="text-slate-300">{applied.label}</span>
+                  {applied.isPrivate ? ' · rule kept private' : ' · transparent'}.
+                </p>
               </div>
 
               <div className="mt-3 flex gap-2">
@@ -558,21 +585,9 @@ function ChatBubble({
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
           <span>total ${total.toFixed(2)}</span>
-          {plan.constraints.savedLimit ? (
-            <span className="text-violet-300">limit: {plan.constraints.savedLimit}</span>
-          ) : (
-            <>
-              <span>{plan.constraints.isPrivate ? 'rule kept private' : 'transparent'}</span>
-              {plan.constraints.perPaymentCap && (
-                <span>cap ${plan.constraints.perPaymentCap}/payment</span>
-              )}
-              <span>
-                {plan.constraints.mode === 'allowlist'
-                  ? 'only listed addresses'
-                  : 'any address within caps'}
-              </span>
-            </>
-          )}
+          <span className="inline-flex items-center gap-1 text-violet-300">
+            {plan.limit.isPrivate ? <EyeOff size={11} /> : <Eye size={11} />} limit: {plan.limit.label}
+          </span>
         </div>
         {msg.status === 'pending' ? (
           <div className="mt-3 flex gap-2">

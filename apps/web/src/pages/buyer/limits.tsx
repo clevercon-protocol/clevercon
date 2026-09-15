@@ -1,6 +1,16 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ShieldCheck, Plus, Trash2, EyeOff, Eye, Users, Gauge, CalendarClock } from 'lucide-react';
+import {
+  ShieldCheck,
+  Plus,
+  Trash2,
+  EyeOff,
+  Eye,
+  Users,
+  Gauge,
+  CalendarClock,
+  Star,
+} from 'lucide-react';
 import { getPolicies, createPolicy, type Policy } from '../../lib/policies';
 import { Card, CardHeader, EmptyState, ErrorState, Loading } from '../../components/ui';
 import {
@@ -9,6 +19,9 @@ import {
   isStellarAddr,
   draftToRules,
   describeDraft,
+  describeRules,
+  getDefaultLimitId,
+  setDefaultLimitId,
   type Draft,
 } from './limits-model';
 
@@ -146,14 +159,7 @@ export function LimitsBuilder({ value, onChange }: { value: Draft; onChange: (d:
 const localKey = (commitment: string) => `cc:limit:${commitment}`;
 
 function describePolicy(p: Policy): string {
-  if (p.rules) {
-    const r = p.rules;
-    const parts: string[] = [];
-    if (r.perPaymentCeilingUsdc != null) parts.push(`max $${r.perPaymentCeilingUsdc}/payment`);
-    if (r.rollingCapUsdc != null) parts.push(`max $${r.rollingCapUsdc}/window`);
-    if (r.allowlist?.length) parts.push(`${r.allowlist.length} allowed payees`);
-    return parts.length ? parts.join(' · ') : 'no caps set';
-  }
+  if (p.rules) return describeRules(p.rules);
   // Private: the server did not keep the rule. Show the owner's local copy if we saved one.
   try {
     const cached = localStorage.getItem(localKey(p.commitment));
@@ -168,11 +174,19 @@ function describePolicy(p: Policy): string {
 export function LimitsManager() {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<Draft>(emptyDraft());
+  const [defaultId, setDefaultId] = useState<string>(() => getDefaultLimitId());
   const {
     data: policies = [],
     isLoading,
     error,
   } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
+
+  // Toggle which saved limit is the owner's default (pre-fills each instruction on Home).
+  const toggleDefault = (id: string) => {
+    const next = defaultId === id ? '' : id;
+    setDefaultId(next);
+    setDefaultLimitId(next);
+  };
 
   const save = useMutation({
     mutationFn: () => {
@@ -199,7 +213,7 @@ export function LimitsManager() {
       <CardHeader
         icon={ShieldCheck}
         title="Spending limits"
-        hint="Reusable rules the vault enforces on every payment. Apply one per instruction."
+        hint="Build a rule once, then apply it per instruction on Home. Star one to make it your default."
       />
       <div className="p-5 pt-4">
         <LimitsBuilder value={draft} onChange={setDraft} />
@@ -223,27 +237,49 @@ export function LimitsManager() {
           {error && <ErrorState>Could not load your limits.</ErrorState>}
           {!isLoading && !error && policies.length === 0 && <EmptyState>No limits yet.</EmptyState>}
           <div className="space-y-2">
-            {policies.map((p) => (
-              <div
-                key={p.id}
-                className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 text-sm"
-              >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-slate-200">
-                    {p.isPrivate ? (
-                      <EyeOff size={13} className="text-violet-300" />
-                    ) : (
-                      <Eye size={13} className="text-slate-400" />
-                    )}
-                    {p.isPrivate ? 'Private limit' : 'Transparent limit'}
+            {policies.map((p) => {
+              const isDefault = defaultId === p.id;
+              return (
+                <div
+                  key={p.id}
+                  className={`flex items-center justify-between gap-3 rounded-xl border p-3 text-sm ${
+                    isDefault
+                      ? 'border-violet-500/40 bg-violet-500/[0.06]'
+                      : 'border-white/[0.08] bg-white/[0.02]'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 text-slate-200">
+                      {p.isPrivate ? (
+                        <EyeOff size={13} className="text-violet-300" />
+                      ) : (
+                        <Eye size={13} className="text-slate-400" />
+                      )}
+                      {p.isPrivate ? 'Private limit' : 'Transparent limit'}
+                      {isDefault && (
+                        <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-200">
+                          Default
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 truncate text-xs text-slate-500">{describePolicy(p)}</div>
                   </div>
-                  <div className="mt-0.5 truncate text-xs text-slate-500">{describePolicy(p)}</div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <button
+                      onClick={() => toggleDefault(p.id)}
+                      title={isDefault ? 'Remove as default' : 'Make default'}
+                      aria-label={isDefault ? 'Remove as default' : 'Make default'}
+                      className={isDefault ? 'text-violet-300' : 'text-slate-600 hover:text-slate-300'}
+                    >
+                      <Star size={15} fill={isDefault ? 'currentColor' : 'none'} />
+                    </button>
+                    <span className="font-mono text-[11px] text-slate-500">
+                      {p.commitment.slice(0, 10)}…
+                    </span>
+                  </div>
                 </div>
-                <span className="shrink-0 font-mono text-[11px] text-slate-500">
-                  {p.commitment.slice(0, 10)}…
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>

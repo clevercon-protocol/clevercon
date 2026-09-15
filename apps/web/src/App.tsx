@@ -17,6 +17,7 @@ const lazyFrom = <T extends Record<string, ComponentType>>(
 
 const BuyerLayout = lazyFrom(() => import('./pages/buyer/BuyerLayout'), 'BuyerLayout');
 const Home = lazyFrom(() => import('./pages/buyer/home'), 'Home');
+const LimitsPage = lazyFrom(() => import('./pages/buyer/LimitsPage'), 'LimitsPage');
 const VaultPage = lazyFrom(() => import('./pages/buyer/VaultPage'), 'VaultPage');
 const ServicesPage = lazyFrom(() => import('./pages/buyer/ServicesPage'), 'ServicesPage');
 const ActivityPage = lazyFrom(() => import('./pages/buyer/ActivityPage'), 'ActivityPage');
@@ -50,16 +51,17 @@ export function App() {
                 }
               >
                 <Route index element={<Home />} />
+                <Route path="limits" element={<LimitsPage />} />
                 <Route path="services" element={<ServicesPage />} />
                 <Route path="vault" element={<VaultPage />} />
                 <Route path="activity" element={<ActivityPage />} />
                 <Route path="tasks/:id" element={<TaskDetail />} />
                 <Route path="marketplace/:id" element={<ServiceDetail />} />
-                {/* Chat-first rework: hire lives in Home; browse in /app/services; limits in /app/vault. */}
+                {/* Chat-first rework: hire lives in Home; browse in /app/services; limits in /app/limits. */}
                 <Route path="hire" element={<Navigate to="/app" replace />} />
                 <Route path="jobs" element={<Navigate to="/app/activity" replace />} />
                 <Route path="marketplace" element={<Navigate to="/app/services" replace />} />
-                <Route path="policies" element={<Navigate to="/app/vault" replace />} />
+                <Route path="policies" element={<Navigate to="/app/limits" replace />} />
               </Route>
 
               <Route

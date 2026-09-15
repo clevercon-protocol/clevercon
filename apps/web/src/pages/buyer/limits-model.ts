@@ -51,3 +51,34 @@ export function describeDraft(d: Draft): string {
   parts.push(d.isPrivate ? 'rule private' : 'transparent');
   return parts.join(' · ');
 }
+
+/** A short, human summary of a saved rule (used on Home and in the limits list). */
+export function describeRules(r: PolicyRules): string {
+  const parts: string[] = [];
+  if (r.perPaymentCeilingUsdc != null) parts.push(`max $${r.perPaymentCeilingUsdc}/payment`);
+  if (r.rollingCapUsdc != null) parts.push(`max $${r.rollingCapUsdc}/window`);
+  if (r.allowlist?.length) parts.push(`only ${r.allowlist.length} allowed payee(s)`);
+  return parts.length ? parts.join(' · ') : 'no caps';
+}
+
+// The owner's default limit is a local preference: the id of one saved limit that
+// pre-fills each new instruction. It is never a lock (every instruction can override
+// it), which matches the on-chain model where policy is bound per task.
+const DEFAULT_KEY = 'cc:defaultLimit';
+
+export function getDefaultLimitId(): string {
+  try {
+    return localStorage.getItem(DEFAULT_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function setDefaultLimitId(id: string): void {
+  try {
+    if (id) localStorage.setItem(DEFAULT_KEY, id);
+    else localStorage.removeItem(DEFAULT_KEY);
+  } catch {
+    // ignore
+  }
+}

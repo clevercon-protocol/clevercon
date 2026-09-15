@@ -1,10 +1,9 @@
 import { isDemo } from '../../config';
 import { WalletCard, VaultCard, DelegateCard, AgentWalletCard, ProveReleaseCard } from './parts';
-import { LimitsManager } from './limits';
 
 /**
- * Money and account setup in one place: fund the vault, authorize autopay,
- * register an agent wallet, and manage reusable spending limits (policies).
+ * Money and accounts in one place: fund the vault, authorize autopay, and
+ * register an agent wallet. Spending limits live on their own tab (Limits).
  */
 export function VaultPage() {
   return (
@@ -19,8 +18,7 @@ export function VaultPage() {
           <AgentWalletCard />
         </div>
       )}
-      <div className="max-w-4xl space-y-6">
-        <LimitsManager />
+      <div className="max-w-4xl">
         <ProveReleaseCard />
       </div>
     </div>

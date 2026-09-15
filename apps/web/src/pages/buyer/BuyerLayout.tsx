@@ -1,14 +1,16 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { MessagesSquare, Vault, Search, Activity } from 'lucide-react';
+import { MessagesSquare, Vault, Search, Activity, SlidersHorizontal } from 'lucide-react';
 import { useRealtime } from '../../lib/useRealtime';
 
-// Chat-first: instruct your agent (Home), browse services it can pull from,
-// see everything it did (Activity), and manage money + limits (Vault & setup).
+// Chat-first: instruct your agent (Home), define the rules it must obey (Limits),
+// browse services it can pull from (Services), see everything it did (Activity),
+// and manage the money + accounts (Vault). Each concept gets its own focused tab.
 const TABS = [
   { to: '/app', label: 'Home', icon: MessagesSquare, end: true },
+  { to: '/app/limits', label: 'Limits', icon: SlidersHorizontal },
   { to: '/app/services', label: 'Services', icon: Search },
   { to: '/app/activity', label: 'Activity', icon: Activity },
-  { to: '/app/vault', label: 'Vault & setup', icon: Vault },
+  { to: '/app/vault', label: 'Vault', icon: Vault },
 ];
 
 export function BuyerLayout() {
