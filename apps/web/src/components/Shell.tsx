@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Layers, ShoppingBag, Store, ShieldCheck, Terminal } from 'lucide-react';
+import { Layers, Bot, Store, ShieldCheck, Terminal } from 'lucide-react';
 import { useSession, type Role } from '../store/session';
 import { useWalletAuth } from '../auth/useWalletAuth';
 import { DemoBanner } from './DemoBanner';
@@ -47,7 +47,7 @@ function NetworkBadge({ className = '' }: { className?: string }) {
 // `selfServe` links are shown to any signed-in user (the console itself is the
 // place you acquire the role); the rest appear only once the role is held.
 const NAV: { to: string; label: string; role: Role; icon: Icon; selfServe?: boolean }[] = [
-  { to: '/app', label: 'Buyer', role: 'BUYER', icon: ShoppingBag },
+  { to: '/app', label: 'Your agent', role: 'BUYER', icon: Bot },
   { to: '/provider', label: 'Provider', role: 'PROVIDER', icon: Store, selfServe: true },
   { to: '/admin', label: 'Admin', role: 'ADMIN', icon: ShieldCheck },
   { to: '/developers', label: 'Developer', role: 'DEVELOPER', icon: Terminal, selfServe: true },
