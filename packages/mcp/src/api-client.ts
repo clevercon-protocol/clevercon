@@ -53,7 +53,8 @@ async function toApiError(res: Response): Promise<ApiError> {
   return new ApiError(res.status, detail || `HTTP ${res.status}`);
 }
 
-const TIMEOUT_MS = 15_000;
+// pay/disburse/hire lock budget on-chain within the request, so allow ample time.
+const TIMEOUT_MS = 60_000;
 
 export function createApiClient(config: ApiConfig, fetchImpl: typeof fetch = fetch) {
   const headers = (): Record<string, string> => {

@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { VaultService } from './vault.service.js';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
+import { ApiAuthGuard } from '../auth/api-auth.guard.js';
 import { StepUpGuard } from '../auth/step-up.guard.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { parseBody } from '../auth/validate.js';
@@ -13,7 +13,7 @@ const agentWalletSchema = z.object({ publicKey: z.string().min(1) });
 
 /** The current session's vault position and on-chain deposit/withdraw. */
 @Controller('vault')
-@UseGuards(JwtAuthGuard)
+@UseGuards(ApiAuthGuard) // JWT (console) or x-api-key (agents); deposit/withdraw add StepUpGuard
 export class VaultController {
   constructor(private readonly vault: VaultService) {}
 

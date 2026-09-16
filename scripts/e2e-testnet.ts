@@ -28,6 +28,9 @@ import {
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createSpender } from '@clevercon/agent-sdk/spender';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -239,6 +242,9 @@ async function main() {
     );
   }
 
+  // 9b. the other two doors: the spender SDK and the MCP, driven with an API key.
+  await runReachStage(token, policyId, buyer);
+
   // 10. withdraw available back to the buyer wallet.
   //     First wait for the mirror to reflect on-chain finalization (locked -> ~0
   //     once complete_task unlocked the hire's remaining budget), so `available`
@@ -344,6 +350,64 @@ async function runPayStage(token: string, policyId: string, buyer: Keypair) {
     token,
   });
   await waitTaskComplete(token, dis.id, 'disburse');
+}
+
+// ── Reach stage: the spender SDK + the MCP, both driven with a scoped API key ──
+async function waitVaultIdle(token: string) {
+  for (let i = 0; i < 24; i++) {
+    const v = await api<{ locked: number }>('/vault', { token });
+    if (v.locked <= 0.001) return;
+    await sleep(5000);
+  }
+}
+
+async function runReachStage(token: string, policyId: string, buyer: Keypair) {
+  // Mint a scoped key (JWT-guarded), then use it exactly as an external agent would.
+  const keyRes = await api<{ key: string }>('/api-keys', {
+    body: { name: 'e2e-reach', quotaPerDay: 0 },
+    token,
+  });
+  const apiKey = keyRes.key;
+  record('mint API key', !!apiKey, `${apiKey.slice(0, 10)}…`);
+
+  // Wait until the delegate is free (prior spends fully finalized on-chain).
+  // All of a user's releases and locks share one delegate signer, so overlapping
+  // spends contend on its sequence number (the sequence-manager scale item).
+  await waitVaultIdle(token);
+
+  // SDK: read the budget and make a real bounded payment via createSpender.
+  const cc = createSpender({ apiKey, apiUrl: API_URL });
+  const budget = await cc.getBudget();
+  record('SDK get_budget', budget.available > 0, `available ${budget.available} USDC`);
+  const spend = await cc.pay(faucet.publicKey(), 0.3, { reason: 'sdk pay', policyId });
+  await waitTaskComplete(token, spend.id, 'SDK pay');
+
+  // MCP: spawn the server over stdio, confirm the money verbs are exposed, and
+  // read the budget through it (proves the MCP -> API key path end to end).
+  const transport = new StdioClientTransport({
+    command: 'npx',
+    args: ['tsx', path.join(__dirname, '..', 'packages', 'mcp', 'src', 'server.ts')],
+    env: { ...process.env, CLEVERCON_API_URL: API_URL, CLEVERCON_API_KEY: apiKey } as Record<
+      string,
+      string
+    >,
+  });
+  const client = new Client({ name: 'e2e', version: '1.0.0' }, { capabilities: {} });
+  try {
+    await client.connect(transport);
+    const tools = await client.listTools();
+    const names = new Set(tools.tools.map((t) => t.name));
+    const wanted = ['pay', 'disburse', 'set_limit', 'get_budget', 'get_activity', 'list_limits'];
+    record('MCP exposes money verbs', wanted.every((n) => names.has(n)), `${names.size} tools`);
+    const res = (await client.callTool({ name: 'get_budget', arguments: {} })) as {
+      content: { text: string }[];
+    };
+    const parsed = JSON.parse(res.content[0].text);
+    record('MCP get_budget', typeof parsed.balance === 'number', `balance ${parsed.balance}`);
+  } finally {
+    await client.close().catch(() => {});
+  }
+  void buyer;
 }
 
 // ── Hire stage: create a task against a live service and wait for settle ───────

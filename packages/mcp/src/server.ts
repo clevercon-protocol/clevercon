@@ -36,6 +36,20 @@ import { hireAgentHandler, hireAgentSchema } from './tools/hire-agent.js';
 import { listTasksHandler, listTasksSchema } from './tools/list-tasks.js';
 import { getTaskHandler, getTaskSchema } from './tools/get-task.js';
 import { disputeTaskHandler, disputeTaskSchema } from './tools/dispute-task.js';
+import {
+  payHandler,
+  paySchema,
+  disburseHandler,
+  disburseSchema,
+  setLimitHandler,
+  setLimitSchema,
+  listLimitsHandler,
+  listLimitsSchema,
+  getBudgetHandler,
+  getBudgetSchema,
+  getActivityHandler,
+  getActivitySchema,
+} from './tools/money.js';
 
 interface ServerConfig {
   registry_url: string;
@@ -96,6 +110,12 @@ class CleverConMCPServer {
         listTasksSchema,
         getTaskSchema,
         disputeTaskSchema,
+        paySchema,
+        disburseSchema,
+        setLimitSchema,
+        listLimitsSchema,
+        getBudgetSchema,
+        getActivitySchema,
       ],
     }));
 
@@ -134,6 +154,24 @@ class CleverConMCPServer {
 
           case 'dispute_task':
             return await disputeTaskHandler(args || {}, this.config);
+
+          case 'pay':
+            return await payHandler(args || {}, this.config);
+
+          case 'disburse':
+            return await disburseHandler(args || {}, this.config);
+
+          case 'set_limit':
+            return await setLimitHandler(args || {}, this.config);
+
+          case 'list_limits':
+            return await listLimitsHandler(args || {}, this.config);
+
+          case 'get_budget':
+            return await getBudgetHandler(args || {}, this.config);
+
+          case 'get_activity':
+            return await getActivityHandler(args || {}, this.config);
 
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);

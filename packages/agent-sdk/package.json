@@ -5,7 +5,8 @@
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./provider": "./src/provider.ts"
+    "./provider": "./src/provider.ts",
+    "./spender": "./src/spender.ts"
   },
   "scripts": {
     "example:oracle": "npx tsx examples/stellar-oracle/agent.ts",

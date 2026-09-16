@@ -4,6 +4,16 @@ export { withMpp } from './payments/mpp.js';
 export { createRegistryClient, RETRY_DELAYS_MS, HEARTBEAT_MS } from './registry.js';
 export { resolveConfig, buildManifest, AgentConfigError } from './config.js';
 export { createProvider, MAX_OUTPUT_CHARS } from './provider.js';
+export { createSpender, CleverConError } from './spender.js';
+export type {
+  SpenderOptions,
+  CleverConClient,
+  PaymentLine,
+  SpendLimit,
+  Budget,
+  Spend,
+  SavedLimit,
+} from './spender.js';
 export type {
   Provider,
   ProviderOptions,

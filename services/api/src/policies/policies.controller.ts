@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { PoliciesService } from './policies.service.js';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
+import { ApiAuthGuard } from '../auth/api-auth.guard.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { parseBody } from '../auth/validate.js';
 import type { AuthUser } from '../auth/types.js';
@@ -25,7 +25,7 @@ const proofSchema = z.object({
 
 /** The current session's spending policies. */
 @Controller('policies')
-@UseGuards(JwtAuthGuard)
+@UseGuards(ApiAuthGuard)
 export class PoliciesController {
   constructor(private readonly policies: PoliciesService) {}
 
