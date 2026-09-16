@@ -17,7 +17,7 @@ import {
 } from './queue.js';
 import { executeTask } from './executor.js';
 import { generateProof } from './prover.js';
-import { settleStep } from './settlement.js';
+import { settleStep, finalizeTaskIfComplete } from './settlement.js';
 import { deliverWebhooks } from './webhooks.js';
 import { logger } from './logger.js';
 
@@ -98,6 +98,17 @@ function main(): void {
           settled: true,
           txHash: result.txHash,
         });
+      }
+      // Finalize the on-chain task once all its releases have settled: unlocks
+      // the remaining budget and decrements the active-task count. Idempotent.
+      if (result.taskId) {
+        const fin = await finalizeTaskIfComplete(prisma, result.taskId);
+        if (fin.status === 'finalized' && result.buyerId) {
+          emitter.to(`user:${result.buyerId}`).emit('task.updated', {
+            taskId: result.taskId,
+            finalized: true,
+          });
+        }
       }
       return result;
     },

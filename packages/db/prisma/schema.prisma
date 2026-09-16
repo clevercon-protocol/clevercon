@@ -264,6 +264,7 @@ model Task {
   asset       String
   status      TaskStatus @default(DRAFT)
   vaultTaskId BigInt? // on-chain task id once locked
+  vaultFinalizedAt DateTime? // set once complete_task finalized the on-chain task (unlocks remainder)
   policyId    String?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt

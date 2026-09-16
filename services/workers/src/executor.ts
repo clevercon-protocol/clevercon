@@ -1,5 +1,6 @@
 import { type PrismaClient, StepStatus, TaskStatus } from '@clevercon/db';
 import { enqueueSettlement } from './queue.js';
+import { finalizeTaskIfComplete } from './settlement.js';
 
 export interface ExecuteResult {
   status: 'completed' | 'failed' | 'skipped';
@@ -177,5 +178,16 @@ export async function executeTask(
 
   const status = anyFailed ? TaskStatus.FAILED : TaskStatus.COMPLETED;
   await prisma.task.update({ where: { id: taskId }, data: { status } });
+  // Finalize the on-chain task if nothing settled (e.g. all steps failed), so the
+  // locked budget is unlocked instead of stranded. When steps DID release, this is
+  // a no-op here (settlement finalizes after the releases land); both are idempotent.
+  if (task.vaultTaskId) {
+    try {
+      await finalizeTaskIfComplete(prisma, taskId);
+    } catch {
+      // finalization is best-effort here; the settlement path and the on-chain
+      // stale-task escape hatch both cover it.
+    }
+  }
   return { status: anyFailed ? 'failed' : 'completed', stepsRun, buyerId: task.buyerId };
 }
