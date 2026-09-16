@@ -32,3 +32,5 @@ Thumbs.db
 # Internal working files
 .local/
 circuits/*/target/
+.env.local
+.env.*.local

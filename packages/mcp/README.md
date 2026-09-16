@@ -1,15 +1,10 @@
 # CleverCon MCP Server
 
-A Model Context Protocol (MCP) server that exposes CleverCon's marketplace rail (hire a service, track a task) and lower-level agent discovery, vault views, and payment building as MCP tools. This enables AI agents and other MCP-compatible clients to discover, hire, and pay for services on the CleverCon network without custom integration.
+Give an AI agent a **bounded, non-custodial Stellar spending account** in two minutes. This Model Context Protocol server lets any MCP client (Claude Desktop, Cursor, your own agent) discover services, pay and disburse USDC, hire services, set spending limits, and read its budget and activity, all driven with a scoped API key and bounded on-chain by the vault. The agent can spend but never overspend or pay outside your rules, and never holds funds.
 
-## Features
+## How it works
 
-- **Hire the rail**: Create tasks (hire a service) and track them through to completion via the API, authenticated with a scoped API key. This is the path most agents want.
-- **Agent Discovery**: Search and retrieve agent manifests with reputation data
-- **Vault Operations**: Read vault balances and states (view-only)
-- **Payment Building**: Generate unsigned XDR for deposits and payment releases
-- **Cost Estimation**: Get pricing estimates for capabilities
-- **Keyless payment building**: The XDR builders never hold keys or sign; they return unsigned XDR the client's wallet signs. (The hire-flow tools authenticate to the API with a scoped key, which grants no signing authority over funds.)
+Every action goes through the CleverCon API with your `x-api-key`. Spends are bounded by a policy (a per-payment cap, a rolling cap, and/or an allowlist) and released from your vault via a proof-gated on-chain path. The API key grants no signing authority over funds: it can only spend within the limits you set. Fund the vault and authorize Autopay once in the dApp; after that the agent spends autonomously within bounds.
 
 ## Installation
 
@@ -21,264 +16,64 @@ npm run build
 
 ## Configuration
 
-Set these environment variables:
+Only two variables are needed:
 
 ```bash
-# CleverCon API (the live rail used by the hire-flow tools)
 CLEVERCON_API_URL=http://localhost:4100
-CLEVERCON_API_KEY=cc_yourprefix.yoursecret   # required for hire_agent/list_tasks/get_task/dispute_task
-
-# Registry API endpoint (used by the discovery tools)
-REGISTRY_URL=http://localhost:3001
-
-# Stellar network configuration
-STELLAR_RPC_URL=https://soroban-testnet.stellar.org
-STELLAR_NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
-
-# Contract addresses
-AGENT_VAULT_CONTRACT_ID=CC4QX7ZVME7PO25GELU5VIM6BOSU7UBNJF56D46VMGBWQBBFQVIXYRZO
-USDC_SAC=CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA
+CLEVERCON_API_KEY=cc_yourprefix.yoursecret   # create one in the dApp Developer console
 ```
 
-## Usage
-
-### Running the Server
-
-```bash
-# Development mode
-npm run dev
-
-# Production mode
-npm run build
-npm start
-
-# Or use the binary directly
-./dist/server.js
-```
-
-The server runs over stdio transport by default, suitable for MCP clients.
-
-### Claude Desktop Configuration
-
-Add this to your Claude Desktop `config.json`:
+## Claude Desktop / Cursor configuration
 
 ```json
 {
   "mcpServers": {
     "clevercon": {
-      "command": "/path/to/clevercon/packages/mcp/dist/server.js",
+      "command": "npx",
+      "args": ["-y", "@clevercon/mcp"],
       "env": {
         "CLEVERCON_API_URL": "http://localhost:4100",
-        "CLEVERCON_API_KEY": "cc_yourprefix.yoursecret",
-        "REGISTRY_URL": "https://registry.clevercon.net",
-        "STELLAR_RPC_URL": "https://soroban-testnet.stellar.org",
-        "AGENT_VAULT_CONTRACT_ID": "CC4QX7ZVME7PO25GELU5VIM6BOSU7UBNJF56D46VMGBWQBBFQVIXYRZO",
-        "USDC_SAC": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
+        "CLEVERCON_API_KEY": "cc_yourprefix.yoursecret"
       }
     }
   }
 }
 ```
 
-## Available Tools
+## Tools
 
-### Hire-flow tools (the live rail)
+**Discover**
+- `search_services` - browse the curated directory (filter by text/category, sort by recent/rating/price).
+- `get_service` - details for one service by id.
 
-These drive the CleverCon API and require `CLEVERCON_API_KEY`.
+**Spend** (bounded by a policy; released from the vault)
+- `pay` - pay a single address. `{ payee, amount, reason?, policyId? }`
+- `disburse` - pay many addresses in one instruction. `{ lines: [{ payee, amount, reason? }], policyId? }`
+- `hire_agent` - hire a registered service. `{ title, mode, budget, serviceId?, policyId? }`
 
-#### `hire_agent`
+**Limits**
+- `set_limit` - create a reusable spending limit; returns its `policyId`. `{ perPaymentCeilingUsdc?, rollingCapUsdc?, rollingWindowSecs?, allowlist?, isPrivate? }`
+- `list_limits` - list saved limits.
 
-Create a task (hire a service). `DIRECT` pays a chosen `serviceId`; `SEARCH` finds and pays one service; `COMPOSE` runs a multi-service job.
+**State**
+- `get_budget` - vault position: balance, available, locked.
+- `get_activity` - recent jobs and payments, newest first.
+- `list_tasks` / `get_task` - task history and detail.
+- `dispute_task` - raise a dispute on a task.
 
-**Parameters:**
-- `title` (required): human-readable task title
-- `mode` (required): `DIRECT` | `SEARCH` | `COMPOSE`
-- `budget` (required): max spend in USDC
-- `serviceId` (required for `DIRECT`), `policyId`, `description` (optional)
+If you omit `policyId` on `pay`/`disburse`, a tight limit is derived from the payment itself (allowlist = the payees, cap = the largest line), so every spend is bounded by default.
 
-```json
-{ "title": "Summarize XLM news", "mode": "SEARCH", "budget": 1.0 }
-```
-
-#### `list_tasks`
-
-List the caller's tasks, optionally filtered by `status` (`DRAFT`, `PENDING`, `RUNNING`, `COMPLETED`, `CANCELLED`, `DISPUTED`, `FAILED`), with `limit`/`offset`.
-
-#### `get_task`
-
-Fetch one of the caller's tasks by `id`, including its steps and their outputs.
-
-#### `dispute_task`
-
-Raise a dispute on one of the caller's tasks. Parameters: `id` (required), `reason` (optional).
-
-### Discovery and vault tools
-
-### `search_agents`
-
-Search for agents by capability. Backed by the registry's `GET /agents?capabilities=<cap>` route.
-
-**Parameters:**
-- `capability` (required): Capability to search for
-- `limit` (optional): Maximum results (default: 10)
-
-**Example:**
-```json
-{
-  "capability": "web-scraping",
-  "limit": 5
-}
-```
-
-### `get_agent`
-
-Get detailed information about a specific agent.
-
-**Parameters:**
-- `id` (required): Agent ID to look up
-
-**Example:**
-```json
-{
-  "id": "web-intel-001"
-}
-```
-
-### `get_vault_balance`
-
-Read vault balance and state for a Stellar address.
-
-**Parameters:**
-- `address` (required): Stellar address to check
-
-**Example:**
-```json
-{
-  "address": "GBXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-}
-```
-
-### `build_deposit`
-
-Build unsigned XDR for a vault deposit transaction.
-
-**Parameters:**
-- `address` (required): Stellar address of depositor
-- `amount` (required): Amount in USDC
-- `asset` (optional): Asset type (default: "USDC")
-
-**Example:**
-```json
-{
-  "address": "GBXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-  "amount": 10.5
-}
-```
-
-### `build_release`
-
-Build unsigned XDR for a payment release transaction.
-
-**Parameters:**
-- `orchestrator_address` (required): Orchestrator's Stellar address
-- `task_id` (required): Task ID
-- `step_id` (required): Step ID  
-- `amount` (required): Amount in USDC
-- `asset` (optional): Asset type (default: "USDC")
-
-**Example:**
-```json
-{
-  "orchestrator_address": "GBXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-  "task_id": "12345",
-  "step_id": "1",
-  "amount": 0.05
-}
-```
-
-### `estimate_cost`
-
-Get pricing estimates for a capability.
-
-**Parameters:**
-- `capability` (required): Capability to estimate cost for
-
-**Example:**
-```json
-{
-  "capability": "data-analysis"
-}
-```
-
-## Manual Testing
-
-Here's a smoke test transcript you can run:
+## Testing
 
 ```bash
-# Start the server
-npm run dev
-
-# Test with our smoke test script (includes MCP handshake)
-npm test
+npm run dev   # run over stdio
+npm test      # smoke test (MCP handshake + tools/list)
 ```
 
-Expected response should list all 10 tools: the hire-flow tools `hire_agent`, `list_tasks`, `get_task`, `dispute_task`, plus the discovery/vault tools `search_agents`, `get_agent`, `get_vault_balance`, `build_deposit`, `build_release`, and `estimate_cost`.
+## Security model
 
-**Note**: Direct JSON-RPC requests require proper MCP initialization handshake first.
+- **Non-custodial**: the server never holds keys or funds. Spends are released from your vault by a bounded delegate; the API key cannot move funds outside your policy.
+- **Bounded**: every spend is checked against a policy; the vault caps the total on-chain.
+- **Metered**: API-key usage is metered and can carry a daily quota.
 
-### Test Individual Tools
-
-Use the smoke test script which properly handles MCP initialization:
-
-```bash
-npm test
-```
-
-This tests:
-- Tool discovery via `tools/list`
-- Agent search functionality
-- Cost estimation functionality
-- Proper error handling for network failures
-
-## Security Model
-
-- **Keyless**: The server never holds private keys or signs transactions
-- **Read-only vault operations**: Balance queries are view-only via Soroban RPC
-- **Unsigned XDR only**: Payment tools return unsigned transaction XDR that must be signed by the client's wallet
-- **No custody**: Maintains CleverCon's non-custodial guarantee
-
-## Error Handling
-
-All tools return structured errors when:
-- Registry or RPC endpoints are unreachable
-- Invalid parameters are provided
-- Agents or vault states are not found
-- Transaction building fails
-
-Errors include clear messages and preserve the original request context.
-
-## Development
-
-```bash
-# Install dependencies
-npm install
-
-# Run in development mode
-npm run dev
-
-# Build for production
-npm run build
-
-# Run tests (when available)
-npm test
-```
-
-## Integration with CleverCon
-
-This MCP server integrates with:
-- **Registry API** (`packages/registry`) for agent discovery and search
-- **Agent Vault Client** patterns from `packages/orchestrator` for vault operations
-- **Common types** (`packages/common`) for consistent data structures
-- **Soroban RPC** for direct vault contract interaction
-
-See the main [CleverCon README](../../README.md) for complete system architecture.
+See the main [CleverCon README](../../README.md) for the full architecture.
