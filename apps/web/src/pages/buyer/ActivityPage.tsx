@@ -35,7 +35,7 @@ function Row({ item }: { item: ActivityItem }) {
   const meta = KIND_META[item.kind];
   const Icon = meta.icon;
   const inner = (
-    <div className="flex items-start gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 transition-colors hover:border-white/[0.12]">
+    <div className="flex items-start gap-3 rounded-xl bg-white/[0.04] p-4 transition-colors hover:bg-white/[0.06]">
       <div className={`mt-0.5 ${meta.tint}`}>
         <Icon size={16} />
       </div>

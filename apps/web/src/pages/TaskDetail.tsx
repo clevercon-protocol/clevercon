@@ -28,7 +28,7 @@ function DisputeButton({ taskId }: { taskId: string }) {
     <button
       onClick={() => raise.mutate()}
       disabled={raise.isPending}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs text-slate-300 hover:bg-white/10 disabled:opacity-50"
+      className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2.5 py-1 text-xs text-slate-300 hover:bg-white/10 disabled:opacity-50"
       title="Raise a dispute for an operator to review"
     >
       <Flag size={12} /> {raise.isPending ? 'Raising…' : 'Raise dispute'}
@@ -105,14 +105,14 @@ export function TaskDetail() {
               ['Spent', `$${task.spent.toFixed(2)}`],
               ['Steps', `${task.completedSteps}/${task.stepCount}`],
             ].map(([label, value]) => (
-              <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+              <div key={label} className="rounded-2xl bg-white/[0.04] p-4">
                 <div className="text-xl font-bold">{value}</div>
                 <div className="text-xs text-slate-500">{label}</div>
               </div>
             ))}
           </div>
 
-          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+          <div className="rounded-2xl bg-white/[0.04] p-6">
             <div className="flex items-center gap-2 text-slate-300">
               <ListChecks size={18} className="text-violet-300" />
               <h2 className="font-semibold">Steps</h2>
@@ -126,7 +126,7 @@ export function TaskDetail() {
                 {task.steps.map((s) => (
                   <div
                     key={s.index}
-                    className="rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+                    className="rounded-xl bg-white/[0.04] p-3 text-sm"
                   >
                     <div className="flex items-center justify-between">
                       <div className="min-w-0">
@@ -155,7 +155,7 @@ export function TaskDetail() {
             )}
           </div>
 
-          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+          <div className="rounded-2xl bg-white/[0.04] p-6">
             <div className="flex items-center gap-2 text-slate-300">
               <ReceiptIcon size={18} className="text-violet-300" />
               <h2 className="font-semibold">Receipts</h2>
@@ -169,7 +169,7 @@ export function TaskDetail() {
                 {task.receipts.map((r) => (
                   <div
                     key={r.id}
-                    className="rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+                    className="rounded-xl bg-white/[0.04] p-3 text-sm"
                   >
                     <div className="flex items-center justify-between">
                       <div className="min-w-0">

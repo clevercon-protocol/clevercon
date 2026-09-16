@@ -391,7 +391,7 @@ export function CommandChat() {
           </div>
 
           {action && (
-            <div className="mt-3 rounded-xl border border-line bg-surface p-3">
+            <div className="mt-3 rounded-xl bg-surface-2 p-3">
               {action === 'pay' && (
                 <div className="grid gap-2 sm:grid-cols-[1fr_8rem]">
                   <input
@@ -454,7 +454,7 @@ export function CommandChat() {
                         onClick={() =>
                           setLines((ls) => (ls.length > 1 ? ls.filter((_, j) => j !== i) : ls))
                         }
-                        className="rounded-lg border border-line-strong px-2 text-slate-500 hover:text-red-300"
+                        className="rounded-lg bg-white/[0.05] px-2 text-slate-500 hover:text-red-300"
                         aria-label="Remove row"
                       >
                         <Trash2 size={14} />
@@ -503,7 +503,7 @@ export function CommandChat() {
                   <select
                     value={limitChoice}
                     onChange={(e) => setLimitChoice(e.target.value)}
-                    className="min-w-[15rem] flex-1 rounded-lg border border-line-strong bg-black/25 px-2 py-1.5 text-sm text-slate-100 outline-none"
+                    className="min-w-[15rem] flex-1 rounded-lg bg-black/30 px-2 py-1.5 text-sm text-slate-100 outline-none"
                     aria-label="Limit for this instruction"
                   >
                     <option value="default">
@@ -529,7 +529,7 @@ export function CommandChat() {
                 </div>
 
                 {limitChoice === 'custom' && (
-                  <div className="mt-3 rounded-lg border border-line bg-black/20 p-3">
+                  <div className="mt-3 rounded-lg bg-black/20 p-3">
                     <LimitsBuilder value={customDraft} onChange={setCustomDraft} />
                     <p className="mt-3 text-[11px] text-slate-600">
                       This one-off limit is saved and bound to this task when you approve. To reuse
@@ -585,7 +585,7 @@ function ChatBubble({
   if (msg.role === 'agent') {
     return (
       <div className="flex justify-start">
-        <div className="max-w-[90%] rounded-2xl rounded-tl-sm border border-line bg-surface px-3 py-2 text-sm text-slate-300">
+        <div className="max-w-[90%] rounded-2xl rounded-tl-sm bg-surface-2 px-3 py-2 text-sm text-slate-300">
           {msg.text}
         </div>
       </div>
@@ -633,7 +633,7 @@ function ChatBubble({
             </button>
             <button
               onClick={() => onCancel(msg.id)}
-              className="rounded-lg border border-line-strong px-3 py-1.5 text-xs text-slate-300 hover:bg-white/10"
+              className="rounded-lg bg-white/[0.05] px-3 py-1.5 text-xs text-slate-300 hover:bg-white/10"
             >
               <X size={13} className="mr-1 inline" /> Cancel
             </button>
@@ -680,7 +680,7 @@ export function RecentActivity() {
             <Link
               key={t.id}
               to={`/app/tasks/${t.id}`}
-              className="flex items-center justify-between rounded-xl border border-line bg-surface p-3 transition-colors hover:border-line-strong hover:bg-surface-2"
+              className="flex items-center justify-between rounded-xl bg-surface p-3 transition-colors hover:bg-surface-2"
             >
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium">{t.title}</div>

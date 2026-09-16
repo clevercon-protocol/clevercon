@@ -40,7 +40,7 @@ function WebhooksCard() {
   });
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
       <div className="flex items-center gap-2 text-slate-300">
         <Webhook size={18} className="text-violet-300" />
         <h2 className="font-semibold">Webhooks</h2>
@@ -83,7 +83,7 @@ function WebhooksCard() {
             {hooks.map((h: WebhookRow) => (
               <div
                 key={h.id}
-                className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+                className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3 text-sm"
               >
                 <div className="min-w-0">
                   <div className="truncate font-mono text-xs text-slate-300">{h.url}</div>
@@ -94,7 +94,7 @@ function WebhooksCard() {
                 <button
                   onClick={() => del.mutate(h.id)}
                   disabled={del.isPending}
-                  className="rounded-lg border border-white/10 px-2.5 py-1 text-xs text-slate-400 hover:bg-white/10 disabled:opacity-50"
+                  className="rounded-lg bg-white/[0.05] px-2.5 py-1 text-xs text-slate-400 hover:bg-white/10 disabled:opacity-50"
                 >
                   Delete
                 </button>
@@ -220,7 +220,7 @@ function ApiKeys() {
   const active = (k: ApiKey) => !k.revokedAt;
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
       <div className="flex items-center gap-2 text-slate-300">
         <KeyRound size={18} className="text-violet-300" />
         <h2 className="font-semibold">API keys</h2>
@@ -240,7 +240,7 @@ function ApiKeys() {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Key name (e.g. prod-agent)"
-          className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
+          className="flex-1 rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
         />
         <input
           value={quota}
@@ -248,7 +248,7 @@ function ApiKeys() {
           inputMode="numeric"
           placeholder="Daily cap (0 = unlimited)"
           title="Maximum calls per UTC day. Leave blank or 0 for unlimited."
-          className="w-44 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
+          className="w-44 rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
         />
         <button
           type="submit"
@@ -278,7 +278,7 @@ function ApiKeys() {
         {keys.map((k) => (
           <div
             key={k.id}
-            className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+            className="flex items-center justify-between rounded-xl bg-white/[0.04] p-3 text-sm"
           >
             <div className="min-w-0">
               <div className="font-medium">
@@ -364,7 +364,7 @@ export function Developer() {
 function McpConnectCard() {
   const cfg = mcpServerConfig(config.apiUrl, 'cc_yourprefix.yoursecret');
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
       <div className="flex items-center gap-2 text-slate-300">
         <Terminal size={18} className="text-violet-300" />
         <h2 className="font-semibold">Connect an agent over MCP</h2>

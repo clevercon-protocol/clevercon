@@ -316,7 +316,7 @@ export function VaultCard() {
               href={explorerContract(contract)}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 font-mono text-[11px] text-slate-400 hover:text-white"
+              className="inline-flex items-center gap-1 rounded-lg bg-white/[0.05] px-2 py-1 font-mono text-[11px] text-slate-400 hover:text-white"
               title={contract}
             >
               {contract.slice(0, 4)}…{contract.slice(-4)} <ExternalLink size={11} />
@@ -331,7 +331,7 @@ export function VaultCard() {
             <div
               key={label}
               title={VAULT_HINTS[label]}
-              className="cursor-help rounded-xl border border-white/[0.08] bg-black/20 p-3 text-center"
+              className="cursor-help rounded-xl bg-black/25 p-3 text-center"
             >
               <div className={`text-lg font-bold ${tint}`}>
                 {isLoading ? '…' : `$${v.toFixed(2)}`}
@@ -544,7 +544,7 @@ export function TasksCard({ limit }: { limit?: number }) {
             <Link
               key={t.id}
               to={`/app/tasks/${t.id}`}
-              className="flex items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 hover:border-violet-500/40 hover:bg-white/[0.04] transition-colors"
+              className="flex items-center justify-between rounded-xl bg-white/[0.03] p-3 hover:bg-white/[0.06] transition-colors"
             >
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium">{t.title}</div>
@@ -670,7 +670,7 @@ export function PoliciesCard() {
           {policies.map((p) => (
             <div
               key={p.id}
-              className="flex items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 text-sm"
+              className="flex items-center justify-between rounded-xl bg-white/[0.04] p-3 text-sm"
             >
               <div>
                 <span className="inline-flex items-center gap-1.5 text-slate-200">
@@ -795,7 +795,7 @@ export function ProveReleaseCard() {
         )}
         {prove.error && <p className="mt-2 text-sm text-red-400">{readError(prove.error)}</p>}
         {proofId && (
-          <div className="mt-4 flex items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 text-sm">
+          <div className="mt-4 flex items-center justify-between rounded-xl bg-white/[0.04] p-3 text-sm">
             <span className="text-slate-400">Proof status</span>
             <span
               className={`font-medium ${PROOF_TINT[status?.status ?? 'REQUESTED'] ?? 'text-slate-300'}`}
@@ -811,7 +811,7 @@ export function ProveReleaseCard() {
               What this payment reveals
             </p>
             <div className="mt-2 grid gap-3 sm:grid-cols-2">
-              <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+              <div className="rounded-xl bg-white/[0.04] p-3">
                 <div className="flex items-center gap-2 text-sm font-medium text-slate-300">
                   <Eye size={14} className="text-slate-400" /> On the public ledger
                 </div>
@@ -948,7 +948,7 @@ export function Marketplace() {
             <Link
               key={s.id}
               to={`/app/marketplace/${s.id}`}
-              className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-4 hover:border-violet-500/40 hover:bg-white/[0.04] transition-colors"
+              className="rounded-xl bg-white/[0.03] p-4 hover:bg-white/[0.06] transition-colors"
             >
               <div className="flex items-center justify-between">
                 <span className="font-medium">{s.name}</span>
@@ -979,7 +979,7 @@ export function Marketplace() {
                 type="button"
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={!hasPrev || isFetching}
-                className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-slate-200 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+                className="rounded-lg bg-white/[0.05] px-3 py-1.5 text-slate-200 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Previous
               </button>
@@ -987,7 +987,7 @@ export function Marketplace() {
                 type="button"
                 onClick={() => setPage((p) => p + 1)}
                 disabled={!hasNext || isFetching}
-                className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-slate-200 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+                className="rounded-lg bg-white/[0.05] px-3 py-1.5 text-slate-200 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Next
               </button>
@@ -1260,7 +1260,7 @@ export function AgentWalletCard() {
           funds.
         </p>
         {registered ? (
-          <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] p-3">
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3">
             <span className="font-mono text-xs text-slate-300">
               {registered.slice(0, 6)}…{registered.slice(-4)}
             </span>

@@ -109,14 +109,14 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
     !reg.isPending;
 
   const field =
-    'w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40';
+    'w-full rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40';
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
         if (canSubmit) reg.mutate();
       }}
-      className="mt-4 space-y-2 rounded-xl border border-white/10 bg-white/[0.02] p-4"
+      className="mt-4 space-y-2 rounded-xl bg-white/[0.04] p-4"
     >
       <div className="grid sm:grid-cols-2 gap-2">
         <input
@@ -193,7 +193,7 @@ function ServicesCard() {
     },
   });
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-slate-300">
           <Boxes size={18} className="text-violet-300" />
@@ -216,7 +216,7 @@ function ServicesCard() {
         {services.map((s) => (
           <div
             key={s.id}
-            className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3"
+            className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3"
           >
             <div className="min-w-0">
               <div className="truncate font-medium">{s.name}</div>
@@ -241,7 +241,7 @@ function ServicesCard() {
               <button
                 onClick={() => toggle.mutate({ id: s.id, active: s.status !== 'ACTIVE' })}
                 disabled={toggle.isPending}
-                className="shrink-0 rounded-lg border border-white/10 px-2.5 py-1 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
+                className="shrink-0 rounded-lg bg-white/[0.05] px-2.5 py-1 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
               >
                 {s.status === 'ACTIVE' ? 'Pause' : 'Activate'}
               </button>
@@ -263,7 +263,7 @@ function JobsCard() {
     queryFn: getProviderJobs,
   });
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
       <h2 className="font-semibold text-slate-300">Incoming jobs</h2>
       {isLoading && <p className="mt-4 text-sm text-slate-500">Loading jobs…</p>}
       {error && <p className="mt-4 text-sm text-red-400">Could not load jobs.</p>}
@@ -274,7 +274,7 @@ function JobsCard() {
         {jobs.map((j) => (
           <div
             key={j.id}
-            className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+            className="flex items-center justify-between rounded-xl bg-white/[0.04] p-3 text-sm"
           >
             <div className="min-w-0">
               <div className="truncate font-medium">{j.action}</div>

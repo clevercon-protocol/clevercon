@@ -71,7 +71,7 @@ export function LimitsBuilder({ value, onChange }: { value: Draft; onChange: (d:
             <select
               value={value.rollingWindow}
               onChange={(e) => set({ rollingWindow: e.target.value as keyof typeof WINDOWS })}
-              className="w-40 rounded-lg border border-white/10 bg-black/30 px-2 py-2 text-sm text-slate-100 outline-none"
+              className="w-40 rounded-lg bg-black/30 px-2 py-2 text-sm text-slate-100 outline-none"
               aria-label="Rolling window"
             >
               {Object.entries(WINDOWS).map(([k, w]) => (
@@ -100,7 +100,7 @@ export function LimitsBuilder({ value, onChange }: { value: Draft; onChange: (d:
             type="button"
             onClick={addAddr}
             disabled={!isStellarAddr(addr)}
-            className="rounded-lg border border-white/10 px-3 text-slate-300 hover:bg-white/10 disabled:opacity-40"
+            className="rounded-lg bg-white/[0.05] px-3 text-slate-300 hover:bg-white/10 disabled:opacity-40"
             aria-label="Add payee"
           >
             <Plus size={15} />
@@ -116,7 +116,7 @@ export function LimitsBuilder({ value, onChange }: { value: Draft; onChange: (d:
             {value.allowlist.map((a) => (
               <span
                 key={a}
-                className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 font-mono text-[11px] text-slate-300"
+                className="inline-flex items-center gap-1 rounded-lg bg-white/[0.05] px-2 py-1 font-mono text-[11px] text-slate-300"
               >
                 {a.slice(0, 6)}…{a.slice(-4)}
                 <button
@@ -132,7 +132,7 @@ export function LimitsBuilder({ value, onChange }: { value: Draft; onChange: (d:
         )}
       </div>
 
-      <label className="flex items-start gap-2 rounded-lg border border-white/[0.08] bg-white/[0.02] p-3 text-sm text-slate-300">
+      <label className="flex items-start gap-2 rounded-lg bg-white/[0.04] p-3 text-sm text-slate-300">
         <input
           type="checkbox"
           checked={value.isPrivate}

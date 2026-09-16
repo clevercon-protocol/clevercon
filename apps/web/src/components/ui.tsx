@@ -11,10 +11,11 @@ export const controls = {
   primary:
     'inline-flex items-center justify-center gap-1.5 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-violet-950/40 hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50 transition-colors',
   secondary:
-    'inline-flex items-center justify-center gap-1.5 rounded-xl border border-line-strong bg-white/[0.02] px-4 py-2 text-sm font-medium text-slate-300 hover:bg-white/[0.06] hover:text-white transition-colors',
-  chip: 'inline-flex items-center gap-1.5 rounded-lg border border-line-strong bg-white/[0.02] px-3 py-1.5 text-sm text-slate-300 hover:border-violet-500/40 hover:text-white transition-colors',
+    'inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/[0.05] px-4 py-2 text-sm font-medium text-slate-300 hover:bg-white/[0.1] hover:text-white transition-colors',
+  chip: 'inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-3 py-1.5 text-sm text-slate-300 hover:bg-white/[0.09] hover:text-white transition-colors',
+  // A recessed well: darker fill + inset shadow instead of a border. Violet ring on focus.
   field:
-    'w-full rounded-lg border border-line-strong bg-black/25 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/15 transition-colors',
+    'w-full rounded-lg bg-black/30 px-3 py-2 text-sm text-slate-100 shadow-[inset_0_1px_2px_rgba(0,0,0,0.35)] outline-none placeholder:text-slate-600 focus:ring-2 focus:ring-violet-500/40 transition-shadow',
 };
 
 /** App button with variants. Falls through any native button props. */
@@ -77,10 +78,8 @@ export function Card({
 }) {
   return (
     <div
-      className={`rounded-2xl border border-line bg-surface shadow-card ${
-        interactive
-          ? 'transition-colors hover:border-line-strong hover:bg-surface-2'
-          : ''
+      className={`rounded-2xl bg-surface shadow-card ${
+        interactive ? 'transition-colors hover:bg-surface-2' : ''
       } ${className}`}
     >
       {children}
@@ -101,7 +100,7 @@ export function CardHeader({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
+    <div className="flex items-start justify-between gap-3 px-5 pt-5">
       <div className="flex items-center gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300 ring-1 ring-inset ring-violet-500/15">
           <Icon size={17} />
@@ -155,7 +154,7 @@ export function StatCard({
 /** Muted placeholder for empty lists. */
 export function EmptyState({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-xl border border-dashed border-line-strong bg-white/[0.01] px-4 py-8 text-center text-sm text-slate-500">
+    <div className="rounded-xl bg-black/20 px-4 py-8 text-center text-sm text-slate-500">
       {children}
     </div>
   );
@@ -166,10 +165,7 @@ export function Loading({ rows = 3 }: { rows?: number }) {
   return (
     <div className="space-y-2" role="status" aria-busy="true" aria-label="Loading">
       {Array.from({ length: rows }).map((_, i) => (
-        <div
-          key={i}
-          className="h-12 animate-pulse rounded-xl border border-line bg-white/[0.03]"
-        />
+        <div key={i} className="h-12 animate-pulse rounded-xl bg-white/[0.05]" />
       ))}
     </div>
   );

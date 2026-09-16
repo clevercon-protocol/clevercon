@@ -33,7 +33,7 @@ function DisputesCard() {
   });
   const open = disputes.filter((d) => d.status === 'OPEN');
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
       <h2 className="font-semibold text-slate-300">Disputes</h2>
       {isLoading && (
         <div className="mt-4">
@@ -52,7 +52,7 @@ function DisputesCard() {
         {disputes.map((d) => (
           <div
             key={d.id}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3 text-sm"
           >
             <div className="min-w-0">
               <div className="truncate font-medium">{d.taskTitle}</div>
@@ -76,7 +76,7 @@ function DisputesCard() {
                   <button
                     onClick={() => act.mutate({ id: d.id, reject: true, budget: d.budget })}
                     disabled={act.isPending}
-                    className="rounded-lg border border-white/10 px-2.5 py-1 text-xs text-slate-400 hover:bg-white/10 disabled:opacity-50"
+                    className="rounded-lg bg-white/[0.05] px-2.5 py-1 text-xs text-slate-400 hover:bg-white/10 disabled:opacity-50"
                   >
                     Reject
                   </button>
@@ -115,7 +115,7 @@ function ServicesModerationCard() {
     },
   });
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
       <h2 className="font-semibold text-slate-300">Services (moderation)</h2>
       {isLoading && (
         <div className="mt-4">
@@ -136,7 +136,7 @@ function ServicesModerationCard() {
           return (
             <div
               key={s.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3 text-sm"
             >
               <div className="min-w-0">
                 <div className="truncate font-medium">{s.name}</div>
@@ -151,7 +151,7 @@ function ServicesModerationCard() {
                 <button
                   onClick={() => moderate.mutate({ id: s.id, active: !active })}
                   disabled={moderate.isPending}
-                  className="rounded-lg border border-white/10 px-2.5 py-1 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
+                  className="rounded-lg bg-white/[0.05] px-2.5 py-1 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
                 >
                   {active ? 'Take down' : 'Restore'}
                 </button>
@@ -177,7 +177,7 @@ function FeesCard() {
   });
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
       <div className="flex items-center gap-2 text-slate-300">
         <Percent size={16} className="text-violet-300" />
         <h2 className="font-semibold">Protocol fee</h2>
@@ -247,7 +247,7 @@ function StatTiles() {
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
       {tiles.map((t) => (
-        <div key={t.label} className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+        <div key={t.label} className="rounded-2xl bg-white/[0.04] p-4">
           <t.icon size={16} className="text-violet-300" />
           <div className="mt-2 text-xl font-bold">{t.value}</div>
           <div className="text-xs text-slate-500">{t.label}</div>
@@ -262,7 +262,7 @@ function ActivationFunnelCard() {
   const steps = data?.steps ?? [];
   const top = steps[0]?.count ?? 0;
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
       <div className="flex items-center gap-2 text-slate-300">
         <Rocket size={18} className="text-violet-300" />
         <h2 className="font-semibold">Activation funnel</h2>
@@ -318,7 +318,7 @@ function UsersCard() {
   });
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
       <h2 className="font-semibold text-slate-300">Users &amp; roles</h2>
       {isLoading && (
         <div className="mt-4">
@@ -337,7 +337,7 @@ function UsersCard() {
         {users.map((u) => (
           <div
             key={u.id}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3 text-sm"
           >
             <div className="min-w-0">
               <div className="font-mono text-xs text-slate-400">

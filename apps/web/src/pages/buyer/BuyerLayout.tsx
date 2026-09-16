@@ -24,7 +24,7 @@ export function BuyerLayout() {
         subtitle="Put an AI agent in charge of your money, within private limits it cannot break."
       />
 
-      <nav className="flex gap-1 overflow-x-auto rounded-xl border border-line bg-surface p-1">
+      <nav className="flex gap-1 overflow-x-auto rounded-xl bg-surface-2 p-1">
         {TABS.map((t) => (
           <NavLink
             key={t.to}
