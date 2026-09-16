@@ -24,7 +24,7 @@ import { useSession } from '../../store/session';
 import { getVault } from '../../lib/vault';
 import { getServices } from '../../lib/services';
 import { getPolicies, createPolicy, type Policy } from '../../lib/policies';
-import { getTasks, createTask, createPayment, type HireMode } from '../../lib/tasks';
+import { getTasks, createTask, createPayment, planInstruction, type HireMode } from '../../lib/tasks';
 import { explorerAccount } from '../../lib/stellar';
 import { Card, CardHeader, EmptyState, controls } from '../../components/ui';
 import { LimitsBuilder } from './limits';
@@ -169,6 +169,9 @@ export function CommandChat() {
   const [limitChoice, setLimitChoice] = useState<LimitChoice>('default');
   const [customDraft, setCustomDraft] = useState<Draft>(emptyDraft());
 
+  // Natural-language box: the agent parses it into a plan you then approve.
+  const [nl, setNl] = useState('');
+
   const { data: servicePage } = useQuery({
     queryKey: ['services', { picker: true }],
     queryFn: () => getServices({ limit: 100 }),
@@ -221,6 +224,68 @@ export function CommandChat() {
       qc.invalidateQueries({ queryKey: ['vault'] });
     },
   });
+
+  const planMut = useMutation({ mutationFn: (instruction: string) => planInstruction(instruction) });
+
+  // Send the typed instruction to the agent; it returns a plan you then approve.
+  async function askAgent() {
+    const instruction = nl.trim();
+    if (!instruction) return;
+    push({ id: nextId(), role: 'user', text: instruction });
+    setNl('');
+    let result: Awaited<ReturnType<typeof planInstruction>>;
+    try {
+      result = await planMut.mutateAsync(instruction);
+    } catch (e) {
+      push({
+        id: nextId(),
+        role: 'agent',
+        ok: false,
+        text: e instanceof Error ? e.message : 'The agent could not respond.',
+      });
+      return;
+    }
+    const bind = currentBind();
+    if (result.kind === 'hire' && result.service) {
+      push({
+        id: nextId(),
+        role: 'plan',
+        status: 'pending',
+        plan: {
+          kind: 'hire',
+          summary: `Hire ${result.service.name} (budget $${result.budget.toFixed(2)})`,
+          lines: [{ payee: result.service.name, amount: result.budget, reason: 'service' }],
+          limit: applied,
+          bind,
+          serviceName: result.service.name,
+          serviceId: result.service.id,
+        },
+      });
+    } else if ((result.kind === 'pay' || result.kind === 'disburse') && result.lines.length) {
+      const lines = result.lines.map((l) => ({ payee: l.payee, amount: l.amount, reason: l.reason }));
+      const total = lines.reduce((s, l) => s + l.amount, 0);
+      push({
+        id: nextId(),
+        role: 'plan',
+        status: 'pending',
+        plan: {
+          kind: result.kind,
+          summary:
+            result.kind === 'pay'
+              ? `Pay ${short(lines[0].payee)} $${lines[0].amount.toFixed(2)}`
+              : `Disburse $${total.toFixed(2)} to ${lines.length} recipient${lines.length > 1 ? 's' : ''}`,
+          lines,
+          limit: applied,
+          bind,
+        },
+      });
+    } else {
+      push({ id: nextId(), role: 'agent', ok: false, text: result.rationale });
+    }
+    if (result.warnings.length) {
+      push({ id: nextId(), role: 'agent', text: result.warnings.join(' ') });
+    }
+  }
 
   function resetComposer() {
     setAction(null);
@@ -398,6 +463,27 @@ export function CommandChat() {
 
         {/* Composer */}
         <div className="mt-4 border-t border-line pt-4">
+          {/* Natural language: the agent parses it into a plan you approve. */}
+          <div className="flex gap-2">
+            <input
+              value={nl}
+              onChange={(e) => setNl(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), askAgent())}
+              placeholder="Tell your agent in words, e.g. pay G… $5 for design, or split $9 between two addresses"
+              className={inputCls}
+            />
+            <button
+              onClick={askAgent}
+              disabled={!nl.trim() || planMut.isPending}
+              className={primaryBtn}
+            >
+              {planMut.isPending ? 'Thinking…' : 'Ask agent'}
+            </button>
+          </div>
+          <div className="mb-2 mt-2 text-[11px] uppercase tracking-wider text-slate-600">
+            or use a quick action
+          </div>
+
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => setAction('pay')}

@@ -187,6 +187,35 @@ export async function createPayment(input: CreatePaymentInput): Promise<Task> {
   return apiPost<Task>('/payments', input);
 }
 
+export interface AgentPlanResult {
+  kind: 'pay' | 'disburse' | 'hire' | 'none';
+  lines: PaymentLineInput[];
+  service: { id: string; name: string; pricePerCall: number } | null;
+  budget: number;
+  rationale: string;
+  warnings: string[];
+  source: 'llm' | 'fallback';
+}
+
+/**
+ * Parse a natural-language instruction into a structured, pre-validated plan.
+ * The agent only proposes; the human approves and the vault enforces limits.
+ */
+export async function planInstruction(instruction: string): Promise<AgentPlanResult> {
+  if (isDemo()) {
+    return {
+      kind: 'none',
+      lines: [],
+      service: null,
+      budget: 0,
+      rationale: 'Connect a wallet (full mode) to use the agent.',
+      warnings: [],
+      source: 'fallback',
+    };
+  }
+  return apiPost<AgentPlanResult>('/agent/plan', { instruction });
+}
+
 /** Raise a dispute on one of the caller's tasks. */
 export async function raiseDispute(
   taskId: string,
