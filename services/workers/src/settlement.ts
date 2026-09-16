@@ -8,7 +8,14 @@ import {
   Address,
   type xdr,
 } from '@stellar/stellar-sdk';
-import { PaymentMethod, PaymentStatus, decryptSecret, type PrismaClient } from '@clevercon/db';
+import {
+  PaymentMethod,
+  PaymentStatus,
+  TaskMode,
+  TaskStatus,
+  decryptSecret,
+  type PrismaClient,
+} from '@clevercon/db';
 import { buildBindingProof, generateNullifier } from '@clevercon/common';
 import { logger } from './logger.js';
 
@@ -133,8 +140,9 @@ export async function settleStep(
     return { status: 'skipped', reason: 'task not locked on-chain', buyerId };
   if (!step.task.policy?.commitment)
     return { status: 'skipped', reason: 'task has no policy commitment', buyerId };
-  if (!step.service?.stellarAddress)
-    return { status: 'skipped', reason: 'step has no payee', buyerId };
+  // A direct PAY/DISBURSE step names its own payee; a hire step pays its service.
+  const payee = step.payee ?? step.service?.stellarAddress ?? null;
+  if (!payee) return { status: 'skipped', reason: 'step has no payee', buyerId };
   if (!settlementConfigured())
     return { status: 'skipped', reason: 'settlement not configured', buyerId };
 
@@ -160,7 +168,7 @@ export async function settleStep(
   const nullifier = generateNullifier();
   const { proof } = buildBindingProof({
     commitment: step.task.policy.commitment,
-    payeeAddress: step.service.stellarAddress,
+    payeeAddress: payee,
     amountStroops,
     nullifier,
   });
@@ -175,7 +183,7 @@ export async function settleStep(
       taskId: step.task.vaultTaskId,
       stepId: BigInt(step.index),
       amountStroops,
-      payee: step.service.stellarAddress,
+      payee,
       nullifier,
       proof,
     });
@@ -196,7 +204,7 @@ export async function settleStep(
         taskId: step.taskId,
         stepId,
         fromAddress: env('AGENT_VAULT_CONTRACT_ID'),
-        toAddress: step.service.stellarAddress,
+        toAddress: payee,
         asset: step.task.asset,
         amount: step.estimatedCost,
         method: PaymentMethod.VAULT_RELEASE,
@@ -322,7 +330,17 @@ export async function finalizeTaskIfComplete(
   }
   if (outcome === 'disputed') return { status: 'skipped', reason: 'task disputed' };
 
-  await prisma.task.update({ where: { id: taskId }, data: { vaultFinalizedAt: new Date() } });
+  // PAY/DISBURSE tasks have no executor to mark them done, so complete them here
+  // once finalized. Never override a FAILED/CANCELLED/DISPUTED terminal state.
+  const completeStatus =
+    (task.mode === TaskMode.PAY || task.mode === TaskMode.DISBURSE) &&
+    task.status !== TaskStatus.FAILED &&
+    task.status !== TaskStatus.CANCELLED &&
+    task.status !== TaskStatus.DISPUTED;
+  await prisma.task.update({
+    where: { id: taskId },
+    data: { vaultFinalizedAt: new Date(), ...(completeStatus ? { status: TaskStatus.COMPLETED } : {}) },
+  });
   logger.info(
     { taskId, vaultTaskId: String(task.vaultTaskId), outcome },
     'task finalized on-chain (budget unlocked)',

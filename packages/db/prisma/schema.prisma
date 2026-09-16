@@ -233,6 +233,8 @@ enum TaskMode {
   DIRECT // pay a chosen provider
   SEARCH // find and pay one service
   COMPOSE // multi-service job
+  PAY // direct payment to one address (no provider execution)
+  DISBURSE // direct payments to many addresses (no provider execution)
 }
 
 enum TaskStatus {
@@ -285,6 +287,7 @@ model TaskStep {
   taskId        String
   index         Int
   serviceId     String?
+  payee         String? // direct recipient for PAY/DISBURSE steps (no provider)
   action        String
   dependsOn     Int[]      @default([])
   estimatedCost Decimal    @db.Decimal(20, 7)

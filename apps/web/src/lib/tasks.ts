@@ -151,6 +151,42 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
   return apiPost<Task>('/tasks', input);
 }
 
+export interface PaymentLineInput {
+  payee: string;
+  amount: number;
+  reason?: string;
+}
+
+export interface CreatePaymentInput {
+  kind: 'pay' | 'disburse';
+  lines: PaymentLineInput[];
+  policyId?: string;
+  title?: string;
+}
+
+/**
+ * The direct spend primitive: pay one address or disburse to many, bounded by a
+ * policy and released from the vault. Returns the created task (settles out of
+ * band). In demo mode this returns a local stand-in.
+ */
+export async function createPayment(input: CreatePaymentInput): Promise<Task> {
+  if (isDemo()) {
+    const total = input.lines.reduce((s, l) => s + l.amount, 0);
+    return {
+      id: 'pay-' + Date.now(),
+      title: input.kind === 'pay' ? 'Payment' : `Disburse to ${input.lines.length}`,
+      mode: input.kind === 'pay' ? 'PAY' : 'DISBURSE',
+      status: 'RUNNING',
+      budget: total,
+      spent: 0,
+      stepCount: input.lines.length,
+      completedSteps: 0,
+      createdAt: new Date().toISOString(),
+    };
+  }
+  return apiPost<Task>('/payments', input);
+}
+
 /** Raise a dispute on one of the caller's tasks. */
 export async function raiseDispute(
   taskId: string,

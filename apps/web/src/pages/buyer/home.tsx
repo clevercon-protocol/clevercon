@@ -24,7 +24,7 @@ import { useSession } from '../../store/session';
 import { getVault } from '../../lib/vault';
 import { getServices } from '../../lib/services';
 import { getPolicies, createPolicy, type Policy } from '../../lib/policies';
-import { getTasks, createTask, type HireMode } from '../../lib/tasks';
+import { getTasks, createTask, createPayment, type HireMode } from '../../lib/tasks';
 import { explorerAccount } from '../../lib/stellar';
 import { Card, CardHeader, EmptyState, controls } from '../../components/ui';
 import { LimitsBuilder } from './limits';
@@ -210,6 +210,18 @@ export function CommandChat() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
   });
 
+  const pay = useMutation({
+    mutationFn: (p: {
+      kind: 'pay' | 'disburse';
+      lines: { payee: string; amount: number; reason?: string }[];
+      policyId?: string;
+    }) => createPayment({ kind: p.kind, lines: p.lines, policyId: p.policyId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['vault'] });
+    },
+  });
+
   function resetComposer() {
     setAction(null);
     setPayee('');
@@ -337,14 +349,31 @@ export function CommandChat() {
       }
       return;
     }
-    // pay / disburse: the release primitive is not wired yet (Phase 1). Preview honestly.
-    const total = plan.lines.reduce((s, l) => s + l.amount, 0);
-    push({
-      id: nextId(),
-      role: 'agent',
-      ok: true,
-      text: `Preview: this would release $${total.toFixed(2)} across ${plan.lines.length} payment${plan.lines.length > 1 ? 's' : ''}${plan.limit.isPrivate ? ', with your rule kept private' : ''}, each checked against your limit on-chain. Live payments land when the pay/disburse primitive is wired (Phase 1).`,
-    });
+    // pay / disburse: a real, policy-bounded release from the vault.
+    if (plan.kind !== 'pay' && plan.kind !== 'disburse') return;
+    const kind = plan.kind;
+    try {
+      const policyId = await resolveBinding(plan.bind);
+      await pay.mutateAsync({
+        kind,
+        lines: plan.lines.map((l) => ({ payee: l.payee, amount: l.amount, reason: l.reason })),
+        policyId,
+      });
+      const total = plan.lines.reduce((s, l) => s + l.amount, 0);
+      push({
+        id: nextId(),
+        role: 'agent',
+        ok: true,
+        text: `Sent $${total.toFixed(2)} across ${plan.lines.length} payment${plan.lines.length > 1 ? 's' : ''}${plan.limit.isPrivate ? ', with your rule kept private' : ''}. Each is a proof-gated vault release; watch it settle in Activity.`,
+      });
+    } catch (e) {
+      push({
+        id: nextId(),
+        role: 'agent',
+        ok: false,
+        text: e instanceof Error ? e.message : 'Could not send the payment. Please try again.',
+      });
+    }
   }
 
   return (

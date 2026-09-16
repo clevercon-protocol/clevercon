@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { QueueService } from '../queue/queue.service.js';
 import { VaultContractService } from '../vault/vault-contract.service.js';
 import { DelegateService } from '../vault/delegate.service.js';
+import { PoliciesService, type PolicyRules } from '../policies/policies.service.js';
 
 type TaskRow = Prisma.TaskGetPayload<{
   include: { steps: { select: { id: true; status: true } }; payments: true };
@@ -29,6 +30,21 @@ export interface CreateTaskParams {
   policyId?: string;
   description?: string;
 }
+
+export interface PaymentLine {
+  payee: string;
+  amount: number;
+  reason?: string;
+}
+
+export interface CreatePaymentParams {
+  kind: 'pay' | 'disburse';
+  lines: PaymentLine[];
+  policyId?: string;
+  title?: string;
+}
+
+const STELLAR_ADDR = /^G[A-Z2-7]{55}$/;
 
 function spentOf(t: TaskRow): number {
   return Number(
@@ -66,6 +82,7 @@ export class TasksService {
     @Optional() private readonly queue?: QueueService,
     @Optional() private readonly vault?: VaultContractService,
     @Optional() private readonly delegates?: DelegateService,
+    @Optional() private readonly policies?: PoliciesService,
   ) {}
 
   /**
@@ -152,6 +169,125 @@ export class TasksService {
     // A task with steps (a DIRECT hire) is ready to run now; hand it to the
     // worker queue. SEARCH/COMPOSE have no steps yet (planning is a later job).
     if (created.steps.length > 0) await this.queue?.enqueueTaskExecution(created.id);
+    return serialize(created);
+  }
+
+  /**
+   * The core spend primitive: pay one address (kind='pay') or disburse to many
+   * (kind='disburse'), each line bounded by a policy and released directly from
+   * the vault via the proof-gated path. Reuses the same lock-under-policy and
+   * settlement machinery as a hire, minus the provider-execution step.
+   *
+   * Every payment is bounded: a chosen limit, or one derived from the lines
+   * themselves (allowlist = these payees, cap = the largest line). The task
+   * budget (sum of lines) is enforced on-chain; the caps/allowlist are enforced
+   * here in v1 and recorded as a private commitment (full on-chain rule
+   * enforcement is the ZK circuit, a later milestone).
+   */
+  async createPayment(userId: string, params: CreatePaymentParams) {
+    const lines = params.lines
+      .map((l) => ({
+        payee: l.payee.trim(),
+        amount: Number(l.amount),
+        reason: l.reason?.trim() || undefined,
+      }))
+      .filter((l) => l.payee && Number.isFinite(l.amount) && l.amount > 0);
+    if (lines.length === 0) {
+      throw new BadRequestException('At least one valid payment line is required');
+    }
+    if (params.kind === 'pay' && lines.length !== 1) {
+      throw new BadRequestException('A single payment has exactly one line');
+    }
+    for (const l of lines) {
+      if (!STELLAR_ADDR.test(l.payee)) {
+        throw new BadRequestException(`Invalid payee address: ${l.payee}`);
+      }
+    }
+    const total = lines.reduce((s, l) => s + l.amount, 0);
+
+    // Resolve the bounding policy: a chosen limit, or a tight one derived from
+    // the lines (allowlist = these payees, cap = the largest single line).
+    let policyId = params.policyId;
+    let rules: PolicyRules | null = null;
+    if (policyId) {
+      const p = await this.prisma.policy.findFirst({ where: { id: policyId, userId } });
+      if (!p) throw new BadRequestException('Unknown policy');
+      rules = (p.ruleSummary as PolicyRules | null) ?? null; // null for private
+    } else {
+      if (!this.policies) throw new BadRequestException('A policy is required for payments');
+      const derived: PolicyRules = {
+        allowlist: [...new Set(lines.map((l) => l.payee))],
+        perPaymentCeilingUsdc: Math.max(...lines.map((l) => l.amount)),
+      };
+      const created = await this.policies.create(userId, { rules: derived, isPrivate: false });
+      policyId = created.id;
+      rules = derived;
+    }
+
+    // Enforce known rules off-chain (v1). Where the rule is private (rules null)
+    // the owner is responsible; the on-chain budget still bounds the total.
+    if (rules) {
+      for (const l of lines) {
+        if (rules.perPaymentCeilingUsdc != null && l.amount > rules.perPaymentCeilingUsdc) {
+          throw new BadRequestException(
+            `Line to ${l.payee} exceeds the per-payment cap of ${rules.perPaymentCeilingUsdc}`,
+          );
+        }
+        if (rules.allowlist?.length && !rules.allowlist.includes(l.payee)) {
+          throw new BadRequestException(`Payee ${l.payee} is not on the policy allowlist`);
+        }
+      }
+    }
+
+    const mode = params.kind === 'pay' ? TaskMode.PAY : TaskMode.DISBURSE;
+    const title =
+      params.title ??
+      (params.kind === 'pay'
+        ? `Pay ${lines[0].payee.slice(0, 6)}…${lines[0].payee.slice(-4)}`
+        : `Disburse to ${lines.length} recipients`);
+
+    const created = await this.prisma.task.create({
+      data: {
+        buyer: { connect: { id: userId } },
+        title,
+        mode,
+        budget: new Prisma.Decimal(total),
+        asset: 'USDC',
+        // No provider execution: the steps are authorized to pay immediately and
+        // settle out of band via the delegate. The task completes once finalized.
+        status: TaskStatus.RUNNING,
+        steps: {
+          create: lines.map((l, i) => ({
+            index: i,
+            action: l.reason ?? 'Payment',
+            payee: l.payee,
+            estimatedCost: new Prisma.Decimal(l.amount),
+            status: StepStatus.RELEASED,
+          })),
+        },
+      },
+      include: { steps: { select: { id: true, status: true } }, payments: true },
+    });
+
+    // Lock the total on-chain under the policy commitment (required for the
+    // proof-gated release). If it cannot bind, fail loudly rather than dangle.
+    await this.lockOnChain(userId, created.id, policyId, total);
+    const bound = await this.prisma.task.findUnique({
+      where: { id: created.id },
+      select: { vaultTaskId: true },
+    });
+    if (!bound?.vaultTaskId) {
+      await this.prisma.task.update({
+        where: { id: created.id },
+        data: { status: TaskStatus.FAILED },
+      });
+      throw new BadRequestException(
+        'Could not lock the payment on-chain. Enable Autopay and make sure the vault has enough available balance.',
+      );
+    }
+
+    // Enqueue a direct release per line; settlement pays each payee and finalizes.
+    for (const s of created.steps) await this.queue?.enqueueSettlement(s.id);
     return serialize(created);
   }
 

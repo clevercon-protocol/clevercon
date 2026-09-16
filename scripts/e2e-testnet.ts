@@ -38,8 +38,8 @@ const FRIENDBOT = 'https://friendbot.stellar.org';
 const USDC_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 const USDC = new Asset('USDC', USDC_ISSUER);
 const PASSPHRASE = Networks.TESTNET;
-const DEPOSIT = Number(process.env.E2E_DEPOSIT ?? '3');
-const FAUCET_SEND = DEPOSIT + 1; // send a little more than we deposit
+const DEPOSIT = Number(process.env.E2E_DEPOSIT ?? '5');
+const FAUCET_SEND = DEPOSIT + 2; // send a little more than we deposit
 const horizon = new Horizon.Server(HORIZON_URL);
 
 const wallets = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'wallets.json'), 'utf-8'));
@@ -229,10 +229,8 @@ async function main() {
     record('create policy', !!policyId, `commitment ${p.commitment.slice(0, 10)}…`);
   }
 
-  // 8. PAY / DISBURSE (T1): wired once the /payments primitive exists.
-  await runPayStage(token, policyId, buyer).catch((e) =>
-    console.log(`  (pay/disburse stage skipped: ${e.message})`),
-  );
+  // 8. PAY / DISBURSE (T1): the core spend primitive, real releases on-chain.
+  await runPayStage(token, policyId, buyer);
 
   // 9. hire (best-effort; depends on a live provider endpoint)
   if (process.env.E2E_SKIP_HIRE !== '1') {
@@ -301,25 +299,60 @@ async function main() {
 }
 
 // ── T1 stage: pay + disburse via the /payments primitive ──────────────────────
-async function runPayStage(token: string, policyId: string, _buyer: Keypair) {
-  // Probe: does the primitive exist yet?
-  const probe = await fetch(`${API_URL}/payments`, {
-    method: 'OPTIONS',
-  }).catch(() => null);
-  if (!probe) throw new Error('no /payments endpoint yet');
-  // Filled in when T1 lands: POST /payments {kind:'pay', lines:[{payee,amount,reason}], policyId}
-  // then poll the task/activity and assert an on-chain release. Left as a stub so the
-  // harness runs today and gains real assertions the moment the endpoint exists.
-  throw new Error('T1 /payments not implemented yet');
+async function waitTaskComplete(token: string, taskId: string, label: string) {
+  let status = '';
+  let spent = 0;
+  for (let i = 0; i < 30; i++) {
+    const t = await api<{ status: string; spent: number; budget: number }>(`/tasks/${taskId}`, {
+      token,
+    });
+    status = t.status;
+    spent = t.spent;
+    if (t.status === 'COMPLETED' && t.spent >= t.budget - 0.001) break;
+    if (['FAILED', 'CANCELLED'].includes(t.status)) break;
+    await sleep(5000);
+  }
+  record(
+    `${label} settle`,
+    status === 'COMPLETED' && spent > 0,
+    `task ${taskId.slice(0, 8)} status ${status} spent ${spent}`,
+  );
+}
+
+async function runPayStage(token: string, policyId: string, buyer: Keypair) {
+  // pay: one line to the faucet (it has a USDC trustline to receive).
+  const pay = await api<{ id: string }>('/payments', {
+    body: {
+      kind: 'pay',
+      lines: [{ payee: faucet.publicKey(), amount: 0.5, reason: 'e2e pay' }],
+      policyId,
+    },
+    token,
+  });
+  await waitTaskComplete(token, pay.id, 'pay');
+
+  // disburse: two lines, varying amounts, distinct payees (faucet + buyer wallet).
+  const dis = await api<{ id: string }>('/payments', {
+    body: {
+      kind: 'disburse',
+      lines: [
+        { payee: faucet.publicKey(), amount: 0.4, reason: 'vendor A' },
+        { payee: buyer.publicKey(), amount: 0.6, reason: 'vendor B' },
+      ],
+      policyId,
+    },
+    token,
+  });
+  await waitTaskComplete(token, dis.id, 'disburse');
 }
 
 // ── Hire stage: create a task against a live service and wait for settle ───────
 async function runHireStage(token: string, policyId: string) {
   const list = await api<{ items: any[] }>('/services?limit=20', { token });
-  const svc = (list.items || []).find((s) => s.pricePerCall && s.pricePerCall <= 2);
+  const svc = (list.items || []).find((s) => s.pricePerCall && s.pricePerCall <= 1);
   if (!svc) throw new Error('no affordable service to hire');
   const task = await api<{ id: string }>('/tasks', {
-    body: { title: 'e2e hire', mode: 'DIRECT', budget: 2, serviceId: svc.id, policyId },
+    body: { title: 'e2e hire', mode: 'DIRECT', budget: 1, serviceId: svc.id, policyId },
     token,
   });
   let status = '';

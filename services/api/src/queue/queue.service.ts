@@ -7,6 +7,7 @@ import { Redis } from 'ioredis';
 // producers so the API does not import the worker's TS source at runtime.
 const TASK_QUEUE = 'task-execution';
 const PROOF_QUEUE = 'proof-generation';
+const SETTLEMENT_QUEUE = 'settlement';
 
 export interface ProofGenerationJob {
   proofId: string;
@@ -20,6 +21,7 @@ export class QueueService implements OnModuleDestroy {
   private readonly url = process.env.REDIS_URL ?? '';
   private queue: Queue | null = null;
   private proofQueue: Queue | null = null;
+  private settlementQueue: Queue | null = null;
   private connection: Redis | null = null;
 
   private getConnection(): Redis | null {
@@ -40,6 +42,41 @@ export class QueueService implements OnModuleDestroy {
     if (!connection) return null;
     if (!this.proofQueue) this.proofQueue = new Queue(PROOF_QUEUE, { connection });
     return this.proofQueue;
+  }
+
+  private getSettlementQueue(): Queue | null {
+    const connection = this.getConnection();
+    if (!connection) return null;
+    if (!this.settlementQueue) this.settlementQueue = new Queue(SETTLEMENT_QUEUE, { connection });
+    return this.settlementQueue;
+  }
+
+  /**
+   * Enqueue a direct release for a PAY/DISBURSE step. Same queue and job shape as
+   * the worker's settlement producer (jobId per step so a line is never double
+   * paid). Non-fatal: a queue hiccup leaves the step to be settled on retry.
+   */
+  async enqueueSettlement(stepId: string): Promise<void> {
+    const queue = this.getSettlementQueue();
+    if (!queue) {
+      this.logger.warn(`REDIS_URL not set; step ${stepId} not enqueued for settlement`);
+      return;
+    }
+    try {
+      await queue.add(
+        'settle',
+        { stepId },
+        {
+          jobId: `settle-${stepId}`,
+          attempts: 5,
+          backoff: { type: 'exponential', delay: 3000 },
+          removeOnComplete: 200,
+          removeOnFail: 1000,
+        },
+      );
+    } catch (err) {
+      this.logger.error(`enqueue settlement failed for step ${stepId}: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -97,6 +134,7 @@ export class QueueService implements OnModuleDestroy {
   async onModuleDestroy(): Promise<void> {
     await this.queue?.close();
     await this.proofQueue?.close();
+    await this.settlementQueue?.close();
     await this.connection?.quit();
   }
 }
