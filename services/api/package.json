@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "nest start --watch -b swc",
-    "build": "nest build -b swc",
-    "start": "node dist/src/main.js",
+    "dev": "node init && nest start --watch -b swc",
+    "build": "node init && nest build -b swc",
+    "start": "node init && node dist/src/main.js",
     "test": "vitest run"
   },
   "dependencies": {
