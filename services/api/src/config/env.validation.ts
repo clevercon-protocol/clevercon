@@ -51,11 +51,18 @@ export const envSchema = z.object({
   // off-chain only. Shared with the worker (which reads it from process.env).
   DELEGATE_ENCRYPTION_KEY: z.string().optional(),
   // The chat agent's brain: parses a natural-language instruction into a
-  // structured plan via the Claude API (server-side; the plan is re-validated
-  // and the vault enforces limits regardless). When unset, the app falls back to
-  // a deterministic parser + the quick-action forms, so it still works with no key.
+  // structured plan (server-side; the plan is re-validated and the vault enforces
+  // limits regardless). Provider-agnostic: native Anthropic OR any OpenAI-compatible
+  // endpoint (OpenAI, Gemini's OpenAI-compat, OpenRouter, local Ollama/vLLM). When
+  // no key is set, a deterministic parser + the quick-action forms keep it working.
+  // AGENT_PROVIDER forces one ('anthropic' | 'openai' | 'none'); 'auto' (default)
+  // picks whichever key is present.
+  AGENT_PROVIDER: z.enum(['auto', 'anthropic', 'openai', 'none']).default('auto'),
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default('claude-opus-4-8'),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
+  OPENAI_MODEL: z.string().default('gpt-4o-mini'),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

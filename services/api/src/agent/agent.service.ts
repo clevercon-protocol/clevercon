@@ -61,6 +61,17 @@ const PLAN_SCHEMA = {
   required: ['kind', 'lines', 'serviceQuery', 'budget', 'rationale'],
 };
 
+const SYSTEM_PROMPT =
+  'You turn a user instruction into a spending plan for a non-custodial Stellar agent. ' +
+  'The agent can pay one address, disburse to many, or hire a listed service. ' +
+  'Only propose what the user actually asked for; never invent Stellar addresses. ' +
+  'If the user names a person without an address, leave payee empty and put the name in reason. ' +
+  'If the instruction is not a spend or is unclear, use kind "none" and explain in rationale. ' +
+  'Amounts are USDC. Use the context (available budget, saved limits, services) to stay realistic.';
+const TOOL_DESC = 'Return the structured spending plan for the user to review.';
+
+type Provider = 'anthropic' | 'openai' | 'none';
+
 interface RawPlan {
   kind: AgentPlan['kind'];
   lines: PlanLine[];
@@ -79,8 +90,21 @@ export class AgentService {
     private readonly policies: PoliciesService,
   ) {}
 
-  private apiKey() {
-    return process.env.ANTHROPIC_API_KEY ?? '';
+  /**
+   * Which LLM backs the planner. CleverCon is provider-agnostic: keep native
+   * Anthropic as the default, but a single OpenAI-compatible adapter covers
+   * OpenAI, Gemini (its OpenAI-compat endpoint), OpenRouter, and local models
+   * (Ollama/vLLM) via OPENAI_BASE_URL. AGENT_PROVIDER forces one; 'auto' picks
+   * whichever key is set; 'none' (or no key) uses the deterministic fallback.
+   */
+  private provider(): Provider {
+    const pref = (process.env.AGENT_PROVIDER ?? 'auto').toLowerCase();
+    if (pref === 'none') return 'none';
+    if (pref === 'anthropic') return process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'none';
+    if (pref === 'openai') return process.env.OPENAI_API_KEY ? 'openai' : 'none';
+    if (process.env.ANTHROPIC_API_KEY) return 'anthropic';
+    if (process.env.OPENAI_API_KEY) return 'openai';
+    return 'none';
   }
 
   /**
@@ -103,7 +127,11 @@ export class AgentService {
       };
     }
 
-    const raw = this.apiKey() ? await this.parseWithClaude(userId, text) : fallbackParse(text);
+    const provider = this.provider();
+    const raw =
+      provider === 'none'
+        ? fallbackParse(text)
+        : await this.parseWithLlm(userId, text, provider);
     const available = await this.vault
       .getForUser(userId)
       .then((v) => v.available)
@@ -111,41 +139,90 @@ export class AgentService {
     return this.validate(raw.plan, raw.source, available);
   }
 
-  private async parseWithClaude(
+  private async parseWithLlm(
     userId: string,
     instruction: string,
+    provider: Provider,
   ): Promise<{ plan: RawPlan; source: AgentPlan['source'] }> {
     try {
       const context = await this.buildContext(userId);
-      const client = new Anthropic({ apiKey: this.apiKey(), timeout: 30_000, maxRetries: 1 });
-      const model = process.env.ANTHROPIC_MODEL ?? 'claude-opus-4-8';
-      const res = await client.messages.create({
-        model,
-        max_tokens: 1024,
-        system:
-          'You turn a user instruction into a spending plan for a non-custodial Stellar agent. ' +
-          'The agent can pay one address, disburse to many, or hire a listed service. ' +
-          'Only propose what the user actually asked for; never invent Stellar addresses. ' +
-          'If the user names a person without an address, leave payee empty and put the name in reason. ' +
-          'If the instruction is not a spend or is unclear, use kind "none" and explain in rationale. ' +
-          'Amounts are USDC. Use the context (available budget, saved limits, services) to stay realistic.',
-        messages: [{ role: 'user', content: `Instruction: ${instruction}\n\n${context}` }],
-        tools: [
-          {
-            name: 'propose_plan',
-            description: 'Return the structured spending plan for the user to review.',
-            input_schema: PLAN_SCHEMA as unknown as Anthropic.Tool.InputSchema,
-          },
-        ],
-        tool_choice: { type: 'tool', name: 'propose_plan' },
-      });
-      const block = res.content.find((b) => b.type === 'tool_use');
-      if (!block || block.type !== 'tool_use') throw new Error('no tool_use in response');
-      return { plan: normalizeRaw(block.input), source: 'llm' };
+      const input =
+        provider === 'anthropic'
+          ? await this.callAnthropic(instruction, context)
+          : await this.callOpenAiCompatible(instruction, context);
+      return { plan: normalizeRaw(input), source: 'llm' };
     } catch (err) {
-      this.logger.warn(`Claude planning failed, using fallback: ${(err as Error).message}`);
+      this.logger.warn(`LLM planning failed (${provider}), using fallback: ${(err as Error).message}`);
       return fallbackParse(instruction);
     }
+  }
+
+  /** Native Anthropic (default). Forced tool-use gives a validated structured plan. */
+  private async callAnthropic(instruction: string, context: string): Promise<unknown> {
+    const client = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY ?? '',
+      timeout: 30_000,
+      maxRetries: 1,
+    });
+    const model = process.env.ANTHROPIC_MODEL ?? 'claude-opus-4-8';
+    const res = await client.messages.create({
+      model,
+      max_tokens: 1024,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: `Instruction: ${instruction}\n\n${context}` }],
+      tools: [
+        {
+          name: 'propose_plan',
+          description: TOOL_DESC,
+          input_schema: PLAN_SCHEMA as unknown as Anthropic.Tool.InputSchema,
+        },
+      ],
+      tool_choice: { type: 'tool', name: 'propose_plan' },
+    });
+    const block = res.content.find((b) => b.type === 'tool_use');
+    if (!block || block.type !== 'tool_use') throw new Error('no tool_use in response');
+    return block.input;
+  }
+
+  /**
+   * OpenAI-compatible chat completions with a forced function call. One adapter
+   * for OpenAI, Gemini (OpenAI-compat), OpenRouter, and local servers: point
+   * OPENAI_BASE_URL at the endpoint and set OPENAI_MODEL.
+   */
+  private async callOpenAiCompatible(instruction: string, context: string): Promise<unknown> {
+    const baseUrl = (process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/+$/, '');
+    const model = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${process.env.OPENAI_API_KEY ?? ''}`,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1024,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: `Instruction: ${instruction}\n\n${context}` },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'propose_plan', description: TOOL_DESC, parameters: PLAN_SCHEMA },
+          },
+        ],
+        tool_choice: { type: 'function', function: { name: 'propose_plan' } },
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) throw new Error(`llm ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const data = (await res.json()) as {
+      choices?: { message?: { tool_calls?: { function?: { arguments?: string } }[] } }[];
+    };
+    const args = data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+    if (!args) throw new Error('no function call in response');
+    return JSON.parse(args);
   }
 
   private async buildContext(userId: string): Promise<string> {
@@ -278,7 +355,7 @@ function fallbackParse(instruction: string): { plan: RawPlan; source: AgentPlan[
       serviceQuery: '',
       budget: 0,
       rationale:
-        'I could not parse that without the AI planner. Set ANTHROPIC_API_KEY, or use the Pay / Disburse / Hire actions.',
+        'I could not parse that without the AI planner. Configure an LLM provider (ANTHROPIC_API_KEY or OPENAI_API_KEY), or use the Pay / Disburse / Hire actions.',
     },
   };
 }
