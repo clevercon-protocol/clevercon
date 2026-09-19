@@ -235,6 +235,11 @@ async function main() {
   // 8. PAY / DISBURSE (T1): the core spend primitive, real releases on-chain.
   await runPayStage(token, policyId, buyer);
 
+  // 8c. Concurrency: fire two payments at once for the SAME delegate. This used
+  // to collide on the signer's sequence number (one would fail); the per-key
+  // mutex + txBadSeq retry must now settle both.
+  await runConcurrentStage(token, policyId);
+
   // 9. hire (best-effort; depends on a live provider endpoint)
   if (process.env.E2E_SKIP_HIRE !== '1') {
     await runHireStage(token, policyId).catch((e) =>
@@ -323,6 +328,24 @@ async function waitTaskComplete(token: string, taskId: string, label: string) {
     status === 'COMPLETED' && spent > 0,
     `task ${taskId.slice(0, 8)} status ${status} spent ${spent}`,
   );
+}
+
+async function runConcurrentStage(token: string, policyId: string) {
+  const pay = (amount: number) =>
+    api<{ id: string }>('/payments', {
+      body: {
+        kind: 'pay',
+        lines: [{ payee: faucet.publicKey(), amount, reason: 'concurrent' }],
+        policyId,
+      },
+      token,
+    });
+  // Two locks submitted at the same instant, same signer.
+  const [a, b] = await Promise.all([pay(0.2), pay(0.2)]);
+  await Promise.all([
+    waitTaskComplete(token, a.id, 'concurrent pay A'),
+    waitTaskComplete(token, b.id, 'concurrent pay B'),
+  ]);
 }
 
 async function runPayStage(token: string, policyId: string, buyer: Keypair) {

@@ -1,13 +1,4 @@
-import {
-  Contract,
-  rpc as SorobanRpc,
-  TransactionBuilder,
-  BASE_FEE,
-  Keypair,
-  nativeToScVal,
-  Address,
-  type xdr,
-} from '@stellar/stellar-sdk';
+import { Keypair, nativeToScVal, Address, type xdr } from '@stellar/stellar-sdk';
 import {
   PaymentMethod,
   PaymentStatus,
@@ -16,8 +7,44 @@ import {
   decryptSecret,
   type PrismaClient,
 } from '@clevercon/db';
-import { buildBindingProof, generateNullifier } from '@clevercon/common';
+import {
+  buildBindingProof,
+  generateNullifier,
+  createRedisMutex,
+  type RedisMutex,
+} from '@clevercon/common';
 import { logger } from './logger.js';
+import { delegateMutex, submitDelegateCall, type SorobanOpts } from './sequence.js';
+import { redisConnection } from './queue.js';
+
+// Cross-process lock so a delegate signer used by BOTH the API (lock) and this
+// worker (release/finalize) is only submitting one tx at a time. Gated on
+// REDIS_URL so unit tests (no Redis) run without it.
+let _redisMutex: RedisMutex | null = null;
+function redisLock(): RedisMutex {
+  if (_redisMutex) return _redisMutex;
+  if (!process.env.REDIS_URL) {
+    _redisMutex = { withLock: (_key, fn) => fn() };
+  } else {
+    _redisMutex = createRedisMutex(
+      redisConnection() as unknown as Parameters<typeof createRedisMutex>[0],
+    );
+  }
+  return _redisMutex;
+}
+
+/** Serialize a delegate's on-chain op both in-process and across processes. */
+function withDelegate<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  return delegateMutex.runExclusive(key, () => redisLock().withLock(key, fn));
+}
+
+function sorobanOpts(): SorobanOpts {
+  return {
+    rpcUrl: process.env.STELLAR_RPC_URL || 'https://soroban-testnet.stellar.org',
+    passphrase: process.env.NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015',
+    contractId: process.env.AGENT_VAULT_CONTRACT_ID ?? '',
+  };
+}
 
 export interface SettleResult {
   status: 'settled' | 'skipped' | 'failed';
@@ -47,14 +74,7 @@ async function releasePaymentProved(
     proof: Buffer;
   },
 ): Promise<string> {
-  const rpcUrl = env('STELLAR_RPC_URL') || 'https://soroban-testnet.stellar.org';
-  const passphrase = env('NETWORK_PASSPHRASE') || 'Test SDF Network ; September 2015';
-  const contractId = env('AGENT_VAULT_CONTRACT_ID');
   const usdcSac = env('USDC_SAC');
-
-  const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
-  const account = await server.getAccount(kp.publicKey());
-  const contract = new Contract(contractId);
   const args: xdr.ScVal[] = [
     new Address(kp.publicKey()).toScVal(),
     nativeToScVal(params.taskId, { type: 'u64' }),
@@ -65,27 +85,8 @@ async function releasePaymentProved(
     nativeToScVal(params.nullifier, { type: 'bytes' }),
     nativeToScVal(params.proof, { type: 'bytes' }),
   ];
-  const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: passphrase })
-    .addOperation(contract.call('release_payment_proved', ...args))
-    .setTimeout(300)
-    .build();
-  const simulated = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simulated)) {
-    throw new Error(`release simulation failed: ${simulated.error}`);
-  }
-  const prepared = SorobanRpc.assembleTransaction(tx, simulated).build();
-  prepared.sign(kp);
-  const response = await server.sendTransaction(prepared);
-  if (response.status === 'ERROR') throw new Error('release rejected on submit');
-  for (let i = 0; i < 30; i++) {
-    await new Promise((r) => setTimeout(r, 1000));
-    const result = await server.getTransaction(response.hash);
-    if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) return response.hash;
-    if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-      throw new Error(`release failed on-chain: ${response.hash}`);
-    }
-  }
-  throw new Error(`release timed out: ${response.hash}`);
+  const { hash } = await submitDelegateCall(kp, 'release_payment_proved', args, sorobanOpts());
+  return hash;
 }
 
 function settlementConfigured(): boolean {
@@ -177,16 +178,23 @@ export async function settleStep(
   // release_payment_proved is idempotent by (task_id, step_id), so a retry after
   // a crash (or a concurrent submit) that re-runs this returns success without
   // moving funds a second time. A failure here is retryable, so report `failed`.
+  const vaultTaskId = step.task.vaultTaskId;
+  const stepIndex = BigInt(step.index);
   let txHash: string;
   try {
-    txHash = await release(delegateKp, {
-      taskId: step.task.vaultTaskId,
-      stepId: BigInt(step.index),
-      amountStroops,
-      payee,
-      nullifier,
-      proof,
-    });
+    // Serialize all on-chain ops for this delegate (per-signer), in-process and
+    // across processes (the API lock uses the same signer), so releases never
+    // race the sequence number while different users settle in parallel.
+    txHash = await withDelegate(delegateKp.publicKey(), () =>
+      release(delegateKp, {
+        taskId: vaultTaskId,
+        stepId: stepIndex,
+        amountStroops,
+        payee,
+        nullifier,
+        proof,
+      }),
+    );
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     logger.error({ stepId, err: reason }, 'settlement failed');
@@ -245,40 +253,19 @@ async function completeTaskOnChain(
   kp: Keypair,
   taskId: bigint,
 ): Promise<'completed' | 'already' | 'disputed'> {
-  const rpcUrl = env('STELLAR_RPC_URL') || 'https://soroban-testnet.stellar.org';
-  const passphrase = env('NETWORK_PASSPHRASE') || 'Test SDF Network ; September 2015';
-  const contractId = env('AGENT_VAULT_CONTRACT_ID');
-  const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
-  const account = await server.getAccount(kp.publicKey());
-  const contract = new Contract(contractId);
   const args: xdr.ScVal[] = [
     new Address(kp.publicKey()).toScVal(),
     nativeToScVal(taskId, { type: 'u64' }),
   ];
-  const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: passphrase })
-    .addOperation(contract.call('complete_task', ...args))
-    .setTimeout(300)
-    .build();
-  const simulated = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simulated)) {
-    const code = contractErrorCode(simulated.error ?? '');
+  try {
+    await submitDelegateCall(kp, 'complete_task', args, sorobanOpts());
+    return 'completed';
+  } catch (err) {
+    const code = contractErrorCode(err instanceof Error ? err.message : String(err));
     if (code === 9) return 'already'; // TaskAlreadyCompleted (idempotent)
     if (code === 19) return 'disputed'; // TaskDisputed (leave to the resolver)
-    throw new Error(`complete_task simulation failed: ${simulated.error}`);
+    throw err;
   }
-  const prepared = SorobanRpc.assembleTransaction(tx, simulated).build();
-  prepared.sign(kp);
-  const response = await server.sendTransaction(prepared);
-  if (response.status === 'ERROR') throw new Error('complete_task rejected on submit');
-  for (let i = 0; i < 30; i++) {
-    await new Promise((r) => setTimeout(r, 1000));
-    const result = await server.getTransaction(response.hash);
-    if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) return 'completed';
-    if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-      throw new Error(`complete_task failed on-chain: ${response.hash}`);
-    }
-  }
-  throw new Error(`complete_task timed out: ${response.hash}`);
 }
 
 export type CompleteFn = (kp: Keypair, taskId: bigint) => Promise<'completed' | 'already' | 'disputed'>;
@@ -320,9 +307,12 @@ export async function finalizeTaskIfComplete(
   if (!delegate) return { status: 'skipped', reason: 'buyer has no delegate' };
   const kp = Keypair.fromSecret(decryptSecret(delegate.secretCipher));
 
+  const vaultTaskId = task.vaultTaskId;
   let outcome: 'completed' | 'already' | 'disputed';
   try {
-    outcome = await complete(kp, task.vaultTaskId);
+    // Same per-signer serialization as releases (in-process + cross-process):
+    // complete_task must not race a release or an API lock for the same delegate.
+    outcome = await withDelegate(kp.publicKey(), () => complete(kp, vaultTaskId));
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     logger.error({ taskId, err: reason }, 'finalize failed');

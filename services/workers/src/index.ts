@@ -25,11 +25,11 @@ import { logger } from './logger.js';
 loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env') });
 
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY ?? 5);
-// On-chain releases are all signed by per-user delegate keys and submitted here.
-// Two releases that share a signer collide on its sequence number, so settlement
-// runs serially by default (a single-signer sequence guard). This bounds batch
-// throughput; per-delegate-key parallelism (a sequence manager) is the scale item.
-const SETTLEMENT_CONCURRENCY = Number(process.env.SETTLEMENT_CONCURRENCY ?? 1);
+// On-chain releases are signed by per-user delegate keys. The settlement path now
+// serializes per signer (delegateMutex) and retries a stale sequence (txBadSeq),
+// so the worker can run concurrently: different users settle in parallel while one
+// user's releases stay ordered. Bump this to parallelize across delegates.
+const SETTLEMENT_CONCURRENCY = Number(process.env.SETTLEMENT_CONCURRENCY ?? 5);
 
 function main(): void {
   const prisma = new PrismaClient();

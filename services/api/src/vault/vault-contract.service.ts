@@ -1,5 +1,6 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Redis } from 'ioredis';
 import {
   Contract,
   rpc as SorobanRpc,
@@ -11,6 +12,7 @@ import {
   Address,
   xdr,
 } from '@stellar/stellar-sdk';
+import { createRedisMutex, type RedisMutex } from './redis-mutex.js';
 import type { AppEnv } from '../config/env.validation.js';
 
 const STROOPS_PER_USDC = 10_000_000;
@@ -179,43 +181,109 @@ export class VaultContractService {
    * Sign a contract call with the given delegate keypair and submit it; returns
    * the tx hash and the decoded contract return value (e.g. the new task id).
    */
-  private async signAndSubmitAsOrchestrator(
+  private readonly delegateLocks = new Map<string, Promise<unknown>>();
+  private redisMutex: RedisMutex | null = null;
+
+  /**
+   * Cross-process lock so this API's delegate submit does not race the settlement
+   * worker's release/finalize for the same signer. Gated on REDIS_URL; falls back
+   * to in-process-only when Redis is not configured.
+   */
+  private lock(): RedisMutex {
+    if (this.redisMutex) return this.redisMutex;
+    const url = process.env.REDIS_URL;
+    this.redisMutex = url
+      ? createRedisMutex(
+          new Redis(url, { maxRetriesPerRequest: null }) as unknown as Parameters<
+            typeof createRedisMutex
+          >[0],
+        )
+      : { withLock: (_key, fn) => fn() };
+    return this.redisMutex;
+  }
+
+  /**
+   * Serialize all delegate-signed submits per signer: in-process (two concurrent
+   * requests, e.g. two /payments at once) AND cross-process (the settlement
+   * worker uses the same signer). getAccount reflects the ledger-confirmed
+   * sequence, so a retry alone can't outrun ledger close; the holder must finish
+   * before the next submit builds. submitDelegateTx also retries txBadSeq as a
+   * final safety net.
+   */
+  private signAndSubmitAsOrchestrator(
+    kp: Keypair,
+    method: string,
+    args: xdr.ScVal[],
+  ): Promise<{ hash: string; returnValue: unknown }> {
+    const key = kp.publicKey();
+    const submit = () => this.lock().withLock(key, () => this.submitDelegateTx(kp, method, args));
+    const prev = this.delegateLocks.get(key) ?? Promise.resolve();
+    const run = prev.then(submit, submit);
+    this.delegateLocks.set(
+      key,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return run;
+  }
+
+  private async submitDelegateTx(
     kp: Keypair,
     method: string,
     args: xdr.ScVal[],
   ): Promise<{ hash: string; returnValue: unknown }> {
     const server = this.server();
-    const account = await server.getAccount(kp.publicKey());
     const contract = new Contract(this.contractId);
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.passphrase,
-    })
-      .addOperation(contract.call(method, ...args))
-      .setTimeout(300)
-      .build();
-    const simulated = await server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(simulated)) {
-      throw new ServiceUnavailableException(`${method} simulation failed: ${simulated.error}`);
-    }
-    const prepared = SorobanRpc.assembleTransaction(tx, simulated).build();
-    prepared.sign(kp);
-    const response = await server.sendTransaction(prepared);
-    if (response.status === 'ERROR') {
-      throw new ServiceUnavailableException(`${method} rejected on submit`);
-    }
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 1000));
-      const result = await server.getTransaction(response.hash);
-      if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        const returnValue = result.returnValue ? scValToNative(result.returnValue) : null;
-        return { hash: response.hash, returnValue };
+    // The delegate key is also used by the settlement worker (releases/finalize).
+    // If the two momentarily pick the same sequence number, the submit is rejected
+    // with txBadSeq; refetch the account and rebuild with a fresh sequence.
+    let lastErr = 'unknown';
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const account = await server.getAccount(kp.publicKey());
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.passphrase,
+      })
+        .addOperation(contract.call(method, ...args))
+        .setTimeout(120)
+        .build();
+      const simulated = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simulated)) {
+        throw new ServiceUnavailableException(`${method} simulation failed: ${simulated.error}`);
       }
-      if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        throw new ServiceUnavailableException(`${method} failed on-chain: ${response.hash}`);
+      const prepared = SorobanRpc.assembleTransaction(tx, simulated).build();
+      prepared.sign(kp);
+      const response = await server.sendTransaction(prepared);
+      if (response.status === 'ERROR') {
+        let reason = 'rejected';
+        try {
+          reason = response.errorResult?.result().switch().name ?? reason;
+        } catch {
+          // keep the generic reason
+        }
+        lastErr = reason;
+        if (reason === 'txBadSeq') {
+          await new Promise((r) => setTimeout(r, 1200 + attempt * 800));
+          continue;
+        }
+        throw new ServiceUnavailableException(`${method} rejected on submit: ${reason}`);
       }
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const result = await server.getTransaction(response.hash);
+        if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+          const returnValue = result.returnValue ? scValToNative(result.returnValue) : null;
+          return { hash: response.hash, returnValue };
+        }
+        if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+          throw new ServiceUnavailableException(`${method} failed on-chain: ${response.hash}`);
+        }
+      }
+      throw new ServiceUnavailableException(`${method} timed out: ${response.hash}`);
     }
-    throw new ServiceUnavailableException(`${method} timed out: ${response.hash}`);
+    throw new ServiceUnavailableException(`${method} failed after retries: ${lastErr}`);
   }
 
   /**
