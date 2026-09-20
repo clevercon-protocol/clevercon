@@ -5,6 +5,7 @@ export { createRegistryClient, RETRY_DELAYS_MS, HEARTBEAT_MS } from './registry.
 export { resolveConfig, buildManifest, AgentConfigError } from './config.js';
 export { createProvider, MAX_OUTPUT_CHARS } from './provider.js';
 export { createSpender, CleverConError } from './spender.js';
+export { createAgentWallet } from './agent-wallet.js';
 export type {
   SpenderOptions,
   CleverConClient,
@@ -14,6 +15,7 @@ export type {
   Spend,
   SavedLimit,
 } from './spender.js';
+export type { AgentWalletOptions, AgentWallet } from './agent-wallet.js';
 export type {
   Provider,
   ProviderOptions,

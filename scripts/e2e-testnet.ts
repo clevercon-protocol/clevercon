@@ -29,8 +29,13 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createSpender } from '@clevercon/agent-sdk/spender';
+import { createAgentWallet } from '@clevercon/agent-sdk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import express from 'express';
+import { paymentMiddleware, x402ResourceServer } from '@x402/express';
+import { HTTPFacilitatorClient } from '@x402/core/server';
+import { ExactStellarScheme as X402ServerScheme } from '@x402/stellar/exact/server';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,6 +49,13 @@ const PASSPHRASE = Networks.TESTNET;
 const DEPOSIT = Number(process.env.E2E_DEPOSIT ?? '5');
 const FAUCET_SEND = DEPOSIT + 2; // send a little more than we deposit
 const horizon = new Horizon.Server(HORIZON_URL);
+
+// x402 (T4): the exact scheme settles in the SAME testnet USDC the vault dispenses
+// (CBIELTK6 / issuer GBBD47IF), through the public facilitator (fees sponsored).
+const X402_NETWORK = 'stellar:testnet' as `${string}:${string}`;
+const X402_FACILITATOR = process.env.X402_FACILITATOR_URL ?? 'https://www.x402.org/facilitator';
+const X402_PORT = 4610;
+const X402_PRICE = 0.02;
 
 const wallets = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'wallets.json'), 'utf-8'));
 const faucet = Keypair.fromSecret(wallets.orchestrator.secretKey);
@@ -248,7 +260,14 @@ async function main() {
   }
 
   // 9b. the other two doors: the spender SDK and the MCP, driven with an API key.
-  await runReachStage(token, policyId, buyer);
+  const apiKey = await runReachStage(token, policyId, buyer);
+
+  // 9c. x402 agent-key mode (T4): vault -> agent wallet -> external x402 service.
+  if (process.env.E2E_SKIP_X402 !== '1') {
+    await runX402Stage(token, apiKey, policyId).catch((e) =>
+      console.log(`  (x402 stage warn: ${e.message})`),
+    );
+  }
 
   // 10. withdraw available back to the buyer wallet.
   //     First wait for the mirror to reflect on-chain finalization (locked -> ~0
@@ -431,6 +450,113 @@ async function runReachStage(token: string, policyId: string, buyer: Keypair) {
     await client.close().catch(() => {});
   }
   void buyer;
+  return apiKey;
+}
+
+// ── T4 stage: x402 agent-key mode ─────────────────────────────────────────────
+// The agent pulls working capital from the vault into its OWN wallet (governed,
+// non-custodial), then pays an external x402 service with those funds through the
+// public facilitator. Proves the two economies compose on one USDC.
+async function addUsdcTrustline(kp: Keypair) {
+  const acct = await horizon.loadAccount(kp.publicKey());
+  const tx = new TransactionBuilder(acct, { fee: BASE_FEE, networkPassphrase: PASSPHRASE })
+    .addOperation(Operation.changeTrust({ asset: USDC }))
+    .setTimeout(60)
+    .build();
+  tx.sign(kp);
+  await submitClassic(tx);
+}
+
+async function runX402Stage(token: string, apiKey: string, policyId: string) {
+  const agentKp = Keypair.random(); // the agent's OWN hot wallet (non-custodial)
+  const serviceKp = Keypair.random(); // the paid x402 service's payTo
+  await Promise.all([
+    fetch(`${FRIENDBOT}?addr=${agentKp.publicKey()}`),
+    fetch(`${FRIENDBOT}?addr=${serviceKp.publicKey()}`),
+  ]);
+  await sleep(2500);
+  await addUsdcTrustline(agentKp); // so the vault release can land
+  await addUsdcTrustline(serviceKp); // so the service can receive the x402 payment
+
+  // Agent-key mode: one object uniting governed top-up + autonomous x402 spend.
+  const wallet = createAgentWallet({ apiKey, apiUrl: API_URL, secretKey: agentKp.secret() });
+
+  // Leg 1: pull budget from the vault into the agent wallet (settles on-chain).
+  await waitVaultIdle(token); // shared delegate signer
+  const before = await usdcBalance(agentKp.publicKey());
+  const topup = await wallet.topUp(0.1, { policyId, reason: 'e2e agent top-up' });
+  await waitTaskComplete(token, topup.id, 'x402 top-up');
+  await sleep(5000);
+  const funded = await usdcBalance(agentKp.publicKey());
+  record(
+    'agent wallet funded from vault',
+    funded - before >= 0.099,
+    `+${(funded - before).toFixed(3)} USDC (non-custodial, policy-bound)`,
+  );
+
+  // Leg 2: the agent pays an external x402 service with those funds.
+  const facilitatorClient = new HTTPFacilitatorClient({ url: X402_FACILITATOR });
+  const resourceServer = new x402ResourceServer(facilitatorClient).register(
+    X402_NETWORK,
+    new X402ServerScheme(),
+  );
+  const app = express();
+  app.use(express.json());
+  app.use(
+    paymentMiddleware(
+      {
+        'POST /query': {
+          accepts: {
+            scheme: 'exact',
+            price: `$${X402_PRICE}`,
+            network: X402_NETWORK,
+            payTo: serviceKp.publicKey(),
+          },
+          description: 'e2e paid data',
+        },
+      },
+      resourceServer,
+      undefined,
+      undefined,
+      true,
+    ),
+  );
+  app.post('/query', (_req, res) => res.json({ result: { price: 'XLM-USD 0.11' } }));
+  const server = app.listen(X402_PORT);
+  await new Promise((r) => server.on('listening', r));
+  try {
+    const svcBefore = await usdcBalance(serviceKp.publicKey());
+    const resp = await wallet.fetch(`http://localhost:${X402_PORT}/query`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'xlm price' }),
+    });
+    await sleep(6000);
+    const svcAfter = await usdcBalance(serviceKp.publicKey());
+    record(
+      'agent pays x402 service',
+      resp.status === 200 && svcAfter - svcBefore >= X402_PRICE - 0.0001,
+      `status ${resp.status}, service +${(svcAfter - svcBefore).toFixed(3)} USDC`,
+    );
+  } finally {
+    server.close();
+  }
+
+  // Return the agent + service USDC dust to the faucet so runs stay repeatable.
+  for (const kp of [agentKp, serviceKp]) {
+    const bal = await usdcBalance(kp.publicKey());
+    if (bal > 0.001) {
+      const acct = await horizon.loadAccount(kp.publicKey());
+      const tx = new TransactionBuilder(acct, { fee: BASE_FEE, networkPassphrase: PASSPHRASE })
+        .addOperation(
+          Operation.payment({ destination: faucet.publicKey(), asset: USDC, amount: bal.toFixed(7) }),
+        )
+        .setTimeout(60)
+        .build();
+      tx.sign(kp);
+      await submitClassic(tx).catch(() => {});
+    }
+  }
 }
 
 // ── Hire stage: create a task against a live service and wait for settle ───────
