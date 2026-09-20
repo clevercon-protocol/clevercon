@@ -816,10 +816,111 @@ export function RecentActivity() {
 
 // ── The home page: budget on top, command in the middle, activity below ─────────
 
+/**
+ * First-run activation guide. The chat-first Home has no obvious on-ramp for a
+ * brand-new user, so this walks them from an empty vault to their first
+ * instruction: fund, (optionally) set a limit, then tell the agent. It reads the
+ * same cached queries the rest of Home uses (no extra fetches), highlights the
+ * step you are on, and retires itself the moment you have any activity. Dismissible.
+ */
+function FirstRunGuide() {
+  const { data: vault } = useQuery({ queryKey: ['vault'], queryFn: getVault });
+  const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
+  const { data: tasks = [] } = useQuery({ queryKey: ['tasks'], queryFn: getTasks });
+  const [dismissed, setDismissed] = useState(
+    () => typeof localStorage !== 'undefined' && localStorage.getItem('cc:home:guide') === 'off',
+  );
+
+  // In demo mode the vault is pre-funded with sample activity, so the guide is
+  // irrelevant; and once a real user has done anything, the on-ramp is over.
+  if (isDemo() || dismissed || tasks.length > 0) return null;
+
+  const funded = (vault?.balance ?? 0) > 0;
+  const steps = [
+    {
+      done: funded,
+      label: 'Fund your vault',
+      desc: 'Deposit USDC your agent can spend. Non-custodial: the platform never touches it.',
+      cta: 'Fund',
+      to: '/app/vault',
+    },
+    {
+      done: policies.length > 0,
+      label: 'Set a spending limit',
+      desc: 'A private cap and allowlist the vault enforces. Optional: you can also set one per instruction.',
+      cta: 'Add a limit',
+      to: '/app/limits',
+    },
+    {
+      done: false,
+      label: 'Tell your agent what to do',
+      desc: 'Type an instruction below (or pick a quick action). You approve the plan; the vault enforces it.',
+      cta: null,
+      to: null,
+    },
+  ];
+  const current = steps.findIndex((s) => !s.done);
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-start justify-between gap-3">
+        <span className="inline-flex items-center gap-2 text-sm font-semibold text-white">
+          <Sparkles size={15} className="text-violet-300" /> Get started
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            localStorage.setItem('cc:home:guide', 'off');
+            setDismissed(true);
+          }}
+          className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+        >
+          Dismiss
+        </button>
+      </div>
+      <ol className="mt-3 space-y-2">
+        {steps.map((s, i) => (
+          <li
+            key={s.label}
+            className={`flex items-center gap-3 rounded-xl p-3 transition-colors ${
+              i === current ? 'bg-violet-500/[0.08]' : 'bg-white/[0.02]'
+            }`}
+          >
+            <span
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-semibold ${
+                s.done
+                  ? 'bg-emerald-500/15 text-emerald-300'
+                  : i === current
+                    ? 'bg-violet-500/20 text-violet-200'
+                    : 'bg-white/5 text-slate-500'
+              }`}
+            >
+              {s.done ? <Check size={14} /> : i + 1}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className={`text-sm ${s.done ? 'text-slate-500 line-through' : 'text-white'}`}>
+                {s.label}
+              </div>
+              {!s.done && <div className="mt-0.5 text-xs text-slate-500">{s.desc}</div>}
+            </div>
+            {!s.done && s.to && (
+              <Link to={s.to} className={`${chipBtn} shrink-0`}>
+                {s.cta}
+                <ArrowRight size={13} />
+              </Link>
+            )}
+          </li>
+        ))}
+      </ol>
+    </Card>
+  );
+}
+
 export function Home() {
   return (
     <div className="space-y-6">
       <VaultHero />
+      <FirstRunGuide />
       <CommandChat />
       <RecentActivity />
     </div>
