@@ -191,7 +191,11 @@ async function main() {
   await ensureFaucetUsdc(FAUCET_SEND + 1);
   const fh = await faucetSend(buyer.publicKey(), FAUCET_SEND);
   const startUsdc = await usdcBalance(buyer.publicKey());
-  record('faucet USDC', startUsdc >= FAUCET_SEND - 0.001, `buyer has ${startUsdc} USDC, tx ${fh.slice(0, 10)}`);
+  record(
+    'faucet USDC',
+    startUsdc >= FAUCET_SEND - 0.001,
+    `buyer has ${startUsdc} USDC, tx ${fh.slice(0, 10)}`,
+  );
 
   // 4. SEP-10 sign-in
   const token = await signIn(buyer);
@@ -206,7 +210,10 @@ async function main() {
       stepup: su,
     });
     const signed = signXdr(built.xdr, buyer);
-    const sub = await api<{ txHash: string }>('/vault/submit', { body: { signedXdr: signed }, token });
+    const sub = await api<{ txHash: string }>('/vault/submit', {
+      body: { signedXdr: signed },
+      token,
+    });
     record('vault deposit (submit)', !!sub.txHash, sub.txHash.slice(0, 10));
   }
 
@@ -219,7 +226,11 @@ async function main() {
       if (v.balance >= DEPOSIT - 0.001) break;
       await sleep(5000);
     }
-    record('vault mirror reflects deposit', mirrored >= DEPOSIT - 0.001, `balance ${mirrored} USDC`);
+    record(
+      'vault mirror reflects deposit',
+      mirrored >= DEPOSIT - 0.001,
+      `balance ${mirrored} USDC`,
+    );
   }
 
   // 6. authorize delegate (register_orchestrator, buyer-signed once)
@@ -237,7 +248,11 @@ async function main() {
   {
     const p = await api<{ id: string; commitment: string }>('/policies', {
       body: {
-        rules: { perPaymentCeilingUsdc: DEPOSIT, rollingCapUsdc: DEPOSIT * 3, rollingWindowSecs: 86400 },
+        rules: {
+          perPaymentCeilingUsdc: DEPOSIT,
+          rollingCapUsdc: DEPOSIT * 3,
+          rollingWindowSecs: 86400,
+        },
         isPrivate: false,
       },
       token,
@@ -452,7 +467,11 @@ function startWebhookSink(): { url: string; received: HookHit[]; close: () => vo
 }
 
 /** Poll the sink for a signed task.completed matching the pay task. */
-async function runWebhookStage(sink: ReturnType<typeof startWebhookSink>, secret: string, payId: string) {
+async function runWebhookStage(
+  sink: ReturnType<typeof startWebhookSink>,
+  secret: string,
+  payId: string,
+) {
   let hit: HookHit | undefined;
   for (let i = 0; i < 12; i++) {
     hit = sink.received.find((h) => h.event === 'task.completed' && h.body?.data?.taskId === payId);
@@ -514,7 +533,11 @@ async function runReachStage(token: string, policyId: string, buyer: Keypair) {
     const tools = await client.listTools();
     const names = new Set(tools.tools.map((t) => t.name));
     const wanted = ['pay', 'disburse', 'set_limit', 'get_budget', 'get_activity', 'list_limits'];
-    record('MCP exposes money verbs', wanted.every((n) => names.has(n)), `${names.size} tools`);
+    record(
+      'MCP exposes money verbs',
+      wanted.every((n) => names.has(n)),
+      `${names.size} tools`,
+    );
     const res = (await client.callTool({ name: 'get_budget', arguments: {} })) as {
       content: { text: string }[];
     };
@@ -623,7 +646,11 @@ async function runX402Stage(token: string, apiKey: string, policyId: string) {
       const acct = await horizon.loadAccount(kp.publicKey());
       const tx = new TransactionBuilder(acct, { fee: BASE_FEE, networkPassphrase: PASSPHRASE })
         .addOperation(
-          Operation.payment({ destination: faucet.publicKey(), asset: USDC, amount: bal.toFixed(7) }),
+          Operation.payment({
+            destination: faucet.publicKey(),
+            asset: USDC,
+            amount: bal.toFixed(7),
+          }),
         )
         .setTimeout(60)
         .build();

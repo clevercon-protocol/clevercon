@@ -18,7 +18,9 @@ const KEY = 'cc_test.secret';
 
 describe('createAgentWallet', () => {
   it('requires a secretKey and rejects a malformed one', () => {
-    expect(() => createAgentWallet({ apiKey: KEY, secretKey: '' })).toThrow(/secretKey is required/);
+    expect(() => createAgentWallet({ apiKey: KEY, secretKey: '' })).toThrow(
+      /secretKey is required/,
+    );
     expect(() => createAgentWallet({ apiKey: KEY, secretKey: 'not-a-secret' })).toThrow();
   });
 

@@ -11,9 +11,9 @@ export function LimitsPage() {
     <div className="max-w-4xl space-y-6">
       <div className="rounded-xl bg-white/[0.04] p-4 text-sm leading-relaxed text-slate-400">
         Every instruction you give your agent carries its own limit, enforced on-chain by the vault
-        (it is bound per task, so nothing is truly global). Build reusable limits here, then pick one
-        per instruction on Home. Star one to make it your default: it pre-fills each new instruction,
-        and you can still override it every time.
+        (it is bound per task, so nothing is truly global). Build reusable limits here, then pick
+        one per instruction on Home. Star one to make it your default: it pre-fills each new
+        instruction, and you can still override it every time.
       </div>
       <LimitsManager />
     </div>

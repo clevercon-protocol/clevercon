@@ -86,7 +86,8 @@ export async function disburseHandler(
 ): Promise<ToolResult> {
   try {
     const { lines, policyId } = args;
-    if (!Array.isArray(lines) || lines.length === 0) throw new Error('lines must be a non-empty array');
+    if (!Array.isArray(lines) || lines.length === 0)
+      throw new Error('lines must be a non-empty array');
     const client = createApiClient(config);
     const task = await client.post('/payments', {
       kind: 'disburse',
@@ -127,7 +128,8 @@ export async function setLimitHandler(
   try {
     const { perPaymentCeilingUsdc, rollingCapUsdc, rollingWindowSecs, allowlist, isPrivate } = args;
     const rules: Record<string, unknown> = {};
-    if (typeof perPaymentCeilingUsdc === 'number') rules.perPaymentCeilingUsdc = perPaymentCeilingUsdc;
+    if (typeof perPaymentCeilingUsdc === 'number')
+      rules.perPaymentCeilingUsdc = perPaymentCeilingUsdc;
     if (typeof rollingCapUsdc === 'number') rules.rollingCapUsdc = rollingCapUsdc;
     if (typeof rollingWindowSecs === 'number') rules.rollingWindowSecs = rollingWindowSecs;
     if (Array.isArray(allowlist) && allowlist.length) rules.allowlist = allowlist;
@@ -182,7 +184,8 @@ export async function getBudgetHandler(
 // ── get_activity ──────────────────────────────────────────────────────────────
 export const getActivitySchema = {
   name: 'get_activity',
-  description: 'Get the recent activity ledger (jobs and payments), newest first. Requires an API key.',
+  description:
+    'Get the recent activity ledger (jobs and payments), newest first. Requires an API key.',
   inputSchema: { type: 'object', properties: {} },
 };
 

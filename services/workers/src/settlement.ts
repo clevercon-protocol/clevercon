@@ -375,7 +375,10 @@ async function completeTaskOnChain(
   }
 }
 
-export type CompleteFn = (kp: Keypair, taskId: bigint) => Promise<'completed' | 'already' | 'disputed'>;
+export type CompleteFn = (
+  kp: Keypair,
+  taskId: bigint,
+) => Promise<'completed' | 'already' | 'disputed'>;
 
 const NON_TERMINAL_STEP = ['PENDING', 'RUNNING', 'AWAITING_APPROVAL'];
 
@@ -436,7 +439,10 @@ export async function finalizeTaskIfComplete(
     task.status !== TaskStatus.DISPUTED;
   await prisma.task.update({
     where: { id: taskId },
-    data: { vaultFinalizedAt: new Date(), ...(completeStatus ? { status: TaskStatus.COMPLETED } : {}) },
+    data: {
+      vaultFinalizedAt: new Date(),
+      ...(completeStatus ? { status: TaskStatus.COMPLETED } : {}),
+    },
   });
   logger.info(
     { taskId, vaultTaskId: String(task.vaultTaskId), outcome },

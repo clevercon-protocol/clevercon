@@ -50,7 +50,9 @@ export function PageHeader({
           </div>
         )}
         <h1 className="text-2xl font-bold tracking-tight text-white sm:text-[26px]">{title}</h1>
-        {subtitle && <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-slate-400">{subtitle}</p>}
+        {subtitle && (
+          <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-slate-400">{subtitle}</p>
+        )}
       </div>
       {action}
     </div>
@@ -145,7 +147,9 @@ export function StatCard({
       >
         <Icon size={17} />
       </div>
-      <div className="mt-3 text-2xl font-bold tracking-tight text-white">{loading ? '…' : value}</div>
+      <div className="mt-3 text-2xl font-bold tracking-tight text-white">
+        {loading ? '…' : value}
+      </div>
       <div className="mt-0.5 text-xs text-slate-500">{label}</div>
     </Card>
   );

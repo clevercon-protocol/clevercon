@@ -43,7 +43,8 @@ const PLAN_SCHEMA = {
         properties: {
           payee: {
             type: 'string',
-            description: 'Stellar address (G...). Leave empty if the user gave a name, not an address.',
+            description:
+              'Stellar address (G...). Leave empty if the user gave a name, not an address.',
           },
           amount: { type: 'number', description: 'USDC amount, > 0' },
           reason: { type: 'string', description: 'what this payment is for (may be empty)' },
@@ -56,7 +57,10 @@ const PLAN_SCHEMA = {
       description: 'for hire: a few words describing the service to find; else empty',
     },
     budget: { type: 'number', description: 'for hire: max USDC to spend; else 0' },
-    rationale: { type: 'string', description: 'one short sentence explaining the plan to the user' },
+    rationale: {
+      type: 'string',
+      description: 'one short sentence explaining the plan to the user',
+    },
   },
   required: ['kind', 'lines', 'serviceQuery', 'budget', 'rationale'],
 };
@@ -129,9 +133,7 @@ export class AgentService {
 
     const provider = this.provider();
     const raw =
-      provider === 'none'
-        ? fallbackParse(text)
-        : await this.parseWithLlm(userId, text, provider);
+      provider === 'none' ? fallbackParse(text) : await this.parseWithLlm(userId, text, provider);
     const available = await this.vault
       .getForUser(userId)
       .then((v) => v.available)
@@ -152,7 +154,9 @@ export class AgentService {
           : await this.callOpenAiCompatible(instruction, context);
       return { plan: normalizeRaw(input), source: 'llm' };
     } catch (err) {
-      this.logger.warn(`LLM planning failed (${provider}), using fallback: ${(err as Error).message}`);
+      this.logger.warn(
+        `LLM planning failed (${provider}), using fallback: ${(err as Error).message}`,
+      );
       return fallbackParse(instruction);
     }
   }
@@ -190,7 +194,10 @@ export class AgentService {
    * OPENAI_BASE_URL at the endpoint and set OPENAI_MODEL.
    */
   private async callOpenAiCompatible(instruction: string, context: string): Promise<unknown> {
-    const baseUrl = (process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/+$/, '');
+    const baseUrl = (process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(
+      /\/+$/,
+      '',
+    );
     const model = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
@@ -274,14 +281,17 @@ export class AgentService {
       if (lines.length === 0) {
         return this.none(
           source,
-          raw.rationale || 'I could not build a valid payment. Give me an amount and a G... address.',
+          raw.rationale ||
+            'I could not build a valid payment. Give me an amount and a G... address.',
           warnings,
         );
       }
       const kind = lines.length === 1 ? 'pay' : 'disburse';
       const total = lines.reduce((s, l) => s + l.amount, 0);
       if (available > 0 && total > available) {
-        warnings.push(`This totals $${total.toFixed(2)} but only $${available.toFixed(2)} is available.`);
+        warnings.push(
+          `This totals $${total.toFixed(2)} but only $${available.toFixed(2)} is available.`,
+        );
       }
       return {
         kind,
@@ -303,12 +313,16 @@ export class AgentService {
           })
         : null;
       if (!svc) {
-        warnings.push('No matching service found. Pick one from Services, or name it more specifically.');
+        warnings.push(
+          'No matching service found. Pick one from Services, or name it more specifically.',
+        );
         return this.none(source, raw.rationale || 'I could not find a matching service.', warnings);
       }
       const budget = Math.max(Number(raw.budget) || 0, Number(svc.pricePerCall));
       if (available > 0 && budget > available) {
-        warnings.push(`Budget $${budget.toFixed(2)} exceeds the $${available.toFixed(2)} available.`);
+        warnings.push(
+          `Budget $${budget.toFixed(2)} exceeds the $${available.toFixed(2)} available.`,
+        );
       }
       return {
         kind: 'hire',
@@ -321,7 +335,11 @@ export class AgentService {
       };
     }
 
-    return this.none(source, raw.rationale || 'That does not look like a spending instruction.', warnings);
+    return this.none(
+      source,
+      raw.rationale || 'That does not look like a spending instruction.',
+      warnings,
+    );
   }
 
   private none(source: AgentPlan['source'], rationale: string, warnings: string[]): AgentPlan {

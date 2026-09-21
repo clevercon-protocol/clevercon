@@ -1,6 +1,9 @@
 // Build a binding proof with the TS prover and print the exact args to feed to
 // `stellar contract invoke verify_policy` for an on-chain cross-language check.
-import { buildBindingProof, verifyBindingProofLocally } from '../packages/common/src/spend-policy-prover.js';
+import {
+  buildBindingProof,
+  verifyBindingProofLocally,
+} from '../packages/common/src/spend-policy-prover.js';
 import { createHash } from 'node:crypto';
 
 const PAYEE = process.argv[2] || 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ';
@@ -20,11 +23,17 @@ if (!verifyBindingProofLocally(proof, piHash)) {
   process.exit(1);
 }
 
-console.log(JSON.stringify({
-  commitment: commitment.toString('hex'),
-  payee: PAYEE,
-  amount: AMOUNT_STROOPS.toString(),
-  nullifier: nullifier.toString('hex'),
-  proof: proof.toString('hex'),
-  piHash: piHash.toString('hex'),
-}, null, 2));
+console.log(
+  JSON.stringify(
+    {
+      commitment: commitment.toString('hex'),
+      payee: PAYEE,
+      amount: AMOUNT_STROOPS.toString(),
+      nullifier: nullifier.toString('hex'),
+      proof: proof.toString('hex'),
+      piHash: piHash.toString('hex'),
+    },
+    null,
+    2,
+  ),
+);

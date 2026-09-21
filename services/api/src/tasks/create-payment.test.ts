@@ -40,7 +40,10 @@ describe('createPayment validation', () => {
 
   it('rejects an invalid payee address', async () => {
     await expect(
-      svcWith().createPayment('u1', { kind: 'pay', lines: [{ payee: 'not-an-address', amount: 1 }] }),
+      svcWith().createPayment('u1', {
+        kind: 'pay',
+        lines: [{ payee: 'not-an-address', amount: 1 }],
+      }),
     ).rejects.toThrow(/invalid payee/i);
   });
 

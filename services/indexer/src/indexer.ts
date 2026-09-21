@@ -5,15 +5,13 @@ import type { NormalizedEvent } from './events.js';
 interface VaultEventPayload {
   // For deposit/withdraw: [user, asset]. For task events: [user, ...] (asset in data).
   topics: unknown[];
-  data:
-    | {
-        amount?: string;
-        asset?: string;
-        plan_cost?: string;
-        spent?: string;
-        refund?: string;
-      }
-    | null;
+  data: {
+    amount?: string;
+    asset?: string;
+    plan_cost?: string;
+    spent?: string;
+    refund?: string;
+  } | null;
 }
 
 const DEPOSIT = 'deposit_event';

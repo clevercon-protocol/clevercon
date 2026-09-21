@@ -124,10 +124,7 @@ export function TaskDetail() {
             ) : (
               <div className="mt-4 space-y-2">
                 {task.steps.map((s) => (
-                  <div
-                    key={s.index}
-                    className="rounded-xl bg-white/[0.04] p-3 text-sm"
-                  >
+                  <div key={s.index} className="rounded-xl bg-white/[0.04] p-3 text-sm">
                     <div className="flex items-center justify-between">
                       <div className="min-w-0">
                         <div className="truncate font-medium">
@@ -167,10 +164,7 @@ export function TaskDetail() {
             ) : (
               <div className="mt-4 space-y-2">
                 {task.receipts.map((r) => (
-                  <div
-                    key={r.id}
-                    className="rounded-xl bg-white/[0.04] p-3 text-sm"
-                  >
+                  <div key={r.id} className="rounded-xl bg-white/[0.04] p-3 text-sm">
                     <div className="flex items-center justify-between">
                       <div className="min-w-0">
                         <div className="font-medium">

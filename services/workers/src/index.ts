@@ -175,7 +175,10 @@ function main(): void {
           });
         }
       } catch (e) {
-        logger.error({ stepId: job.data.stepId, err: (e as Error).message }, 'failed to mark task FAILED after retry exhaustion');
+        logger.error(
+          { stepId: job.data.stepId, err: (e as Error).message },
+          'failed to mark task FAILED after retry exhaustion',
+        );
       }
     }
   });

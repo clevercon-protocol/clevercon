@@ -24,7 +24,13 @@ import { useSession } from '../../store/session';
 import { getVault } from '../../lib/vault';
 import { getServices } from '../../lib/services';
 import { getPolicies, createPolicy, type Policy } from '../../lib/policies';
-import { getTasks, createTask, createPayment, planInstruction, type HireMode } from '../../lib/tasks';
+import {
+  getTasks,
+  createTask,
+  createPayment,
+  planInstruction,
+  type HireMode,
+} from '../../lib/tasks';
 import { explorerAccount } from '../../lib/stellar';
 import { Card, CardHeader, EmptyState, controls } from '../../components/ui';
 import { LimitsBuilder } from './limits';
@@ -225,7 +231,9 @@ export function CommandChat() {
     },
   });
 
-  const planMut = useMutation({ mutationFn: (instruction: string) => planInstruction(instruction) });
+  const planMut = useMutation({
+    mutationFn: (instruction: string) => planInstruction(instruction),
+  });
 
   // Send the typed instruction to the agent; it returns a plan you then approve.
   async function askAgent() {
@@ -262,7 +270,11 @@ export function CommandChat() {
         },
       });
     } else if ((result.kind === 'pay' || result.kind === 'disburse') && result.lines.length) {
-      const lines = result.lines.map((l) => ({ payee: l.payee, amount: l.amount, reason: l.reason }));
+      const lines = result.lines.map((l) => ({
+        payee: l.payee,
+        amount: l.amount,
+        reason: l.reason,
+      }));
       const total = lines.reduce((s, l) => s + l.amount, 0);
       push({
         id: nextId(),
@@ -803,7 +815,9 @@ export function RecentActivity() {
                   {t.mode} · ${t.spent.toFixed(2)} of ${t.budget.toFixed(2)}
                 </div>
               </div>
-              <span className={`ml-3 shrink-0 text-xs ${STATUS_TINT[t.status] ?? 'text-slate-400'}`}>
+              <span
+                className={`ml-3 shrink-0 text-xs ${STATUS_TINT[t.status] ?? 'text-slate-400'}`}
+              >
                 {t.status}
               </span>
             </Link>

@@ -258,7 +258,9 @@ export function LimitsManager() {
                       onClick={() => toggleDefault(p.id)}
                       title={isDefault ? 'Remove as default' : 'Make default'}
                       aria-label={isDefault ? 'Remove as default' : 'Make default'}
-                      className={isDefault ? 'text-violet-300' : 'text-slate-600 hover:text-slate-300'}
+                      className={
+                        isDefault ? 'text-violet-300' : 'text-slate-600 hover:text-slate-300'
+                      }
                     >
                       <Star size={15} fill={isDefault ? 'currentColor' : 'none'} />
                     </button>
