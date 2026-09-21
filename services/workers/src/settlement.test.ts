@@ -15,6 +15,7 @@ interface StepRow {
     buyerId: string;
     vaultTaskId: bigint | null;
     asset: string;
+    budget: string;
     policy: { commitment: string } | null;
   } | null;
 }
@@ -32,9 +33,18 @@ function mockPrisma(
         secretCipher: encryptSecret(Keypair.random().secret()),
       }
     : null;
+  const updated: unknown[] = [];
   const prisma = {
     taskStep: { findUnique: vi.fn(async () => step) },
     agentDelegate: { findUnique: vi.fn(async () => delegateRow) },
+    task: {
+      // The lazy-lock re-read: reflects the step's current on-chain lock state.
+      findUnique: vi.fn(async () => ({ vaultTaskId: step?.task?.vaultTaskId ?? null })),
+      update: vi.fn(async ({ data }: { data: unknown }) => {
+        updated.push(data);
+        return data;
+      }),
+    },
     payment: {
       findFirst: vi.fn(async () => (existingPayment ? { id: 'p-existing' } : null)),
       create: vi.fn(async ({ data }: { data: unknown }) => {
@@ -44,7 +54,7 @@ function mockPrisma(
       }),
     },
   };
-  return { prisma: prisma as unknown as Parameters<typeof settleStep>[0], created };
+  return { prisma: prisma as unknown as Parameters<typeof settleStep>[0], created, updated };
 }
 
 /** A fake on-chain release that never touches the network, for unit tests. */
@@ -66,11 +76,15 @@ function baseStep(over: Partial<StepRow> = {}): StepRow {
       buyerId: 'buyer1',
       vaultTaskId: 7n,
       asset: 'USDC',
+      budget: '0.05',
       policy: { commitment: 'ab'.repeat(32) },
     },
     ...over,
   };
 }
+
+/** A fake on-chain lock that never touches the network, for unit tests. */
+const fakeLock = vi.fn(async () => 99n);
 
 describe('settleStep guards', () => {
   beforeEach(() => {
@@ -94,18 +108,50 @@ describe('settleStep guards', () => {
     expect((await settleStep(prisma, 's1')).reason).toBe('step not released');
   });
 
-  it('skips a task not locked on-chain', async () => {
-    const { prisma } = mockPrisma(
+  it('lazily locks a not-yet-locked task on-chain, then releases with the new id', async () => {
+    const { prisma, created, updated } = mockPrisma(
       baseStep({
         task: {
           buyerId: 'b',
           vaultTaskId: null,
           asset: 'USDC',
+          budget: '0.05',
           policy: { commitment: 'ab'.repeat(32) },
         },
       }),
     );
-    expect((await settleStep(prisma, 's1')).reason).toBe('task not locked on-chain');
+    fakeRelease.mockClear();
+    fakeLock.mockClear();
+    const r = await settleStep(prisma, 's1', fakeRelease, fakeLock);
+    expect(fakeLock).toHaveBeenCalledTimes(1);
+    // The freshly locked vault task id is persisted and used for the release.
+    expect(updated).toContainEqual({ vaultTaskId: 99n });
+    expect(fakeRelease).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ taskId: 99n }),
+    );
+    expect(r).toMatchObject({ status: 'settled', txHash: 'TXHASH_TEST' });
+    expect(created).toHaveLength(1);
+  });
+
+  it('marks the task FAILED when the lazy lock fails (so it does not dangle)', async () => {
+    const { prisma, updated } = mockPrisma(
+      baseStep({
+        task: {
+          buyerId: 'b',
+          vaultTaskId: null,
+          asset: 'USDC',
+          budget: '0.05',
+          policy: { commitment: 'ab'.repeat(32) },
+        },
+      }),
+    );
+    const throwingLock = vi.fn(async () => {
+      throw new Error('insufficient available');
+    });
+    const r = await settleStep(prisma, 's1', fakeRelease, throwingLock);
+    expect(r).toMatchObject({ status: 'failed', reason: 'insufficient available' });
+    expect(updated).toContainEqual({ status: 'FAILED' });
   });
 
   it('skips a task with no policy commitment', async () => {

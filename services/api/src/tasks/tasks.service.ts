@@ -92,6 +92,25 @@ export class TasksService {
    * registered, insufficient funds, chain error) leaves the task running
    * off-chain rather than failing the hire. Returns the on-chain task id if locked.
    */
+  /**
+   * Fast, synchronous pre-checks for a spend that will lock + settle in the
+   * worker. These are the config-level failures we can know without a chain call
+   * (no vault, Autopay not authorized), so the caller still gets an immediate,
+   * actionable error instead of a task that quietly fails later. The definitive
+   * checks (funds, active-task limit) happen on-chain when the worker locks.
+   */
+  private async assertCanSettle(userId: string): Promise<void> {
+    if (!this.vault?.active) {
+      throw new BadRequestException('On-chain settlement is not available right now.');
+    }
+    const delegate = await this.prisma.agentDelegate.findUnique({ where: { userId } });
+    if (!delegate?.registered) {
+      throw new BadRequestException(
+        'Enable Autopay (authorize the delegate) before paying, so the vault can settle within your policy.',
+      );
+    }
+  }
+
   private async lockOnChain(
     userId: string,
     taskId: string,
@@ -239,6 +258,11 @@ export class TasksService {
       }
     }
 
+    // Fail fast on config-level problems (no vault, Autopay not authorized) so the
+    // caller gets an immediate error; the on-chain lock itself happens in the
+    // worker (below) rather than blocking this request for several seconds.
+    await this.assertCanSettle(userId);
+
     const mode = params.kind === 'pay' ? TaskMode.PAY : TaskMode.DISBURSE;
     const title =
       params.title ??
@@ -253,6 +277,9 @@ export class TasksService {
         mode,
         budget: new Prisma.Decimal(total),
         asset: 'USDC',
+        // Bind the policy now so the worker can lock + settle against its
+        // commitment. Previously the (synchronous) lock connected it.
+        policy: { connect: { id: policyId } },
         // No provider execution: the steps are authorized to pay immediately and
         // settle out of band via the delegate. The task completes once finalized.
         status: TaskStatus.RUNNING,
@@ -269,24 +296,9 @@ export class TasksService {
       include: { steps: { select: { id: true, status: true } }, payments: true },
     });
 
-    // Lock the total on-chain under the policy commitment (required for the
-    // proof-gated release). If it cannot bind, fail loudly rather than dangle.
-    await this.lockOnChain(userId, created.id, policyId, total);
-    const bound = await this.prisma.task.findUnique({
-      where: { id: created.id },
-      select: { vaultTaskId: true },
-    });
-    if (!bound?.vaultTaskId) {
-      await this.prisma.task.update({
-        where: { id: created.id },
-        data: { status: TaskStatus.FAILED },
-      });
-      throw new BadRequestException(
-        'Could not lock the payment on-chain. Enable Autopay and make sure the vault has enough available balance.',
-      );
-    }
-
-    // Enqueue a direct release per line; settlement pays each payee and finalizes.
+    // Enqueue a direct release per line. The worker locks the budget on-chain
+    // under the policy commitment on the first step to run (the async lock), then
+    // pays each payee and finalizes. This keeps the request path off the chain.
     for (const s of created.steps) await this.queue?.enqueueSettlement(s.id);
     return serialize(created);
   }

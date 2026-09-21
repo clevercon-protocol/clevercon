@@ -89,6 +89,35 @@ async function releasePaymentProved(
   return hash;
 }
 
+/**
+ * Sign `create_task_with_policy` with the buyer's delegate and submit it, locking
+ * the plan budget on-chain under the policy commitment and returning the new
+ * vault task id. Mirrors the API's VaultContractService, moved here so the lock
+ * happens off the API request path (in settlement) rather than blocking it.
+ */
+async function createTaskWithPolicyOnChain(
+  kp: Keypair,
+  planCostUsdc: number,
+  commitmentHex: string,
+): Promise<bigint> {
+  const commitment = Buffer.from(commitmentHex, 'hex');
+  if (commitment.length !== 32) throw new Error('policy commitment must be 32 bytes');
+  const planCostStroops = BigInt(Math.round(planCostUsdc * STROOPS_PER_USDC));
+  const args: xdr.ScVal[] = [
+    new Address(kp.publicKey()).toScVal(),
+    new Address(env('USDC_SAC')).toScVal(),
+    nativeToScVal(planCostStroops, { type: 'i128' }),
+    nativeToScVal(commitment, { type: 'bytes' }),
+  ];
+  const { returnValue } = await submitDelegateCall(
+    kp,
+    'create_task_with_policy',
+    args,
+    sorobanOpts(),
+  );
+  return BigInt(returnValue as string | number | bigint);
+}
+
 function settlementConfigured(): boolean {
   return !!(env('DELEGATE_ENCRYPTION_KEY') && env('AGENT_VAULT_CONTRACT_ID') && env('USDC_SAC'));
 }
@@ -106,6 +135,9 @@ export type ReleaseFn = (
   },
 ) => Promise<string>;
 
+/** The signature of the on-chain lock; injectable so settleStep is unit-testable. */
+export type LockFn = (kp: Keypair, planCostUsdc: number, commitmentHex: string) => Promise<bigint>;
+
 /** A Postgres unique-constraint violation (Prisma P2002), duck-typed to avoid a hard import. */
 function isUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'P2002';
@@ -120,14 +152,16 @@ const STROOPS_PER_USDC = 10_000_000;
  * success. Honest by construction: a Payment row is written only after a real
  * on-chain release, never fabricated.
  *
- * Idempotent and safe to skip: a step that is not released, whose task is not
- * locked on-chain, that has no policy commitment or payee, or that was already
- * settled, is a no-op. Settlement never fails task execution.
+ * Idempotent and safe to skip: a step that is not released, has no policy
+ * commitment or payee, or that was already settled, is a no-op. If the task is
+ * not yet locked on-chain, this locks it lazily (the async lock). Settlement
+ * never fails task execution.
  */
 export async function settleStep(
   prisma: PrismaClient,
   stepId: string,
   release: ReleaseFn = releasePaymentProved,
+  lock: LockFn = createTaskWithPolicyOnChain,
 ): Promise<SettleResult> {
   const step = await prisma.taskStep.findUnique({
     where: { id: stepId },
@@ -137,8 +171,9 @@ export async function settleStep(
   const buyerId = step.task?.buyerId;
   if (step.status !== 'RELEASED')
     return { status: 'skipped', reason: 'step not released', buyerId };
-  if (!step.task?.vaultTaskId)
-    return { status: 'skipped', reason: 'task not locked on-chain', buyerId };
+  if (!step.task) return { status: 'skipped', reason: 'step has no task', buyerId };
+  // The task is locked on-chain lazily here (see below), so a missing vaultTaskId
+  // is no longer a skip; a missing policy commitment still is (nothing to bind to).
   if (!step.task.policy?.commitment)
     return { status: 'skipped', reason: 'task has no policy commitment', buyerId };
   // A direct PAY/DISBURSE step names its own payee; a hire step pays its service.
@@ -174,30 +209,69 @@ export async function settleStep(
     nullifier,
   });
 
-  // (1) On-chain release. Exactly-once for FUNDS is guaranteed by the vault:
+  // (1) Lock-if-needed, then release. Both the lock and the release are on-chain
+  // ops for the buyer's delegate, so they run inside one per-signer serialized
+  // section (in-process + cross-process, since the same signer is used
+  // everywhere) to never race the sequence number while other users settle in
+  // parallel. Exactly-once for FUNDS is guaranteed by the vault:
+  // create_task_with_policy yields one task id (reused by later steps) and
   // release_payment_proved is idempotent by (task_id, step_id), so a retry after
-  // a crash (or a concurrent submit) that re-runs this returns success without
-  // moving funds a second time. A failure here is retryable, so report `failed`.
-  const vaultTaskId = step.task.vaultTaskId;
+  // a crash returns success without moving funds twice. A failure here is
+  // retryable, so report `failed`.
+  const alreadyLocked = step.task.vaultTaskId;
+  const commitment = step.task.policy.commitment;
+  const planCostUsdc = Number(step.task.budget);
   const stepIndex = BigInt(step.index);
   let txHash: string;
   try {
-    // Serialize all on-chain ops for this delegate (per-signer), in-process and
-    // across processes (the API lock uses the same signer), so releases never
-    // race the sequence number while different users settle in parallel.
-    txHash = await withDelegate(delegateKp.publicKey(), () =>
-      release(delegateKp, {
+    txHash = await withDelegate(delegateKp.publicKey(), async () => {
+      // Lazily lock the task budget on-chain (the async lock, moved out of the
+      // API request path). The first step of a multi-line disburse to reach here
+      // locks; the rest, serialized on this same delegate key, reuse the id.
+      let vaultTaskId = alreadyLocked;
+      if (!vaultTaskId) {
+        const fresh = await prisma.task.findUnique({
+          where: { id: step.taskId },
+          select: { vaultTaskId: true },
+        });
+        vaultTaskId = fresh?.vaultTaskId ?? null;
+        if (!vaultTaskId) {
+          vaultTaskId = await lock(delegateKp, planCostUsdc, commitment);
+          await prisma.task.update({ where: { id: step.taskId }, data: { vaultTaskId } });
+          logger.info(
+            { taskId: step.taskId, vaultTaskId: String(vaultTaskId) },
+            'task locked on-chain (async)',
+          );
+        }
+      }
+      if (!vaultTaskId) throw new Error('task lock did not yield a vault task id');
+      return release(delegateKp, {
         taskId: vaultTaskId,
         stepId: stepIndex,
         amountStroops,
         payee,
         nullifier,
         proof,
-      }),
-    );
+      });
+    });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     logger.error({ stepId, err: reason }, 'settlement failed');
+    // If the task never got locked on-chain, it can never settle; mark it FAILED
+    // so it does not dangle as RUNNING (the async equivalent of the old
+    // synchronous "could not lock" rejection). A release failure after a
+    // successful lock is left retryable, matching prior behavior.
+    if (!alreadyLocked) {
+      const check = await prisma.task.findUnique({
+        where: { id: step.taskId },
+        select: { vaultTaskId: true },
+      });
+      if (!check?.vaultTaskId) {
+        await prisma.task
+          .update({ where: { id: step.taskId }, data: { status: TaskStatus.FAILED } })
+          .catch(() => {});
+      }
+    }
     return { status: 'failed', reason, buyerId };
   }
 
