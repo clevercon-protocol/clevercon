@@ -104,6 +104,13 @@ function main(): void {
           txHash: result.txHash,
         });
       }
+      // A transient failure (RPC blip, timeout, sequence contention) should retry
+      // with backoff: throw so BullMQ re-runs the job (settleStep is idempotent,
+      // so a replayed release/lock never moves funds twice). A deterministic
+      // failure returns without throwing, so the job stops retrying.
+      if (result.status === 'failed' && result.retryable) {
+        throw new Error(result.reason ?? 'settlement failed');
+      }
       // Finalize the on-chain task once all its releases have settled: unlocks
       // the remaining budget and decrements the active-task count. Idempotent.
       if (result.taskId) {
@@ -122,9 +129,28 @@ function main(): void {
   settlementWorker.on('completed', (job, result) =>
     logger.info({ stepId: job.data.stepId, result }, 'settlement processed'),
   );
-  settlementWorker.on('failed', (job, err) =>
-    logger.error({ stepId: job?.data.stepId, err: err.message }, 'settlement job failed'),
-  );
+  settlementWorker.on('failed', async (job, err) => {
+    logger.error({ stepId: job?.data.stepId, err: err.message }, 'settlement job failed');
+    // Once a settlement has exhausted all its retries, the step will never pay;
+    // mark its task FAILED so it does not dangle as RUNNING forever.
+    if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+      try {
+        const step = await prisma.taskStep.findUnique({
+          where: { id: job.data.stepId },
+          select: { taskId: true, task: { select: { status: true } } },
+        });
+        if (step && step.task.status === 'RUNNING') {
+          await prisma.task.update({ where: { id: step.taskId }, data: { status: 'FAILED' } });
+          logger.error(
+            { taskId: step.taskId, stepId: job.data.stepId },
+            'settlement exhausted retries; task marked FAILED',
+          );
+        }
+      } catch (e) {
+        logger.error({ stepId: job.data.stepId, err: (e as Error).message }, 'failed to mark task FAILED after retry exhaustion');
+      }
+    }
+  });
 
   logger.info(
     { concurrency: CONCURRENCY },

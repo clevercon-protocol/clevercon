@@ -52,6 +52,23 @@ export interface SettleResult {
   txHash?: string;
   buyerId?: string;
   taskId?: string;
+  /**
+   * Only set on `failed`. True when the failure is transient (RPC blip, timeout,
+   * sequence contention) and the caller should let the queue retry; false when it
+   * is deterministic (the contract rejected the call in simulation or on apply)
+   * and a retry would just fail again.
+   */
+  retryable?: boolean;
+}
+
+/**
+ * A deterministic chain failure is one where the contract rejected the call in
+ * simulation or applied and failed on-chain: retrying is pointless. Everything
+ * else the submit path can throw (timeouts, txBadSeq exhaustion, submit
+ * rejections, RPC/network errors) is transient and worth a retry.
+ */
+function isDeterministicChainError(msg: string): boolean {
+  return /simulation failed|failed on-chain/i.test(msg);
 }
 
 function env(key: string): string {
@@ -256,12 +273,13 @@ export async function settleStep(
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    logger.error({ stepId, err: reason }, 'settlement failed');
-    // If the task never got locked on-chain, it can never settle; mark it FAILED
-    // so it does not dangle as RUNNING (the async equivalent of the old
-    // synchronous "could not lock" rejection). A release failure after a
-    // successful lock is left retryable, matching prior behavior.
-    if (!alreadyLocked) {
+    const deterministic = isDeterministicChainError(reason);
+    logger.error({ stepId, err: reason, deterministic }, 'settlement failed');
+    // If the lock itself deterministically failed (e.g. InsufficientAvailable in
+    // simulation), the task can never settle, so mark it FAILED rather than let
+    // the queue retry forever. A transient lock failure is left RUNNING to retry,
+    // and a release failure after a successful lock is never marked FAILED here.
+    if (deterministic && !alreadyLocked) {
       const check = await prisma.task.findUnique({
         where: { id: step.taskId },
         select: { vaultTaskId: true },
@@ -272,7 +290,7 @@ export async function settleStep(
           .catch(() => {});
       }
     }
-    return { status: 'failed', reason, buyerId };
+    return { status: 'failed', reason, buyerId, retryable: !deterministic };
   }
 
   // (2) Record the mirror. Exactly-once for the RECORD is guaranteed by the
@@ -302,7 +320,9 @@ export async function settleStep(
     }
     const reason = err instanceof Error ? err.message : String(err);
     logger.error({ stepId, err: reason }, 'settlement recorded on-chain but mirror failed');
-    return { status: 'failed', reason, buyerId };
+    // The on-chain release is idempotent by (task, step), so retrying re-records
+    // the mirror without moving funds again: this db failure is worth a retry.
+    return { status: 'failed', reason, buyerId, retryable: true };
   }
 
   logger.info({ stepId, txHash, amountUsdc }, 'step settled');

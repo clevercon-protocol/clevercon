@@ -134,24 +134,37 @@ describe('settleStep guards', () => {
     expect(created).toHaveLength(1);
   });
 
-  it('marks the task FAILED when the lazy lock fails (so it does not dangle)', async () => {
-    const { prisma, updated } = mockPrisma(
-      baseStep({
-        task: {
-          buyerId: 'b',
-          vaultTaskId: null,
-          asset: 'USDC',
-          budget: '0.05',
-          policy: { commitment: 'ab'.repeat(32) },
-        },
-      }),
-    );
+  const unlockedStep = () =>
+    baseStep({
+      task: {
+        buyerId: 'b',
+        vaultTaskId: null,
+        asset: 'USDC',
+        budget: '0.05',
+        policy: { commitment: 'ab'.repeat(32) },
+      },
+    });
+
+  it('marks the task FAILED (not retryable) when the lazy lock deterministically fails', async () => {
+    const { prisma, updated } = mockPrisma(unlockedStep());
+    // A contract rejection in simulation (e.g. InsufficientAvailable) is deterministic.
     const throwingLock = vi.fn(async () => {
-      throw new Error('insufficient available');
+      throw new Error('create_task_with_policy simulation failed: Error(Contract, #6)');
     });
     const r = await settleStep(prisma, 's1', fakeRelease, throwingLock);
-    expect(r).toMatchObject({ status: 'failed', reason: 'insufficient available' });
+    expect(r).toMatchObject({ status: 'failed', retryable: false });
     expect(updated).toContainEqual({ status: 'FAILED' });
+  });
+
+  it('leaves the task RUNNING and retryable when the lazy lock fails transiently', async () => {
+    const { prisma, updated } = mockPrisma(unlockedStep());
+    const throwingLock = vi.fn(async () => {
+      throw new Error('create_task_with_policy timed out: abc123'); // transient
+    });
+    const r = await settleStep(prisma, 's1', fakeRelease, throwingLock);
+    expect(r).toMatchObject({ status: 'failed', retryable: true });
+    // Not marked FAILED: a retry may succeed.
+    expect(updated).not.toContainEqual({ status: 'FAILED' });
   });
 
   it('skips a task with no policy commitment', async () => {
@@ -218,7 +231,8 @@ describe('settleStep guards', () => {
       throw new Error('rpc down');
     });
     const r = await settleStep(prisma, 's1', throwingRelease);
-    expect(r).toMatchObject({ status: 'failed', reason: 'rpc down' });
+    // A bare RPC error is transient, so the queue should retry it.
+    expect(r).toMatchObject({ status: 'failed', reason: 'rpc down', retryable: true });
     expect(created).toHaveLength(0);
   });
 
@@ -226,6 +240,7 @@ describe('settleStep guards', () => {
     const { prisma } = mockPrisma(baseStep(), { createError: new Error('db down') });
     fakeRelease.mockClear();
     const r = await settleStep(prisma, 's1', fakeRelease);
-    expect(r).toMatchObject({ status: 'failed', reason: 'db down' });
+    // The on-chain release already happened; the mirror write is retryable.
+    expect(r).toMatchObject({ status: 'failed', reason: 'db down', retryable: true });
   });
 });
