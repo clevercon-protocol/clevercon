@@ -28,7 +28,7 @@ export const AppLoggerModule = LoggerModule.forRoot({
     },
     // Keep request logs lean and drop noisy health-probe lines.
     autoLogging: {
-      ignore: (req: IncomingMessage) => req.url === '/health',
+      ignore: (req: IncomingMessage) => req.url === '/health' || req.url === '/ready',
     },
     customProps: () => ({ context: 'HTTP' }),
     redact: {
