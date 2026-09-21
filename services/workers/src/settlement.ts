@@ -59,6 +59,8 @@ export interface SettleResult {
    * and a retry would just fail again.
    */
   retryable?: boolean;
+  /** Set when this failure moved the task to a terminal FAILED state. */
+  taskFailed?: boolean;
 }
 
 /**
@@ -279,6 +281,7 @@ export async function settleStep(
     // simulation), the task can never settle, so mark it FAILED rather than let
     // the queue retry forever. A transient lock failure is left RUNNING to retry,
     // and a release failure after a successful lock is never marked FAILED here.
+    let taskFailed = false;
     if (deterministic && !alreadyLocked) {
       const check = await prisma.task.findUnique({
         where: { id: step.taskId },
@@ -287,10 +290,20 @@ export async function settleStep(
       if (!check?.vaultTaskId) {
         await prisma.task
           .update({ where: { id: step.taskId }, data: { status: TaskStatus.FAILED } })
+          .then(() => {
+            taskFailed = true;
+          })
           .catch(() => {});
       }
     }
-    return { status: 'failed', reason, buyerId, retryable: !deterministic };
+    return {
+      status: 'failed',
+      reason,
+      buyerId,
+      taskId: step.taskId,
+      retryable: !deterministic,
+      taskFailed,
+    };
   }
 
   // (2) Record the mirror. Exactly-once for the RECORD is guaranteed by the
@@ -378,7 +391,7 @@ export async function finalizeTaskIfComplete(
   prisma: PrismaClient,
   taskId: string,
   complete: CompleteFn = completeTaskOnChain,
-): Promise<{ status: 'finalized' | 'already' | 'skipped'; reason?: string }> {
+): Promise<{ status: 'finalized' | 'already' | 'skipped'; reason?: string; mode?: TaskMode }> {
   const task = await prisma.task.findUnique({ where: { id: taskId }, include: { steps: true } });
   if (!task) return { status: 'skipped', reason: 'task not found' };
   if (!task.vaultTaskId) return { status: 'skipped', reason: 'not locked on-chain' };
@@ -429,5 +442,5 @@ export async function finalizeTaskIfComplete(
     { taskId, vaultTaskId: String(task.vaultTaskId), outcome },
     'task finalized on-chain (budget unlocked)',
   );
-  return { status: outcome === 'already' ? 'already' : 'finalized' };
+  return { status: outcome === 'already' ? 'already' : 'finalized', mode: task.mode };
 }

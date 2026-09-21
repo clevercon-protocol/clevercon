@@ -111,6 +111,18 @@ function main(): void {
       if (result.status === 'failed' && result.retryable) {
         throw new Error(result.reason ?? 'settlement failed');
       }
+      // A deterministic failure that moved the task to FAILED is terminal (a
+      // pay/disburse could not lock); notify the buyer's webhooks, since these
+      // tasks have no executor to do it.
+      if (result.status === 'failed' && result.taskFailed && result.taskId && result.buyerId) {
+        emitter
+          .to(`user:${result.buyerId}`)
+          .emit('task.updated', { taskId: result.taskId, status: 'failed' });
+        await deliverWebhooks(prisma, result.buyerId, 'task.failed', {
+          taskId: result.taskId,
+          status: 'failed',
+        });
+      }
       // Finalize the on-chain task once all its releases have settled: unlocks
       // the remaining budget and decrements the active-task count. Idempotent.
       if (result.taskId) {
@@ -120,6 +132,15 @@ function main(): void {
             taskId: result.taskId,
             finalized: true,
           });
+          // PAY/DISBURSE tasks complete here (no executor fires their webhook), so
+          // deliver the terminal event. A hire's completion webhook is delivered
+          // by the task-execution worker, so skip those to avoid a duplicate.
+          if (fin.mode === 'PAY' || fin.mode === 'DISBURSE') {
+            await deliverWebhooks(prisma, result.buyerId, 'task.completed', {
+              taskId: result.taskId,
+              status: 'completed',
+            });
+          }
         }
       }
       return result;
@@ -137,7 +158,7 @@ function main(): void {
       try {
         const step = await prisma.taskStep.findUnique({
           where: { id: job.data.stepId },
-          select: { taskId: true, task: { select: { status: true } } },
+          select: { taskId: true, task: { select: { status: true, buyerId: true } } },
         });
         if (step && step.task.status === 'RUNNING') {
           await prisma.task.update({ where: { id: step.taskId }, data: { status: 'FAILED' } });
@@ -145,6 +166,13 @@ function main(): void {
             { taskId: step.taskId, stepId: job.data.stepId },
             'settlement exhausted retries; task marked FAILED',
           );
+          emitter
+            .to(`user:${step.task.buyerId}`)
+            .emit('task.updated', { taskId: step.taskId, status: 'failed' });
+          await deliverWebhooks(prisma, step.task.buyerId, 'task.failed', {
+            taskId: step.taskId,
+            status: 'failed',
+          });
         }
       } catch (e) {
         logger.error({ stepId: job.data.stepId, err: (e as Error).message }, 'failed to mark task FAILED after retry exhaustion');

@@ -26,6 +26,8 @@ import {
   BASE_FEE,
 } from '@stellar/stellar-sdk';
 import fs from 'fs';
+import http from 'node:http';
+import { createHmac } from 'node:crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createSpender } from '@clevercon/agent-sdk/spender';
@@ -244,8 +246,24 @@ async function main() {
     record('create policy', !!policyId, `commitment ${p.commitment.slice(0, 10)}…`);
   }
 
+  // 7b. Register a local webhook sink so spend completions notify it (integrations).
+  const sink = startWebhookSink();
+  let webhookSecret = '';
+  {
+    const wh = await api<{ id: string; secret: string }>('/webhooks', {
+      body: { url: sink.url, events: [] },
+      token,
+    });
+    webhookSecret = wh.secret;
+    record('register webhook', !!wh.id, sink.url);
+  }
+
   // 8. PAY / DISBURSE (T1): the core spend primitive, real releases on-chain.
-  await runPayStage(token, policyId, buyer);
+  const payTaskId = await runPayStage(token, policyId, buyer);
+
+  // 8b. The pay task completing should have notified the webhook (pay/disburse
+  // finalize in the settlement worker, which now delivers the terminal event).
+  await runWebhookStage(sink, webhookSecret, payTaskId);
 
   // 8c. Concurrency: fire two payments at once for the SAME delegate. This used
   // to collide on the signer's sequence number (one would fail); the per-key
@@ -323,6 +341,8 @@ async function main() {
     record('reclaim USDC to faucet', true, `${bal.toFixed(2)} USDC returned`);
   }
 
+  sink.close();
+
   // Summary
   const passed = results.filter((r) => r.ok).length;
   console.log(`\n${passed}/${results.length} stages passed.\n`);
@@ -367,7 +387,7 @@ async function runConcurrentStage(token: string, policyId: string) {
   ]);
 }
 
-async function runPayStage(token: string, policyId: string, buyer: Keypair) {
+async function runPayStage(token: string, policyId: string, buyer: Keypair): Promise<string> {
   // pay: one line to the faucet (it has a USDC trustline to receive).
   const pay = await api<{ id: string }>('/payments', {
     body: {
@@ -392,6 +412,60 @@ async function runPayStage(token: string, policyId: string, buyer: Keypair) {
     token,
   });
   await waitTaskComplete(token, dis.id, 'disburse');
+  return pay.id;
+}
+
+// ── Webhook stage: prove a pay/disburse completion notifies registered webhooks ──
+interface HookHit {
+  event: string;
+  signature: string;
+  rawBody: string;
+  body: { data?: { taskId?: string; status?: string } } | null;
+}
+
+function startWebhookSink(): { url: string; received: HookHit[]; close: () => void } {
+  const received: HookHit[] = [];
+  const server = http.createServer((req, res) => {
+    let data = '';
+    req.on('data', (c) => (data += c));
+    req.on('end', () => {
+      received.push({
+        event: String(req.headers['x-clevercon-event'] ?? ''),
+        signature: String(req.headers['x-clevercon-signature'] ?? ''),
+        rawBody: data,
+        body: (() => {
+          try {
+            return JSON.parse(data);
+          } catch {
+            return null;
+          }
+        })(),
+      });
+      res.writeHead(200);
+      res.end('ok');
+    });
+  });
+  server.listen(0);
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  return { url: `http://127.0.0.1:${port}/hook`, received, close: () => server.close() };
+}
+
+/** Poll the sink for a signed task.completed matching the pay task. */
+async function runWebhookStage(sink: ReturnType<typeof startWebhookSink>, secret: string, payId: string) {
+  let hit: HookHit | undefined;
+  for (let i = 0; i < 12; i++) {
+    hit = sink.received.find((h) => h.event === 'task.completed' && h.body?.data?.taskId === payId);
+    if (hit) break;
+    await sleep(2000);
+  }
+  const sigOk =
+    !!hit && createHmac('sha256', secret).update(hit.rawBody).digest('hex') === hit.signature;
+  record(
+    'webhook task.completed (pay)',
+    !!hit && sigOk,
+    hit ? `delivered, signature ${sigOk ? 'valid' : 'INVALID'}` : 'not received',
+  );
 }
 
 // ── Reach stage: the spender SDK + the MCP, both driven with a scoped API key ──
