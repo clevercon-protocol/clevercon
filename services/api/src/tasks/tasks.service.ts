@@ -29,6 +29,8 @@ export interface CreateTaskParams {
   serviceId?: string;
   policyId?: string;
   description?: string;
+  /** Client-supplied Idempotency-Key: a retry with the same key returns the original task. */
+  idempotencyKey?: string;
 }
 
 export interface PaymentLine {
@@ -145,6 +147,18 @@ export class TasksService {
    * later (in the worker layer). Execution and settlement are wired separately.
    */
   async create(userId: string, params: CreateTaskParams) {
+    // Idempotent replay: a retried hire with the same Idempotency-Key returns the
+    // original task instead of hiring (and locking budget) a second time.
+    if (params.idempotencyKey) {
+      const prior = await this.prisma.task.findUnique({
+        where: {
+          buyerId_idempotencyKey: { buyerId: userId, idempotencyKey: params.idempotencyKey },
+        },
+        include: { steps: { select: { id: true, status: true } }, payments: true },
+      });
+      if (prior) return serialize(prior);
+    }
+
     const data: Prisma.TaskCreateInput = {
       buyer: { connect: { id: userId } },
       title: params.title,
@@ -153,6 +167,7 @@ export class TasksService {
       budget: new Prisma.Decimal(params.budget),
       asset: 'USDC',
       status: TaskStatus.DRAFT,
+      idempotencyKey: params.idempotencyKey ?? null,
     };
 
     if (params.mode === TaskMode.DIRECT) {
@@ -178,10 +193,30 @@ export class TasksService {
       if (!service) throw new BadRequestException('Unknown service');
     }
 
-    const created = await this.prisma.task.create({
-      data,
-      include: { steps: { select: { id: true, status: true } }, payments: true },
-    });
+    let created: TaskRow;
+    try {
+      created = await this.prisma.task.create({
+        data,
+        include: { steps: { select: { id: true, status: true } }, payments: true },
+      });
+    } catch (err) {
+      // A concurrent retry with the same key races past the replay check above and
+      // loses on the unique (buyerId, idempotencyKey); return the winner's task.
+      if (
+        params.idempotencyKey &&
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const winner = await this.prisma.task.findUnique({
+          where: {
+            buyerId_idempotencyKey: { buyerId: userId, idempotencyKey: params.idempotencyKey },
+          },
+          include: { steps: { select: { id: true, status: true } }, payments: true },
+        });
+        if (winner) return serialize(winner);
+      }
+      throw err;
+    }
     // If a policy is attached, lock the budget on-chain under it before running,
     // so released steps can settle to providers via the delegate. Best-effort.
     if (params.policyId) {

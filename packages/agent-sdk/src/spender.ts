@@ -88,13 +88,15 @@ export interface CleverConClient {
     lines: PaymentLine[],
     opts?: { policyId?: string; idempotencyKey?: string },
   ): Promise<Spend>;
-  /** Hire a registered service (DIRECT pays a chosen serviceId). */
+  /** Hire a registered service (DIRECT pays a chosen serviceId). `idempotencyKey`
+   *  makes a retry return the original hire rather than hiring twice. */
   hire(opts: {
     title: string;
     budget: number;
     serviceId?: string;
     mode?: 'DIRECT' | 'SEARCH' | 'COMPOSE';
     policyId?: string;
+    idempotencyKey?: string;
   }): Promise<Spend>;
   /** The vault position the agent can spend (balance, available, locked). */
   getBudget(): Promise<Budget>;
@@ -166,6 +168,7 @@ export function createSpender(options: SpenderOptions): CleverConClient {
         budget: opts.budget,
         ...(opts.serviceId ? { serviceId: opts.serviceId } : {}),
         ...(opts.policyId ? { policyId: opts.policyId } : {}),
+        ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
       }),
     getBudget: () => request<Budget>('GET', '/vault'),
     getActivity: () => request<unknown>('GET', '/activity'),

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { TaskMode, TaskStatus } from '@clevercon/db';
 import { TasksService } from './tasks.service.js';
@@ -20,6 +20,8 @@ const createSchema = z.object({
   serviceId: z.string().optional(),
   policyId: z.string().optional(),
   description: z.string().max(2000).optional(),
+  // Also accepted in the body for clients that cannot set a header.
+  idempotencyKey: z.string().min(1).max(255).optional(),
 });
 
 const disputeSchema = z.object({ reason: z.string().max(1000).optional() });
@@ -32,8 +34,14 @@ export class TasksController {
   constructor(private readonly tasks: TasksService) {}
 
   @Post()
-  create(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    return this.tasks.create(user.userId, parseBody(createSchema, body));
+  create(
+    @CurrentUser() user: AuthUser,
+    @Body() body: unknown,
+    @Headers('idempotency-key') headerKey?: string,
+  ) {
+    const parsed = parseBody(createSchema, body);
+    const idempotencyKey = headerKey?.trim().slice(0, 255) || parsed.idempotencyKey || undefined;
+    return this.tasks.create(user.userId, { ...parsed, idempotencyKey });
   }
 
   @Get()

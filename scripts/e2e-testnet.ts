@@ -290,6 +290,9 @@ async function main() {
   // 8d. Idempotency: a retried spend with the same Idempotency-Key must not double-pay.
   await runIdempotencyStage(token, policyId);
 
+  // 8e. Idempotency also covers /tasks (hire), so the whole money API is uniform.
+  await runTaskIdempotencyStage(token);
+
   // 8c. Concurrency: fire two payments at once for the SAME delegate. This used
   // to collide on the signer's sequence number (one would fail); the per-key
   // mutex + txBadSeq retry must now settle both.
@@ -518,6 +521,21 @@ async function runIdempotencyStage(token: string, policyId: string) {
   // A third replay after completion still returns the same task, never a new spend.
   const c = await send();
   record('idempotent pay: replay after settle', c.id === a.id, 'no new spend');
+}
+
+/** Idempotency for /tasks (hire), proven without a provider: two concurrent
+ *  same-key task creations must collapse to one task. Uses a SEARCH task so no
+ *  budget locks or settles (createTask shares the same idempotency path). */
+async function runTaskIdempotencyStage(token: string) {
+  const key = `e2e-hire-idem-${Date.now()}`;
+  const send = () =>
+    api<{ id: string }>('/tasks', {
+      body: { title: 'idem hire', mode: 'SEARCH', budget: 0.1 },
+      token,
+      idempotencyKey: key,
+    });
+  const [a, b] = await Promise.all([send(), send()]);
+  record('idempotent hire: same key returns one task', a.id === b.id, `task ${a.id.slice(0, 8)}`);
 }
 
 // ── Reach stage: the spender SDK + the MCP, both driven with a scoped API key ──
