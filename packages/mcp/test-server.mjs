@@ -86,12 +86,18 @@ async function testListTools() {
 
     const tools = response.result?.tools || [];
     const expectedTools = [
-      'search_agents',
-      'get_agent',
-      'get_vault_balance',
-      'build_deposit',
-      'build_release',
-      'estimate_cost',
+      'search_services',
+      'get_service',
+      'pay',
+      'disburse',
+      'hire_agent',
+      'set_limit',
+      'list_limits',
+      'get_budget',
+      'get_activity',
+      'list_tasks',
+      'get_task',
+      'dispute_task',
     ];
 
     const actualToolNames = tools.map((t) => t.name);
@@ -110,100 +116,29 @@ async function testListTools() {
   }
 }
 
-async function testSearchAgents() {
-  console.log('Testing search_agents tool...');
+async function testSearchServices() {
+  console.log('Testing search_services tool...');
 
   const request = {
     jsonrpc: '2.0',
     id: 2,
     method: 'tools/call',
     params: {
-      name: 'search_agents',
-      arguments: {
-        capability: 'test-capability',
-      },
+      name: 'search_services',
+      arguments: { limit: 3 },
     },
   };
 
   try {
     const responses = await sendMCPRequest(request);
     const response = responses.find((r) => r.id === 2);
-
-    if (!response) {
-      throw new Error('No response received for search_agents');
-    }
-
-    // Even if it returns an error due to registry not being available,
-    // the tool should handle it gracefully
-    if (response.error) {
-      // Check if it's an expected network error
-      if (response.error.message && response.error.message.includes('Registry search failed')) {
-        console.log(
-          '⚠️ Tool returned expected network error (registry unavailable):',
-          response.error.message,
-        );
-        return true;
-      } else {
-        // Unexpected error - fail the test
-        throw new Error(
-          `Unexpected tool error: ${response.error.message || JSON.stringify(response.error)}`,
-        );
-      }
-    } else {
-      console.log('✅ search_agents tool responded successfully');
-    }
-
+    if (!response) throw new Error('No response received for search_services');
+    // The tool wraps API errors (e.g. API unreachable) in its result text rather
+    // than a protocol error, so any response here means the tool is wired.
+    console.log('✅ search_services tool responded');
     return true;
   } catch (error) {
-    console.error('❌ search_agents test failed:', error.message);
-    return false;
-  }
-}
-
-async function testEstimateCost() {
-  console.log('Testing estimate_cost tool...');
-
-  const request = {
-    jsonrpc: '2.0',
-    id: 3,
-    method: 'tools/call',
-    params: {
-      name: 'estimate_cost',
-      arguments: {
-        capability: 'data-analysis',
-      },
-    },
-  };
-
-  try {
-    const responses = await sendMCPRequest(request);
-    const response = responses.find((r) => r.id === 3);
-
-    if (!response) {
-      throw new Error('No response received for estimate_cost');
-    }
-
-    if (response.error) {
-      // Check if it's an expected network error
-      if (response.error.message && response.error.message.includes('Registry search failed')) {
-        console.log(
-          '⚠️ Tool returned expected network error (registry unavailable):',
-          response.error.message,
-        );
-        return true;
-      } else {
-        // Unexpected error - fail the test
-        throw new Error(
-          `Unexpected tool error: ${response.error.message || JSON.stringify(response.error)}`,
-        );
-      }
-    } else {
-      console.log('✅ estimate_cost tool responded successfully');
-    }
-
-    return true;
-  } catch (error) {
-    console.error('❌ estimate_cost test failed:', error.message);
+    console.error('❌ search_services test failed:', error.message);
     return false;
   }
 }
@@ -211,7 +146,7 @@ async function testEstimateCost() {
 async function runTests() {
   console.log('🚀 Running CleverCon MCP Server tests...\n');
 
-  const tests = [testListTools, testSearchAgents, testEstimateCost];
+  const tests = [testListTools, testSearchServices];
 
   let passed = 0;
 

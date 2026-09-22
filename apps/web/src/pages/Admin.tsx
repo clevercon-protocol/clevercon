@@ -1,61 +1,393 @@
-import { Users, Boxes, Percent, Landmark } from 'lucide-react';
-import { demoPlatform, demoDisputes } from '../lib/demo';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Users, Boxes, Coins, Landmark, Briefcase, Percent, Rocket } from 'lucide-react';
+import {
+  getAdminStats,
+  getActivation,
+  getAdminUsers,
+  setUserRole,
+  getFees,
+  setFee,
+  getAdminServices,
+  moderateService,
+  getDisputes,
+  resolveDispute,
+} from '../lib/admin';
+import { Loading, ErrorState, controls } from '../components/ui';
 
-const STAT = [
-  { icon: Users, label: 'Users', value: String(demoPlatform.users) },
-  { icon: Boxes, label: 'Active services', value: String(demoPlatform.activeServices) },
-  { icon: Percent, label: 'Protocol fee', value: `${(demoPlatform.feeBps / 100).toFixed(2)}%` },
-  { icon: Landmark, label: 'Value locked', value: `$${demoPlatform.tvlUsdc.toLocaleString()}` },
-];
+function DisputesCard() {
+  const qc = useQueryClient();
+  const {
+    data: disputes = [],
+    isLoading,
+    error,
+  } = useQuery({ queryKey: ['admin-disputes'], queryFn: getDisputes });
+  const act = useMutation({
+    mutationFn: (v: { id: string; reject: boolean; budget: number }) =>
+      resolveDispute(v.id, {
+        resolution: v.reject ? 'Rejected by operator' : 'Refunded to buyer',
+        reject: v.reject,
+        refundToUser: v.reject ? undefined : v.budget,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-disputes'] }),
+  });
+  const open = disputes.filter((d) => d.status === 'OPEN');
+  return (
+    <div className="rounded-2xl bg-white/[0.04] p-6">
+      <h2 className="font-semibold text-slate-300">Disputes</h2>
+      {isLoading && (
+        <div className="mt-4">
+          <Loading rows={2} />
+        </div>
+      )}
+      {error && (
+        <div className="mt-4">
+          <ErrorState>Could not load disputes.</ErrorState>
+        </div>
+      )}
+      {!isLoading && !error && disputes.length === 0 && (
+        <p className="mt-4 text-sm text-slate-500">No disputes.</p>
+      )}
+      <div className="mt-4 space-y-2">
+        {disputes.map((d) => (
+          <div
+            key={d.id}
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3 text-sm"
+          >
+            <div className="min-w-0">
+              <div className="truncate font-medium">{d.taskTitle}</div>
+              <div className="truncate text-xs text-slate-500">
+                {d.raisedBy.slice(0, 6)}…{d.raisedBy.slice(-4)}
+                {d.reason ? ` · ${d.reason}` : ''}
+                {d.status !== 'OPEN' && d.resolution ? ` · ${d.resolution}` : ''}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-slate-300">${d.budget.toFixed(2)}</span>
+              {d.status === 'OPEN' ? (
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => act.mutate({ id: d.id, reject: false, budget: d.budget })}
+                    disabled={act.isPending}
+                    className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                  >
+                    Refund buyer
+                  </button>
+                  <button
+                    onClick={() => act.mutate({ id: d.id, reject: true, budget: d.budget })}
+                    disabled={act.isPending}
+                    className="rounded-lg bg-white/[0.05] px-2.5 py-1 text-xs text-slate-400 hover:bg-white/10 disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
+                </div>
+              ) : (
+                <span
+                  className={`text-xs ${d.status === 'RESOLVED' ? 'text-emerald-300' : 'text-slate-500'}`}
+                >
+                  {d.status}
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {open.length > 0 && <p className="mt-3 text-xs text-slate-500">{open.length} open</p>}
+    </div>
+  );
+}
+
+const MANAGEABLE_ROLES = ['PROVIDER', 'DEVELOPER', 'ADMIN'] as const;
+
+function ServicesModerationCard() {
+  const qc = useQueryClient();
+  const {
+    data: services = [],
+    isLoading,
+    error,
+  } = useQuery({ queryKey: ['admin-services'], queryFn: getAdminServices });
+  const moderate = useMutation({
+    mutationFn: (v: { id: string; active: boolean }) => moderateService(v.id, v.active),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-services'] });
+      qc.invalidateQueries({ queryKey: ['admin-stats'] });
+      qc.invalidateQueries({ queryKey: ['services'] });
+    },
+  });
+  return (
+    <div className="rounded-2xl bg-white/[0.04] p-6">
+      <h2 className="font-semibold text-slate-300">Services (moderation)</h2>
+      {isLoading && (
+        <div className="mt-4">
+          <Loading rows={3} />
+        </div>
+      )}
+      {error && (
+        <div className="mt-4">
+          <ErrorState>Could not load services.</ErrorState>
+        </div>
+      )}
+      {!isLoading && !error && services.length === 0 && (
+        <p className="mt-4 text-sm text-slate-500">No services yet.</p>
+      )}
+      <div className="mt-4 space-y-2">
+        {services.map((s) => {
+          const active = s.status === 'ACTIVE';
+          return (
+            <div
+              key={s.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3 text-sm"
+            >
+              <div className="min-w-0">
+                <div className="truncate font-medium">{s.name}</div>
+                <div className="text-xs text-slate-500">
+                  {s.category ?? 'Uncategorised'} · ${s.pricePerCall}/call · {s.totalJobs} jobs
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className={`text-xs ${active ? 'text-emerald-300' : 'text-slate-500'}`}>
+                  {s.status}
+                </span>
+                <button
+                  onClick={() => moderate.mutate({ id: s.id, active: !active })}
+                  disabled={moderate.isPending}
+                  className="rounded-lg bg-white/[0.05] px-2.5 py-1 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
+                >
+                  {active ? 'Take down' : 'Restore'}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FeesCard() {
+  const qc = useQueryClient();
+  const { data: fees } = useQuery({ queryKey: ['admin-fees'], queryFn: getFees });
+  const [bps, setBps] = useState('');
+  const save = useMutation({
+    mutationFn: () => setFee(Number(bps)),
+    onSuccess: () => {
+      setBps('');
+      qc.invalidateQueries({ queryKey: ['admin-fees'] });
+    },
+  });
+
+  return (
+    <div className="rounded-2xl bg-white/[0.04] p-6">
+      <div className="flex items-center gap-2 text-slate-300">
+        <Percent size={16} className="text-violet-300" />
+        <h2 className="font-semibold">Protocol fee</h2>
+      </div>
+      {!fees?.enabled ? (
+        <p className="mt-3 text-sm text-slate-500">
+          Fee administration is not configured in this environment.
+        </p>
+      ) : (
+        <>
+          <div className="mt-3 flex flex-wrap gap-6 text-sm">
+            <div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">Current fee</div>
+              <div className="text-lg font-bold">{(fees.bps / 100).toFixed(2)}%</div>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">Accrued</div>
+              <div className="text-lg font-bold">${fees.accruedUsdc.toFixed(2)}</div>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">Recipient</div>
+              <div className="font-mono text-sm text-slate-300">
+                {fees.recipient
+                  ? `${fees.recipient.slice(0, 6)}…${fees.recipient.slice(-4)}`
+                  : 'unset'}
+              </div>
+            </div>
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (bps !== '' && !save.isPending) save.mutate();
+            }}
+            className="mt-4 flex flex-wrap items-center gap-2"
+          >
+            <input
+              value={bps}
+              onChange={(e) => setBps(e.target.value)}
+              inputMode="numeric"
+              placeholder="New fee (bps, e.g. 30 = 0.30%)"
+              className={`min-w-56 flex-1 ${controls.field}`}
+            />
+            <button
+              type="submit"
+              disabled={bps === '' || save.isPending}
+              className={controls.primary}
+            >
+              {save.isPending ? 'Updating…' : 'Update fee'}
+            </button>
+          </form>
+          {save.error && <p className="mt-2 text-sm text-red-400">Could not update the fee.</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function StatTiles() {
+  const { data: s } = useQuery({ queryKey: ['admin-stats'], queryFn: getAdminStats });
+  const tiles = [
+    { icon: Users, label: 'Users', value: String(s?.users ?? 0) },
+    { icon: Boxes, label: 'Active services', value: String(s?.activeServices ?? 0) },
+    { icon: Briefcase, label: 'Tasks', value: String(s?.tasks ?? 0) },
+    { icon: Coins, label: 'Paid volume', value: `$${(s?.paymentsVolumeUsdc ?? 0).toFixed(2)}` },
+    { icon: Landmark, label: 'Value locked', value: `$${(s?.tvlUsdc ?? 0).toFixed(2)}` },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      {tiles.map((t) => (
+        <div key={t.label} className="rounded-2xl bg-white/[0.04] p-4">
+          <t.icon size={16} className="text-violet-300" />
+          <div className="mt-2 text-xl font-bold">{t.value}</div>
+          <div className="text-xs text-slate-500">{t.label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ActivationFunnelCard() {
+  const { data } = useQuery({ queryKey: ['admin-activation'], queryFn: getActivation });
+  const steps = data?.steps ?? [];
+  const top = steps[0]?.count ?? 0;
+  return (
+    <div className="rounded-2xl bg-white/[0.04] p-6">
+      <div className="flex items-center gap-2 text-slate-300">
+        <Rocket size={18} className="text-violet-300" />
+        <h2 className="font-semibold">Activation funnel</h2>
+      </div>
+      <p className="mt-2 text-sm text-slate-400">
+        How many users reached each step of the core path. First-party and aggregate, no external
+        analytics.
+      </p>
+      <div className="mt-4 space-y-2">
+        {steps.map((s) => {
+          const pct = top > 0 ? Math.round((s.count / top) * 100) : 0;
+          return (
+            <div key={s.key}>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-300">{s.label}</span>
+                <span className="text-slate-400">
+                  {s.count}
+                  <span className="ml-1 text-xs text-slate-600">({pct}%)</span>
+                </span>
+              </div>
+              <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-white/[0.06]">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+        {steps.length === 0 && <p className="text-sm text-slate-500">No activation data yet.</p>}
+      </div>
+    </div>
+  );
+}
+
+function UsersCard() {
+  const qc = useQueryClient();
+  const {
+    data: users = [],
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['admin-users'],
+    queryFn: getAdminUsers,
+  });
+  const toggle = useMutation({
+    mutationFn: (v: { userId: string; role: string; grant: boolean }) =>
+      setUserRole(v.userId, v.role, v.grant),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-users'] });
+      qc.invalidateQueries({ queryKey: ['admin-stats'] });
+    },
+  });
+
+  return (
+    <div className="rounded-2xl bg-white/[0.04] p-6">
+      <h2 className="font-semibold text-slate-300">Users &amp; roles</h2>
+      {isLoading && (
+        <div className="mt-4">
+          <Loading rows={3} />
+        </div>
+      )}
+      {error && (
+        <div className="mt-4">
+          <ErrorState>Could not load users.</ErrorState>
+        </div>
+      )}
+      {!isLoading && !error && users.length === 0 && (
+        <p className="mt-4 text-sm text-slate-500">No users yet.</p>
+      )}
+      <div className="mt-4 space-y-2">
+        {users.map((u) => (
+          <div
+            key={u.id}
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3 text-sm"
+          >
+            <div className="min-w-0">
+              <div className="font-mono text-xs text-slate-400">
+                {u.wallet ? `${u.wallet.slice(0, 6)}…${u.wallet.slice(-4)}` : u.id.slice(0, 10)}
+              </div>
+              <div className="mt-0.5 text-xs text-slate-500">
+                {u.services} services · {u.tasks} tasks · {u.apiKeys} keys
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {MANAGEABLE_ROLES.map((role) => {
+                const has = u.roles.includes(role);
+                return (
+                  <button
+                    key={role}
+                    onClick={() => toggle.mutate({ userId: u.id, role, grant: !has })}
+                    disabled={toggle.isPending}
+                    className={`rounded-lg border px-2.5 py-1 text-xs transition-colors disabled:opacity-50 ${
+                      has
+                        ? 'border-violet-500/40 bg-violet-500/15 text-white'
+                        : 'border-white/10 text-slate-500 hover:text-white'
+                    }`}
+                    title={has ? `Revoke ${role}` : `Grant ${role}`}
+                  >
+                    {role}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function Admin() {
   return (
     <section className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Admin console</h1>
-        <p className="mt-1 text-slate-400">Disputes, fees, users, and platform monitoring.</p>
+        <p className="mt-1 text-slate-400">Monitoring, users and roles, and disputes.</p>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {STAT.map((s) => (
-          <div key={s.label} className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-            <s.icon size={16} className="text-violet-300" />
-            <div className="mt-2 text-xl font-bold">{s.value}</div>
-            <div className="text-xs text-slate-500">{s.label}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
-        <h2 className="font-semibold text-slate-300">Disputes</h2>
-        <div className="mt-4 space-y-2">
-          {demoDisputes.map((d) => (
-            <div
-              key={d.id}
-              className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
-            >
-              <div>
-                <div className="font-medium">{d.task}</div>
-                <div className="text-xs text-slate-500">{d.parties}</div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-slate-300">${d.amountUsdc}</span>
-                <span
-                  className={`text-xs capitalize ${d.status === 'open' ? 'text-amber-300' : 'text-emerald-300'}`}
-                >
-                  {d.status}
-                </span>
-                <button
-                  disabled
-                  className="rounded-lg bg-white/10 px-2.5 py-1 text-xs text-slate-400 cursor-not-allowed"
-                >
-                  Resolve
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      <StatTiles />
+      <ActivationFunnelCard />
+      <FeesCard />
+      <ServicesModerationCard />
+      <UsersCard />
+      <DisputesCard />
     </section>
   );
 }

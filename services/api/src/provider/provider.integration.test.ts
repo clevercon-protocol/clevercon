@@ -132,4 +132,123 @@ describe.skipIf(!DB)('Provider (integration, real Postgres)', () => {
     expect(e).toMatchObject({ totalEarned: 0, thisWeek: 0, jobs: 0, rating: 0 });
     expect(e.recent).toHaveLength(0);
   });
+
+  it('lists incoming jobs (task steps) routed to the provider own services', async () => {
+    const me = await prisma.user.create({ data: {} });
+    const other = await prisma.user.create({ data: {} });
+    const buyer = await prisma.user.create({ data: {} });
+    const mySvc = await provider.registerService(me.id, {
+      name: 'My Svc',
+      description: 'd',
+      pricingModel: 'X402',
+      pricePerCall: 0.05,
+      endpoint: 'https://m.example.com',
+      stellarAddress: 'GMYSVC',
+    });
+    const theirSvc = await provider.registerService(other.id, {
+      name: 'Their Svc',
+      description: 'd',
+      pricingModel: 'X402',
+      pricePerCall: 0.05,
+      endpoint: 'https://t.example.com',
+      stellarAddress: 'GTHEIRSVC',
+    });
+
+    const task = await prisma.task.create({
+      data: { buyerId: buyer.id, title: 'A job', mode: 'DIRECT', budget: '1', asset: 'USDC' },
+    });
+    await prisma.taskStep.create({
+      data: {
+        taskId: task.id,
+        index: 0,
+        serviceId: mySvc.id,
+        action: 'Fetch data',
+        estimatedCost: '0.05',
+        status: 'RELEASED',
+      },
+    });
+    // A step on another provider's service must NOT appear for me.
+    await prisma.taskStep.create({
+      data: {
+        taskId: task.id,
+        index: 1,
+        serviceId: theirSvc.id,
+        action: 'Other work',
+        estimatedCost: '0.05',
+        status: 'PENDING',
+      },
+    });
+
+    const mine = await provider.jobs(me.id);
+    expect(mine.total).toBe(1);
+    expect(mine.items[0]).toMatchObject({
+      service: 'My Svc',
+      action: 'Fetch data',
+      status: 'RELEASED',
+      taskTitle: 'A job',
+    });
+
+    const theirs = await provider.jobs(other.id);
+    expect(theirs.total).toBe(1);
+    expect(theirs.items[0].action).toBe('Other work');
+  });
+
+  it('updates a service the caller owns and rejects editing another provider service', async () => {
+    const me = await prisma.user.create({ data: {} });
+    const other = await prisma.user.create({ data: {} });
+    const svc = await provider.registerService(me.id, {
+      name: 'Orig',
+      description: 'orig desc',
+      pricingModel: 'X402',
+      pricePerCall: 0.05,
+      endpoint: 'https://a.example.com',
+      stellarAddress: 'GADDR1',
+    });
+
+    const updated = await provider.updateService(me.id, svc.id, {
+      name: 'Renamed',
+      pricePerCall: 0.2,
+    });
+    expect(updated.name).toBe('Renamed');
+    expect(updated.pricePerCall).toBe(0.2);
+
+    // Partial update leaves other fields intact.
+    const row = await prisma.service.findUnique({ where: { id: svc.id } });
+    expect(row.description).toBe('orig desc');
+    expect(row.endpoint).toBe('https://a.example.com');
+
+    // A different provider cannot edit it.
+    await expect(provider.updateService(other.id, svc.id, { name: 'Hijack' })).rejects.toThrow();
+    const still = await prisma.service.findUnique({ where: { id: svc.id } });
+    expect(still.name).toBe('Renamed');
+  });
+
+  it('pauses and resumes a service (owner-scoped), toggling marketplace visibility', async () => {
+    const me = await prisma.user.create({ data: {} });
+    const other = await prisma.user.create({ data: {} });
+    const svc = await provider.registerService(me.id, {
+      name: 'Pausable',
+      description: 'desc',
+      pricingModel: 'X402',
+      pricePerCall: 0.05,
+      endpoint: 'https://b.example.com',
+      stellarAddress: 'GADDR2',
+    });
+
+    const paused = await provider.setServiceStatus(me.id, svc.id, false);
+    expect(paused.status).toBe('INACTIVE');
+    // A paused service is excluded from the public marketplace listing.
+    const { ServicesService } = await import('../services/services.service.js');
+    const market = new ServicesService(prisma);
+    let listed = await market.list({});
+    expect(listed.items.find((s: { id: string }) => s.id === svc.id)).toBeUndefined();
+
+    const resumed = await provider.setServiceStatus(me.id, svc.id, true);
+    expect(resumed.status).toBe('ACTIVE');
+    listed = await market.list({});
+    expect(listed.items.find((s: { id: string }) => s.id === svc.id)).toBeDefined();
+
+    // Non-owner cannot change status.
+    await expect(provider.setServiceStatus(other.id, svc.id, false)).rejects.toThrow();
+  });
 });

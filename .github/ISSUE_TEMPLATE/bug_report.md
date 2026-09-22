@@ -26,7 +26,7 @@ if relevant.
 
 ## Environment
 
-- Package/area affected (e.g. `packages/orchestrator`, `contracts/agent-vault`):
+- Package/area affected (e.g. `services/api`, `contracts/agent-vault`):
 - Network (testnet/mainnet):
 - Node version / `cargo` version (if relevant):
 - Commit or branch:

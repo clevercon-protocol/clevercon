@@ -1,34 +1,39 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, Vault, Search, ListChecks, ShieldCheck } from 'lucide-react';
+import { MessagesSquare, Vault, Search, Activity, SlidersHorizontal } from 'lucide-react';
+import { useRealtime } from '../../lib/useRealtime';
+import { PageHeader } from '../../components/ui';
 
+// Chat-first: instruct your agent (Home), define the rules it must obey (Limits),
+// browse services it can pull from (Services), see everything it did (Activity),
+// and manage the money + accounts (Vault). Each concept gets its own focused tab.
 const TABS = [
-  { to: '/app', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/app', label: 'Home', icon: MessagesSquare, end: true },
+  { to: '/app/limits', label: 'Limits', icon: SlidersHorizontal },
+  { to: '/app/services', label: 'Services', icon: Search },
+  { to: '/app/activity', label: 'Activity', icon: Activity },
   { to: '/app/vault', label: 'Vault', icon: Vault },
-  { to: '/app/marketplace', label: 'Marketplace', icon: Search },
-  { to: '/app/jobs', label: 'Jobs', icon: ListChecks },
-  { to: '/app/policies', label: 'Policies', icon: ShieldCheck },
 ];
 
 export function BuyerLayout() {
+  useRealtime();
   return (
     <section className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-white">Buyer</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Fund a vault, hire services, and keep your spending rules private.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Spending agent"
+        title="Your agent"
+        subtitle="Put an AI agent in charge of your money, within private limits it cannot break."
+      />
 
-      <nav className="flex gap-1 overflow-x-auto rounded-xl border border-white/[0.08] bg-white/[0.02] p-1">
+      <nav className="flex gap-1 overflow-x-auto rounded-xl bg-surface-2 p-1">
         {TABS.map((t) => (
           <NavLink
             key={t.to}
             to={t.to}
             end={t.end}
             className={({ isActive }) =>
-              `inline-flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm transition-colors ${
+              `inline-flex items-center gap-2 whitespace-nowrap rounded-lg px-3.5 py-2 text-sm font-medium transition-colors ${
                 isActive
-                  ? 'bg-violet-500/15 text-white'
+                  ? 'bg-violet-500/[0.16] text-white shadow-sm shadow-violet-950/30'
                   : 'text-slate-400 hover:bg-white/[0.04] hover:text-white'
               }`
             }

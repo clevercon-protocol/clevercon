@@ -64,6 +64,7 @@ export interface TaskStepView {
   service: string | null;
   latencyMs: number | null;
   error: string | null;
+  output: string | null;
 }
 
 export interface Receipt {
@@ -99,6 +100,7 @@ export async function getTask(id: string): Promise<TaskDetail> {
         service: 'Stellar Oracle',
         latencyMs: i < base.completedSteps ? 820 : null,
         error: null,
+        output: i < base.completedSteps ? '{"result":"Fulfilled (demo)"}' : null,
       })),
       receipts:
         base.spent > 0
@@ -127,6 +129,7 @@ export interface CreateTaskInput {
   mode: HireMode;
   budget: number;
   serviceId?: string;
+  policyId?: string;
   description?: string;
 }
 
@@ -146,4 +149,78 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     };
   }
   return apiPost<Task>('/tasks', input);
+}
+
+export interface PaymentLineInput {
+  payee: string;
+  amount: number;
+  reason?: string;
+}
+
+export interface CreatePaymentInput {
+  kind: 'pay' | 'disburse';
+  lines: PaymentLineInput[];
+  policyId?: string;
+  title?: string;
+}
+
+/**
+ * The direct spend primitive: pay one address or disburse to many, bounded by a
+ * policy and released from the vault. Returns the created task (settles out of
+ * band). In demo mode this returns a local stand-in.
+ */
+export async function createPayment(input: CreatePaymentInput): Promise<Task> {
+  if (isDemo()) {
+    const total = input.lines.reduce((s, l) => s + l.amount, 0);
+    return {
+      id: 'pay-' + Date.now(),
+      title: input.kind === 'pay' ? 'Payment' : `Disburse to ${input.lines.length}`,
+      mode: input.kind === 'pay' ? 'PAY' : 'DISBURSE',
+      status: 'RUNNING',
+      budget: total,
+      spent: 0,
+      stepCount: input.lines.length,
+      completedSteps: 0,
+      createdAt: new Date().toISOString(),
+    };
+  }
+  return apiPost<Task>('/payments', input);
+}
+
+export interface AgentPlanResult {
+  kind: 'pay' | 'disburse' | 'hire' | 'none';
+  lines: PaymentLineInput[];
+  service: { id: string; name: string; pricePerCall: number } | null;
+  budget: number;
+  rationale: string;
+  warnings: string[];
+  source: 'llm' | 'fallback';
+}
+
+/**
+ * Parse a natural-language instruction into a structured, pre-validated plan.
+ * The agent only proposes; the human approves and the vault enforces limits.
+ */
+export async function planInstruction(instruction: string): Promise<AgentPlanResult> {
+  if (isDemo()) {
+    return {
+      kind: 'none',
+      lines: [],
+      service: null,
+      budget: 0,
+      rationale: 'Connect a wallet (full mode) to use the agent.',
+      warnings: [],
+      source: 'fallback',
+    };
+  }
+  return apiPost<AgentPlanResult>('/agent/plan', { instruction });
+}
+
+/** Raise a dispute on one of the caller's tasks. */
+export async function raiseDispute(
+  taskId: string,
+  reason?: string,
+): Promise<{ id: string; status: string }> {
+  if (isDemo()) return { id: 'dispute-' + Date.now(), status: 'OPEN' };
+  return apiPost<{ id: string; status: string }>(`/tasks/${taskId}/dispute`, { reason });
 }

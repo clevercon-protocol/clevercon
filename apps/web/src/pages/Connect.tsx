@@ -16,7 +16,7 @@ export function Connect() {
 
   return (
     <section className="mx-auto max-w-md py-12">
-      <div className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-8 text-center shadow-xl shadow-black/20">
+      <div className="rounded-2xl bg-white/[0.04] p-8 text-center shadow-xl shadow-black/20">
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-700 shadow-lg shadow-violet-900/40">
           <Layers size={22} className="text-white" />
         </div>

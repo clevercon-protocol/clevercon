@@ -165,6 +165,34 @@ fn test_verify_valid_proof_returns_true() {
     assert!(result, "valid proof must return true");
 }
 
+#[test]
+fn test_verify_policy_wrapper_matches_verify() {
+    // verify_policy is the bool entry point the vault calls; it must return true
+    // for a valid proof and false for a tampered one (fail-closed), collapsing
+    // the Result of `verify`.
+    let (env, _, admin, client) = setup();
+    let vk = Bytes::from_slice(&env, VALID_VK);
+    client.set_vk(&admin, &vk);
+
+    let payee = Address::generate(&env);
+    let commitment = BytesN::from_array(&env, &COMMITMENT);
+    let nullifier = BytesN::from_array(&env, &NULLIFIER);
+    let (_, pi_hash) = build_public_inputs(&env, &commitment, &payee, AMOUNT, &nullifier);
+    let proof = build_valid_proof(&env, &pi_hash);
+
+    assert!(
+        client.verify_policy(&commitment, &payee, &AMOUNT, &nullifier, &proof),
+        "verify_policy must return true for a valid proof"
+    );
+
+    // A different amount than the one the proof was built for must be rejected.
+    let bad_amount = AMOUNT + 1;
+    assert!(
+        !client.verify_policy(&commitment, &payee, &bad_amount, &nullifier, &proof),
+        "verify_policy must return false when the release does not match the proof"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // verify — fail-closed: VK not set
 // ─────────────────────────────────────────────────────────────────────────────

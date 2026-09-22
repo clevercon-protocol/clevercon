@@ -1,7 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { StrKey } from '@stellar/stellar-sdk';
 import { Prisma } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { VaultContractService } from './vault-contract.service.js';
+import { DelegateService } from './delegate.service.js';
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -14,6 +16,7 @@ export class VaultService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly contract: VaultContractService,
+    private readonly delegates: DelegateService,
   ) {}
 
   /** Deposit availability + the deployed contract address (for UI transparency). */
@@ -54,6 +57,63 @@ export class VaultService {
   async submit(signedXdr: string) {
     const txHash = await this.contract.submitSignedXdr(signedXdr);
     return { txHash };
+  }
+
+  /**
+   * The caller's spending delegate (provisioned on first read) plus whether
+   * settlement is enabled here and whether it has been authorized on-chain yet.
+   */
+  async getDelegate(userId: string) {
+    const settlementEnabled = this.contract.active && this.delegates.available;
+    if (!settlementEnabled) {
+      return { orchestrator: null, settlementEnabled: false, registered: false };
+    }
+    const d = await this.delegates.getOrProvision(userId);
+    return { orchestrator: d.publicKey, settlementEnabled: true, registered: d.registered };
+  }
+
+  /**
+   * Build the one-time register_orchestrator XDR authorizing the caller's own
+   * delegate. User-custodied (the user signs, the API submits via `submit`).
+   */
+  async buildRegisterOrchestrator(userId: string) {
+    const address = await this.primaryAddress(userId);
+    const { publicKey } = await this.delegates.getOrProvision(userId);
+    const xdr = await this.contract.buildRegisterOrchestratorXdr(address, publicKey);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Mark the caller's delegate as authorized (called after the register tx submits). */
+  /**
+   * The user's registered agent key (for the agent-key payment mode). Returns
+   * only the public key; the platform never holds the secret.
+   */
+  async getAgentWallet(userId: string): Promise<{ publicKey: string | null }> {
+    const w = await this.prisma.agentWallet.findUnique({ where: { userId } });
+    return { publicKey: w?.publicKey ?? null };
+  }
+
+  /**
+   * Register (or update) the user's OWN agent key. We store only the public
+   * key: the user's agent holds the secret and signs its own payments, so this
+   * stays non-custodial. The vault will top this address up in bounded amounts
+   * under the user's policy (agent-key mode, paying external x402/MPP services).
+   */
+  async setAgentWallet(userId: string, publicKey: string): Promise<{ publicKey: string }> {
+    if (!StrKey.isValidEd25519PublicKey(publicKey)) {
+      throw new BadRequestException('Invalid Stellar public key (expected a G... address)');
+    }
+    const w = await this.prisma.agentWallet.upsert({
+      where: { userId },
+      create: { userId, publicKey },
+      update: { publicKey },
+    });
+    return { publicKey: w.publicKey };
+  }
+
+  async confirmDelegateRegistered(userId: string) {
+    await this.delegates.markRegistered(userId);
+    return { ok: true as const };
   }
 
   /**
