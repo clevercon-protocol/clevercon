@@ -18,6 +18,7 @@
 
 CleverCon lets you safely put an AI agent in charge of your money. You fund a non-custodial vault, set the limits it must obey (a budget, per-payment caps, an allowlist of who it may pay, time windows), optionally keep those limits private, then instruct your agent in plain terms to spend and disburse funds however serves your goal. The vault guarantees on-chain that the agent can never spend outside your rules or reveal them, and the platform never holds your funds.
 
+Two things define it. The differentiator is **privacy**: spending rules enforced on-chain without exposing them (proof-gated hooks are built into the vault contract, with active zero-knowledge engine integration underway). And it is not just a protocol, it is a **live marketplace** you can use today.
 It is delegation with hard limits: the agent owns the decisions (who to pay, when, how much, by whatever logic you give it); the contract owns the guarantee (bounds, privacy, non-custody). **Hiring services is one application of this, not the whole thing.**
 
 Three things define it:
@@ -40,6 +41,7 @@ The same primitive, bounded and private agent-driven payments, covers many jobs,
 - **Bounded allowances**: give an agent (or a sub-account) a private, capped wallet.
 - **Buying data, compute, and services**: hire from the built-in directory or pay any provider.
 
+Scope, stated honestly: in this privacy model, what stays private is the policy (your caps, allowlist, and limits) and the link between them. Note that while the proof-gated verification hooks (`create_task_with_policy`, `release_payment_proved`) are implemented in CleverVault, live on-chain zero-knowledge policy enforcement is currently being wired to the CipherMit engine on testnet (see Roadmap below). Fully hiding amounts and counterparties as well is the deeper end of the roadmap and leans on Stellar's upcoming confidential-token support.
 In every case you set the limits once, the agent decides within them, and the vault enforces the boundary and keeps your rules private.
 
 ## Why it matters
@@ -81,6 +83,10 @@ Landing the full zero-knowledge policy circuit, so soundness is formal and the b
 
 ## How it works
 
+1. Connect a wallet and deposit USDC into CleverVault, a non-custodial contract.
+2. Set your spending rules: a total budget, and (via the upcoming private policy integration) optional per-payment caps and payee allowlists kept private.
+3. Spend, at whatever complexity the job needs (see "How you use it"). A delegate pays services in USDC, and the vault checks every release against your rules.
+4. The vault caps spending and refunds the rest. You can withdraw anytime. The platform never holds your money.
 1. **Fund.** Connect a wallet and deposit USDC into CleverVault, a non-custodial Soroban contract. The platform never holds it.
 2. **Set limits.** Create a reusable spending policy: a budget, and optionally a per-payment cap, an allowlist of payees, and a time window. You apply a policy per job and can keep several. In private mode only a commitment to the rule is stored; the rule itself is never persisted.
 3. **Instruct your agent.** Point any agent at the vault (over MCP, the SDK, or the dApp) and tell it what to do. It decides who to pay, when, and how much within your limits; it never holds custody of your funds.
@@ -94,6 +100,7 @@ Two kinds of conditions: **spending bounds** (caps, allowlist, budget, time wind
 - **Direct (registered services and any Stellar address you allowlist):** the vault pays the payee directly under your policy. Strongest guarantee: payee and amount are enforced on-chain, and the platform never holds funds.
 - **Agent-key (the open x402/MPP economy):** the vault tops up your agent's own key in bounded amounts under your policy, and your agent signs the external payment. This reaches services outside CleverCon while the budget and privacy stay enforced; the platform still never holds funds. Implemented and proven end to end on testnet: `createAgentWallet` in the SDK unites the governed top-up with an x402-paying fetch, and the vault, agent wallet, and external x402 service all settle in the same Stellar USDC through the public facilitator.
 
+In every case the vault enforces your budget (and, once private policies are active, your confidential spending rules). The thing doing the spending, CleverCon's orchestrator, your own agent via the SDK, or an MCP client, is just a **delegate**. The rail is what makes delegation safe: even a compromised or careless delegate cannot spend outside the rule you set. That, not the planning, is the point.
 ### Hiring services (one application)
 
 When the payees are service providers, hiring takes three shapes:
@@ -102,6 +109,13 @@ When the payees are service providers, hiring takes three shapes:
 - **Find and pay one service.** Describe what you need; the curated directory returns matching services by capability, price, and reputation. Pick one and pay.
 - **Compose a multi-service job.** For work that spans services (gather data, analyze it, write a report), your agent plans the steps, hires a service for each, and pays as each completes.
 
+- **CleverVault**, a non-custodial Soroban contract on testnet: deposits, budget locking, per-step release, refunds, multi-asset support, admin controls, and proof-gated release hooks (`create_task_with_policy`, `release_payment_proved`), with a 100+ case test suite.
+- **A usable dApp**: connect a wallet, add a USDC trustline, deposit, check balance, and withdraw, all signed in your wallet and settled directly against the contract with no server in the middle.
+- **The marketplace**: browse, search, filter, and sort a catalog of services across seven categories and three provider types.
+- **Orchestrator and open registry**, with **x402 and MPP payments** to services.
+- Placed 2nd in the Stellar Agents hackathon.
+
+Roadmap: full integration of the private spending policies described above (wiring the CipherMit zero-knowledge engine into CleverVault), an on-chain registry, the SDK, and the MCP server. See [ROADMAP.md](ROADMAP.md).
 The directory is discovery, not the product. The product is the spending-control layer, which works whether your agent pays one address or many, services or otherwise.
 
 ## What runs today (Stellar testnet)
