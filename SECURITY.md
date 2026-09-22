@@ -4,8 +4,8 @@
 
 CleverCon currently runs on **Stellar Testnet**. Contracts, wallets, and funds
 involved are all testnet assets with no real-world value. Even so, we treat
-security issues seriously, since the CleverVault contract, its planned spending-
-policy layer, and the orchestration logic are the foundation for a future
+security issues seriously, since the CleverVault contract, the PolicyVerifier, and
+the non-custodial delegate + settlement path are the foundation for a future
 mainnet deployment.
 
 ## Reporting a vulnerability
@@ -20,7 +20,7 @@ Please include:
 - Steps to reproduce, including any relevant transaction hashes, contract IDs,
   or request payloads (testnet only; do not send real secret keys).
 - The affected package or contract (e.g. `contracts/agent-vault`,
-  `packages/orchestrator`).
+  `services/api`).
 
 ### What to expect
 
@@ -34,18 +34,18 @@ Please include:
 
 In scope:
 
-- `contracts/agent-vault` (CleverVault) and `contracts/budget-guardian`:
-  fund-handling logic, authorization checks, and state transitions.
-- `packages/orchestrator`, `packages/registry`, and `packages/common`: payment
-  construction and signing, vault interaction, and data persisted to disk
-  (e.g. wallet secrets in `packages/orchestrator/src/orchestrator-store.ts`).
-- `packages/agents/*`: payment verification on specialist agent endpoints.
-- The planned spending-policy layer for CleverVault (proof verification, policy
-  commitments, and replay handling). The engine currently lives in
-  [CipherMit](https://github.com/Bosun-Josh121/ciphermit); report issues there
-  or here.
-- `scripts/*` and CI/deployment configuration (`render.yaml`,
-  `.github/workflows/*`).
+- `contracts/agent-vault` (CleverVault), `contracts/policy-verifier`, and
+  `contracts/registry`: fund-handling logic, authorization checks, the proof-gated
+  release + verifier cross-call, and state transitions.
+- `services/api`, `services/workers`, `services/indexer`, and `packages/{common,db}`:
+  SEP-10/JWT auth, scoped API keys, step-up auth, the delegate that signs
+  vault calls, the settlement path, and how the delegate secret is stored
+  (AES-256-GCM encrypted in Postgres).
+- `packages/agent-sdk` and `packages/mcp`: the spending surfaces and how a scoped
+  API key is bounded by policy.
+- The private spending-policy layer (proof verification, policy commitments, and
+  replay/nullifier handling), including the `circuits/spend-policy` Noir circuit.
+- `scripts/*` and CI/deployment configuration (`vercel.json`, `.github/workflows/*`).
 
 Out of scope:
 
@@ -60,12 +60,20 @@ Out of scope:
 
 ## Known limitations
 
-A few hardening gaps are tracked as open issues rather than hidden:
+We state these plainly rather than hide them:
 
-- Orchestrator secret keys are currently stored in plaintext in
-  `data/orchestrators.json` (flagged in source as a pre-production shortcut).
-- The registry's JSON file store has no write locking, so concurrent writes can
-  race.
+- **Privacy is v1.** The on-chain PolicyVerifier performs a host-accelerated
+  binding check over the public inputs, not full pairing-based verification
+  (Soroban has no pairing host function), so the proving stack is trusted for
+  predicate soundness. In v1 the caps/allowlist are also enforced off-chain by the
+  API, with the on-chain budget + commitment + binding proof as the anchor. Full
+  on-chain verification is pending Stellar pairing precompiles. See
+  [docs/private-policies.md](docs/private-policies.md) section 7.
+- **No third-party audit yet.** The contracts and API have not had an external
+  security audit; that is a pre-mainnet roadmap item.
+- **Delegate keys.** The per-user delegate secret is stored AES-256-GCM encrypted
+  in Postgres; the encryption key (`DELEGATE_ENCRYPTION_KEY`) is an operator
+  responsibility (a KMS is the mainnet plan).
 
 If you find additional issues along these lines, please still report them.
 Duplicates help us prioritize.

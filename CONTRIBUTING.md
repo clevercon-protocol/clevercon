@@ -26,17 +26,24 @@ for in a pull request.
 ```
 clevercon/
 ├── contracts/             # Soroban smart contracts (Rust)
-│   ├── agent-vault/        # CleverVault, on-chain treasury for tasks
-│   └── budget-guardian/    # earlier budget-tracking contract (legacy)
+│   ├── agent-vault/        # CleverVault: non-custodial treasury + proof-gated release
+│   ├── policy-verifier/    # on-chain verify_policy (private spending policies)
+│   └── registry/           # on-chain service registration + reputation
+├── circuits/spend-policy/  # Noir ZK circuit for private policies (proven in CI)
+├── apps/web/               # the dApp (React 19 + Vite)
+├── services/
+│   ├── api/                # NestJS API (auth, tasks, policies, vault, admin, dev)
+│   ├── indexer/            # on-chain event ingestion (balance mirror)
+│   ├── workers/            # BullMQ: execution, proofs, exactly-once settlement
+│   └── reference-provider/ # canonical hireable provider
 ├── packages/
-│   ├── common/             # shared types, constants, wallet helpers
-│   ├── registry/           # agent discovery + reputation API
-│   ├── orchestrator/       # task planning, execution, vault integration
-│   ├── dashboard/          # React frontend
-│   └── agents/             # specialist agents (stellar-oracle, web-intel,
-│                             web-intel-v2, analysis, reporter)
-├── scripts/               # setup, wallet, and lifecycle scripts
-└── docs/                  # architecture and development docs
+│   ├── common/             # shared types, policy-input encoding, binding proof
+│   ├── db/                 # Prisma schema + client, secret crypto
+│   ├── agent-sdk/          # createSpender, createAgentWallet, createProvider, createAgent
+│   ├── mcp/                # Stellar MCP server (12 tools)
+│   └── dashboard/          # the public Vercel demo (contract-direct, no backend)
+├── scripts/               # setup, wallet, and the E2E testnet harness
+└── docs/                  # architecture, private-policies spec, development
 ```
 
 See [docs/architecture.md](docs/architecture.md) for how the pieces fit together
@@ -59,37 +66,41 @@ npm install
 cp .env.example .env
 ```
 
-Generate and fund Stellar testnet wallets for the orchestrator and each agent:
+Start Postgres and Redis, then set up the database:
+
+```bash
+docker compose up -d postgres redis
+npm run -w @clevercon/db generate && npm run -w @clevercon/db push
+```
+
+Set up the faucet/orchestrator wallet used to fund testnet flows:
 
 ```bash
 npx tsx scripts/setup-wallets.ts        # generates keypairs; copy printed keys to .env
-npx tsx scripts/add-usdc-trustlines.ts  # add USDC trustlines to every wallet
+npx tsx scripts/add-usdc-trustlines.ts  # add USDC trustlines
 npx tsx scripts/fund-testnet-usdc.ts    # swap XLM to USDC via the testnet DEX
-npx tsx scripts/distribute-usdc.ts      # send USDC from orchestrator to agents
 ```
 
 ### Running locally
 
+Run each service in its own terminal:
+
 ```bash
-./scripts/start.sh   # builds the dashboard and starts registry, orchestrator,
-                      # and all agents with health checks
-./scripts/stop.sh    # stops everything started above
+npm run dev -w @clevercon/api        # API on :4100
+npm run dev -w @clevercon/workers    # execution, proofs, settlement
+npm run dev -w @clevercon/indexer    # on-chain event ingestion
+npm run dev -w @clevercon/web        # dApp on :5173
 ```
 
-Or run services individually during development:
+The whole money loop can be exercised headlessly with `npx tsx scripts/e2e-testnet.ts`
+(no browser). The public Vercel demo builds from `packages/dashboard` and needs no
+backend. See [docs/development.md](docs/development.md) for the reference provider and
+the full environment.
+
+To seed the database with sample services and data:
 
 ```bash
-npm run dev              # all services concurrently
-npm run dev:registry     # just the registry
-npm run dev:orchestrator # just the orchestrator
-npm run dev:oracle       # etc.; see package.json for the full list
-```
-
-To seed some demo task history (useful for testing reputation scoring and the
-dashboard):
-
-```bash
-npx tsx scripts/bootstrap.ts --auto-approve
+npm run db:seed
 ```
 
 ## Common development tasks
@@ -133,10 +144,10 @@ cd contracts/agent-vault
   Commits](https://www.conventionalcommits.org/):
 
   ```
-  feat: add retry/backoff to MPP client
+  feat: add idempotency keys to the payments API
   fix: prevent duplicate task creation on vault timeout
   docs: document CleverVault authorization model
-  test: add unit tests for registry reputation scoring
+  test: add unit tests for settlement retry classification
   chore: bump @stellar/stellar-sdk to 14.x
   ```
 
@@ -159,7 +170,7 @@ cd contracts/agent-vault
 ## Finding something to work on
 
 Open issues are labeled by **package/area** (e.g. `agent-vault`,
-`orchestrator`, `registry`, `agent-sdk`), **difficulty** (`good first issue`,
+`api`, `agent-sdk`, `mcp`), **difficulty** (`good first issue`,
 `medium`, `hard`), and **roadmap area**. Issues that fund a bounty through
 [GrantFox](https://grantfox.xyz) are labeled `bounty` with the amount in the
 issue body.

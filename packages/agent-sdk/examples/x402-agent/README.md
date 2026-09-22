@@ -35,7 +35,7 @@ const res = await wallet.fetch(oracleUrl, {   // agent wallet -> x402 service
 
 The agent's wallet must be a funded Stellar account with a USDC trustline (so the
 vault release can land and the x402 payment can be signed). Point it at any x402
-service; a local one is in `packages/agents/stellar-oracle`.
+service (you can stand one up with `createAgent`; see the SDK README).
 
 ```bash
 CLEVERCON_API_KEY=cc_...  \

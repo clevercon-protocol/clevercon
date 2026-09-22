@@ -10,11 +10,12 @@ within the policy through any of three doors (dApp, SDK, or MCP). The vault
 guarantees on-chain that the agent cannot exceed the budget or pay an unapproved
 party, and the platform never holds your funds.
 
-> The earlier hackathon stack (a single Express `orchestrator` + `dashboard` +
-> JSON `registry` + the `packages/agents/*` samples + `contracts/budget-guardian`)
-> is kept in the repo for history but is **not** the system described here. This
-> document describes the production stack: `apps/web`, `services/*`, `packages/*`,
-> and the deployed CleverVault + PolicyVerifier + Registry contracts.
+> The earlier hackathon stack (an Express `orchestrator` + JSON `registry` + the
+> `packages/agents/*` samples + `contracts/budget-guardian`) has been **removed**
+> from the repo to keep it focused; it remains in the git history. `packages/dashboard`
+> is kept as the public Vercel demo. This document describes the production stack:
+> `apps/web`, `services/*`, `packages/*`, and the deployed CleverVault +
+> PolicyVerifier + Registry contracts.
 
 ## System overview
 

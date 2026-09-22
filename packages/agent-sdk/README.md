@@ -119,9 +119,9 @@ is this SDK's dogfood example: a real, hireable provider built on `createProvide
 
 ## Standalone paid agent (`createAgent`)
 
-Shared scaffolding for CleverCon specialist agents that run their own paywall.
-Factors out the lifecycle every agent in `packages/agents/*` re-implements by
-hand: an HTTP server with a manifest and health endpoint, an x402 or MPP paywall
+Shared scaffolding for a specialist agent that runs its own paywall. Factors out
+the lifecycle such an agent otherwise re-implements by hand: an HTTP server with a
+manifest and health endpoint, an x402 or MPP paywall
 on the task endpoint, self-registration with the registry (retry/backoff +
 heartbeat), graceful deregistration, and feedback reporting.
 

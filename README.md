@@ -150,7 +150,7 @@ clevercon/
 └── docs/                      architecture, private-policies spec, development
 ```
 
-Public demo: [`packages/dashboard`](packages/dashboard) is a lightweight wallet-and-vault demo deployed on Vercel. Superseded by the production stack above: `packages/orchestrator`, `packages/registry`, `packages/agents`, and `contracts/budget-guardian` are the earlier hackathon stack, kept for history.
+Public demo: [`packages/dashboard`](packages/dashboard) is a lightweight wallet-and-vault demo deployed on Vercel (contract-direct, no backend). The earlier hackathon stack (an Express orchestrator, a JSON registry, sample agents, and the budget-guardian contract) has been removed to keep the repo focused on the product; it remains in the git history.
 
 ## Tech stack
 
