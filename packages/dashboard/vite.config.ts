@@ -21,7 +21,7 @@ export default defineConfig({
     global: 'globalThis',
   },
   build: {
-    outDir: '../../packages/orchestrator/public',
+    outDir: 'dist',
     emptyOutDir: true,
   },
   server: {
