@@ -74,10 +74,20 @@ export class CleverConError extends Error {
 }
 
 export interface CleverConClient {
-  /** Pay a single address, bounded by a saved limit or one derived from the payment. */
-  pay(payee: string, amount: number, opts?: { reason?: string; policyId?: string }): Promise<Spend>;
-  /** Disburse to many addresses in one bounded instruction. */
-  disburse(lines: PaymentLine[], opts?: { policyId?: string }): Promise<Spend>;
+  /** Pay a single address, bounded by a saved limit or one derived from the payment.
+   *  Pass `idempotencyKey` so a retried call (e.g. after a timeout) returns the
+   *  original spend instead of paying twice. */
+  pay(
+    payee: string,
+    amount: number,
+    opts?: { reason?: string; policyId?: string; idempotencyKey?: string },
+  ): Promise<Spend>;
+  /** Disburse to many addresses in one bounded instruction. `idempotencyKey` makes
+   *  a retry return the original spend rather than disbursing twice. */
+  disburse(
+    lines: PaymentLine[],
+    opts?: { policyId?: string; idempotencyKey?: string },
+  ): Promise<Spend>;
   /** Hire a registered service (DIRECT pays a chosen serviceId). */
   hire(opts: {
     title: string;
@@ -140,12 +150,14 @@ export function createSpender(options: SpenderOptions): CleverConClient {
         kind: 'pay',
         lines: [{ payee, amount, ...(opts?.reason ? { reason: opts.reason } : {}) }],
         ...(opts?.policyId ? { policyId: opts.policyId } : {}),
+        ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
       }),
     disburse: (lines, opts) =>
       request<Spend>('POST', '/payments', {
         kind: 'disburse',
         lines,
         ...(opts?.policyId ? { policyId: opts.policyId } : {}),
+        ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
       }),
     hire: (opts) =>
       request<Spend>('POST', '/tasks', {

@@ -73,11 +73,18 @@ function record(stage: string, ok: boolean, detail = '') {
 
 async function api<T = any>(
   p: string,
-  opts: { method?: string; body?: unknown; token?: string; stepup?: string } = {},
+  opts: {
+    method?: string;
+    body?: unknown;
+    token?: string;
+    stepup?: string;
+    idempotencyKey?: string;
+  } = {},
 ): Promise<T> {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
   if (opts.stepup) headers['x-stepup'] = opts.stepup;
+  if (opts.idempotencyKey) headers['idempotency-key'] = opts.idempotencyKey;
   const res = await fetch(`${API_URL}${p}`, {
     method: opts.method ?? (opts.body ? 'POST' : 'GET'),
     headers,
@@ -279,6 +286,9 @@ async function main() {
   // 8b. The pay task completing should have notified the webhook (pay/disburse
   // finalize in the settlement worker, which now delivers the terminal event).
   await runWebhookStage(sink, webhookSecret, payTaskId);
+
+  // 8d. Idempotency: a retried spend with the same Idempotency-Key must not double-pay.
+  await runIdempotencyStage(token, policyId);
 
   // 8c. Concurrency: fire two payments at once for the SAME delegate. This used
   // to collide on the signer's sequence number (one would fail); the per-key
@@ -485,6 +495,29 @@ async function runWebhookStage(
     !!hit && sigOk,
     hit ? `delivered, signature ${sigOk ? 'valid' : 'INVALID'}` : 'not received',
   );
+}
+
+// ── Idempotency stage: a retried spend with the same key must not double-pay ──
+async function runIdempotencyStage(token: string, policyId: string) {
+  const key = `e2e-idem-${Date.now()}`;
+  const send = () =>
+    api<{ id: string }>('/payments', {
+      body: {
+        kind: 'pay',
+        lines: [{ payee: faucet.publicKey(), amount: 0.15, reason: 'idem' }],
+        policyId,
+      },
+      token,
+      idempotencyKey: key,
+    });
+  // Fire two at once with the same key: one creates, the other must return the
+  // same task (the unique (buyerId, idempotencyKey) collapses the duplicate).
+  const [a, b] = await Promise.all([send(), send()]);
+  record('idempotent pay: same key returns one task', a.id === b.id, `task ${a.id.slice(0, 8)}`);
+  await waitTaskComplete(token, a.id, 'idempotent pay');
+  // A third replay after completion still returns the same task, never a new spend.
+  const c = await send();
+  record('idempotent pay: replay after settle', c.id === a.id, 'no new spend');
 }
 
 // ── Reach stage: the spender SDK + the MCP, both driven with a scoped API key ──

@@ -77,4 +77,41 @@ describe('createPayment validation', () => {
       }),
     ).rejects.toThrow(/unknown policy/i);
   });
+
+  it('returns the original task on an idempotent replay, without re-validating or creating', async () => {
+    const prior = {
+      id: 't-prior',
+      title: 'Pay',
+      description: null,
+      mode: 'PAY',
+      status: 'RUNNING',
+      budget: 1,
+      asset: 'USDC',
+      steps: [{ id: 's0', status: 'RELEASED' }],
+      payments: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const prisma = {
+      task: { findUnique: vi.fn(async () => prior), create: vi.fn() },
+      policy: { findFirst: vi.fn() },
+    };
+    const svc = new TasksService(
+      prisma as unknown as ConstructorParameters<typeof TasksService>[0],
+    );
+    const res = await svc.createPayment('u1', {
+      kind: 'pay',
+      lines: [{ payee: G(), amount: 1 }],
+      idempotencyKey: 'k1',
+    });
+    expect(res.id).toBe('t-prior');
+    expect(prisma.task.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { buyerId_idempotencyKey: { buyerId: 'u1', idempotencyKey: 'k1' } },
+      }),
+    );
+    // Short-circuited: no policy resolution and no second task created.
+    expect(prisma.policy.findFirst).not.toHaveBeenCalled();
+    expect(prisma.task.create).not.toHaveBeenCalled();
+  });
 });

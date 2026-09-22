@@ -42,6 +42,8 @@ export interface CreatePaymentParams {
   lines: PaymentLine[];
   policyId?: string;
   title?: string;
+  /** Client-supplied Idempotency-Key: a retry with the same key returns the original task. */
+  idempotencyKey?: string;
 }
 
 const STELLAR_ADDR = /^G[A-Z2-7]{55}$/;
@@ -204,6 +206,19 @@ export class TasksService {
    * enforcement is the ZK circuit, a later milestone).
    */
   async createPayment(userId: string, params: CreatePaymentParams) {
+    // Idempotent replay: a retried request (e.g. an agent whose call timed out
+    // after the server already processed it) with the same Idempotency-Key returns
+    // the original task instead of creating a second spend.
+    if (params.idempotencyKey) {
+      const prior = await this.prisma.task.findUnique({
+        where: {
+          buyerId_idempotencyKey: { buyerId: userId, idempotencyKey: params.idempotencyKey },
+        },
+        include: { steps: { select: { id: true, status: true } }, payments: true },
+      });
+      if (prior) return serialize(prior);
+    }
+
     const lines = params.lines
       .map((l) => ({
         payee: l.payee.trim(),
@@ -270,31 +285,55 @@ export class TasksService {
         ? `Pay ${lines[0].payee.slice(0, 6)}…${lines[0].payee.slice(-4)}`
         : `Disburse to ${lines.length} recipients`);
 
-    const created = await this.prisma.task.create({
-      data: {
-        buyer: { connect: { id: userId } },
-        title,
-        mode,
-        budget: new Prisma.Decimal(total),
-        asset: 'USDC',
-        // Bind the policy now so the worker can lock + settle against its
-        // commitment. Previously the (synchronous) lock connected it.
-        policy: { connect: { id: policyId } },
-        // No provider execution: the steps are authorized to pay immediately and
-        // settle out of band via the delegate. The task completes once finalized.
-        status: TaskStatus.RUNNING,
-        steps: {
-          create: lines.map((l, i) => ({
-            index: i,
-            action: l.reason ?? 'Payment',
-            payee: l.payee,
-            estimatedCost: new Prisma.Decimal(l.amount),
-            status: StepStatus.RELEASED,
-          })),
-        },
+    const data: Prisma.TaskCreateInput = {
+      buyer: { connect: { id: userId } },
+      title,
+      mode,
+      budget: new Prisma.Decimal(total),
+      asset: 'USDC',
+      // Bind the policy now so the worker can lock + settle against its
+      // commitment. Previously the (synchronous) lock connected it.
+      policy: { connect: { id: policyId } },
+      // No provider execution: the steps are authorized to pay immediately and
+      // settle out of band via the delegate. The task completes once finalized.
+      status: TaskStatus.RUNNING,
+      idempotencyKey: params.idempotencyKey ?? null,
+      steps: {
+        create: lines.map((l, i) => ({
+          index: i,
+          action: l.reason ?? 'Payment',
+          payee: l.payee,
+          estimatedCost: new Prisma.Decimal(l.amount),
+          status: StepStatus.RELEASED,
+        })),
       },
-      include: { steps: { select: { id: true, status: true } }, payments: true },
-    });
+    };
+
+    let created: TaskRow;
+    try {
+      created = await this.prisma.task.create({
+        data,
+        include: { steps: { select: { id: true, status: true } }, payments: true },
+      });
+    } catch (err) {
+      // Two retries with the same key can race past the replay check above; the
+      // unique (buyerId, idempotencyKey) makes the loser hit P2002. Return the
+      // winner's task rather than creating a duplicate spend.
+      if (
+        params.idempotencyKey &&
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const winner = await this.prisma.task.findUnique({
+          where: {
+            buyerId_idempotencyKey: { buyerId: userId, idempotencyKey: params.idempotencyKey },
+          },
+          include: { steps: { select: { id: true, status: true } }, payments: true },
+        });
+        if (winner) return serialize(winner);
+      }
+      throw err;
+    }
 
     // Enqueue a direct release per line. The worker locks the budget on-chain
     // under the policy commitment on the first step to run (the async lock), then

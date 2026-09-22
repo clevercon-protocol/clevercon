@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Headers, Post, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { TasksService } from '../tasks/tasks.service.js';
 import { ApiAuthGuard } from '../auth/api-auth.guard.js';
@@ -17,6 +17,8 @@ const paySchema = z.object({
   lines: z.array(lineSchema).min(1).max(100),
   policyId: z.string().optional(),
   title: z.string().max(200).optional(),
+  // Also accepted in the body for clients that cannot set a header (e.g. some MCP hosts).
+  idempotencyKey: z.string().min(1).max(255).optional(),
 });
 
 /**
@@ -31,7 +33,14 @@ export class PaymentsController {
   constructor(private readonly tasks: TasksService) {}
 
   @Post()
-  create(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    return this.tasks.createPayment(user.userId, parseBody(paySchema, body));
+  create(
+    @CurrentUser() user: AuthUser,
+    @Body() body: unknown,
+    @Headers('idempotency-key') headerKey?: string,
+  ) {
+    const parsed = parseBody(paySchema, body);
+    // The standard Idempotency-Key header wins; fall back to the body field.
+    const idempotencyKey = headerKey?.trim().slice(0, 255) || parsed.idempotencyKey || undefined;
+    return this.tasks.createPayment(user.userId, { ...parsed, idempotencyKey });
   }
 }
