@@ -13,8 +13,7 @@ import {
   CheckCircle2,
   Sparkles,
   Search,
-  Workflow,
-  UserCheck,
+  Users,
   EyeOff,
   Fingerprint,
 } from 'lucide-react';
@@ -120,19 +119,19 @@ const CATEGORIES = [
 
 const USAGE_MODES = [
   {
-    icon: UserCheck,
-    title: 'Pay a provider you chose',
-    body: 'Already know who you want? Point CleverCon at that service, set your rules, and it makes a single bounded, private payment. No planning, no matchmaking.',
+    icon: Wallet,
+    title: 'Pay a single address',
+    body: 'One bounded, private payment to any Stellar address you allowlist: a vendor, a specific provider, another agent, a one-off. The vault enforces the cap and the payee on-chain.',
+  },
+  {
+    icon: Users,
+    title: 'Disburse to many',
+    body: 'Pay a whole set of recipients in one instruction, capped per payment and in total. Payouts, contractor batches, grant and bounty disbursement, or one agent paying several others.',
   },
   {
     icon: Search,
-    title: 'Find and pay one service',
-    body: 'Describe what you need and the curated directory returns matching services by capability, price, and reputation. Pick one, or take the top-ranked, and pay.',
-  },
-  {
-    icon: Workflow,
-    title: 'Compose a multi-service job',
-    body: 'For work that spans services, gather data, analyze it, write a report, a delegate plans the steps, hires a service for each, and pays in sequence. Optional, and only when the job needs it.',
+    title: 'Hire a service',
+    body: 'Point the agent at the curated directory, or a provider you chose, and it pays per step from the vault under your policy. Hiring is one application of the rail, not the whole thing.',
   },
 ];
 
@@ -380,8 +379,8 @@ export function Landing() {
           <Reveal delay={160}>
             <p className="mt-6 text-base sm:text-lg text-slate-400 max-w-2xl mx-auto leading-relaxed">
               CleverCon gives an AI agent a budget it cannot overspend, enforced on-chain and kept
-              private. Fund a non-custodial vault, set your rules, and connect any agent over MCP or
-              the SDK. You stay in control the whole time.
+              private. Fund a non-custodial vault, set your rules, and your agent pays, disburses,
+              and hires within them, over MCP or the SDK. You stay in control the whole time.
             </p>
           </Reveal>
           <Reveal delay={240}>
@@ -552,11 +551,12 @@ export function Landing() {
         <div className="max-w-6xl mx-auto">
           <Reveal className="text-center max-w-2xl mx-auto">
             <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight text-balance">
-              How you use it
+              What your agent can do with money
             </h2>
             <p className="mt-3 text-slate-400">
-              The rail is always the same: bounded, private, per-step spending. How much
-              coordination sits on top is up to the job.
+              The same rail underneath every time: bounded, private, on-chain-enforced spending. Pay
+              one address, disburse to many, or hire a service, your agent decides within the limits
+              you set.
             </p>
           </Reveal>
           <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
