@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm install --ignore-scripts",
-  "buildCommand": "npm run build:dashboard",
+  "buildCommand": "cd packages/dashboard && npx vite build --outDir dist --emptyOutDir",
   "outputDirectory": "packages/dashboard/dist"
 }
