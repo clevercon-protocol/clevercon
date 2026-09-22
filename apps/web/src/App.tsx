@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ComponentType } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './lib/queryClient';
 import { Shell } from './components/Shell';
@@ -16,11 +16,11 @@ const lazyFrom = <T extends Record<string, ComponentType>>(
 ) => lazy(() => loader().then((m) => ({ default: m[key] })));
 
 const BuyerLayout = lazyFrom(() => import('./pages/buyer/BuyerLayout'), 'BuyerLayout');
-const Overview = lazyFrom(() => import('./pages/buyer/Overview'), 'Overview');
+const Home = lazyFrom(() => import('./pages/buyer/home'), 'Home');
+const LimitsPage = lazyFrom(() => import('./pages/buyer/LimitsPage'), 'LimitsPage');
 const VaultPage = lazyFrom(() => import('./pages/buyer/VaultPage'), 'VaultPage');
-const MarketplacePage = lazyFrom(() => import('./pages/buyer/MarketplacePage'), 'MarketplacePage');
-const JobsPage = lazyFrom(() => import('./pages/buyer/JobsPage'), 'JobsPage');
-const PoliciesPage = lazyFrom(() => import('./pages/buyer/PoliciesPage'), 'PoliciesPage');
+const ServicesPage = lazyFrom(() => import('./pages/buyer/ServicesPage'), 'ServicesPage');
+const ActivityPage = lazyFrom(() => import('./pages/buyer/ActivityPage'), 'ActivityPage');
 const TaskDetail = lazyFrom(() => import('./pages/TaskDetail'), 'TaskDetail');
 const ServiceDetail = lazyFrom(() => import('./pages/ServiceDetail'), 'ServiceDetail');
 const Provider = lazyFrom(() => import('./pages/Provider'), 'Provider');
@@ -50,13 +50,18 @@ export function App() {
                   </RequireAuth>
                 }
               >
-                <Route index element={<Overview />} />
+                <Route index element={<Home />} />
+                <Route path="limits" element={<LimitsPage />} />
+                <Route path="services" element={<ServicesPage />} />
                 <Route path="vault" element={<VaultPage />} />
-                <Route path="marketplace" element={<MarketplacePage />} />
-                <Route path="marketplace/:id" element={<ServiceDetail />} />
-                <Route path="jobs" element={<JobsPage />} />
+                <Route path="activity" element={<ActivityPage />} />
                 <Route path="tasks/:id" element={<TaskDetail />} />
-                <Route path="policies" element={<PoliciesPage />} />
+                <Route path="marketplace/:id" element={<ServiceDetail />} />
+                {/* Chat-first rework: hire lives in Home; browse in /app/services; limits in /app/limits. */}
+                <Route path="hire" element={<Navigate to="/app" replace />} />
+                <Route path="jobs" element={<Navigate to="/app/activity" replace />} />
+                <Route path="marketplace" element={<Navigate to="/app/services" replace />} />
+                <Route path="policies" element={<Navigate to="/app/limits" replace />} />
               </Route>
 
               <Route

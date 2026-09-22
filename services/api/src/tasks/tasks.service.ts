@@ -1,6 +1,16 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { Prisma, PaymentStatus, StepStatus, TaskMode, TaskStatus } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { QueueService } from '../queue/queue.service.js';
+import { VaultContractService } from '../vault/vault-contract.service.js';
+import { DelegateService } from '../vault/delegate.service.js';
+import { PoliciesService, type PolicyRules } from '../policies/policies.service.js';
 
 type TaskRow = Prisma.TaskGetPayload<{
   include: { steps: { select: { id: true; status: true } }; payments: true };
@@ -17,8 +27,28 @@ export interface CreateTaskParams {
   mode: TaskMode;
   budget: number;
   serviceId?: string;
+  policyId?: string;
   description?: string;
+  /** Client-supplied Idempotency-Key: a retry with the same key returns the original task. */
+  idempotencyKey?: string;
 }
+
+export interface PaymentLine {
+  payee: string;
+  amount: number;
+  reason?: string;
+}
+
+export interface CreatePaymentParams {
+  kind: 'pay' | 'disburse';
+  lines: PaymentLine[];
+  policyId?: string;
+  title?: string;
+  /** Client-supplied Idempotency-Key: a retry with the same key returns the original task. */
+  idempotencyKey?: string;
+}
+
+const STELLAR_ADDR = /^G[A-Z2-7]{55}$/;
 
 function spentOf(t: TaskRow): number {
   return Number(
@@ -47,7 +77,68 @@ function serialize(t: TaskRow) {
 
 @Injectable()
 export class TasksService {
-  constructor(private readonly prisma: PrismaService) {}
+  // QueueService is optional so the service can be constructed directly in tests
+  // without Redis; in the app, Nest injects it (QueueModule is global).
+  private readonly logger = new Logger(TasksService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly queue?: QueueService,
+    @Optional() private readonly vault?: VaultContractService,
+    @Optional() private readonly delegates?: DelegateService,
+    @Optional() private readonly policies?: PoliciesService,
+  ) {}
+
+  /**
+   * If the task carries a policy and the buyer has an authorized delegate and
+   * funds, lock the budget on-chain under that policy commitment so the delegate
+   * can later settle released steps. Best-effort: any failure (no delegate, not
+   * registered, insufficient funds, chain error) leaves the task running
+   * off-chain rather than failing the hire. Returns the on-chain task id if locked.
+   */
+  /**
+   * Fast, synchronous pre-checks for a spend that will lock + settle in the
+   * worker. These are the config-level failures we can know without a chain call
+   * (no vault, Autopay not authorized), so the caller still gets an immediate,
+   * actionable error instead of a task that quietly fails later. The definitive
+   * checks (funds, active-task limit) happen on-chain when the worker locks.
+   */
+  private async assertCanSettle(userId: string): Promise<void> {
+    if (!this.vault?.active) {
+      throw new BadRequestException('On-chain settlement is not available right now.');
+    }
+    const delegate = await this.prisma.agentDelegate.findUnique({ where: { userId } });
+    if (!delegate?.registered) {
+      throw new BadRequestException(
+        'Enable Autopay (authorize the delegate) before paying, so the vault can settle within your policy.',
+      );
+    }
+  }
+
+  private async lockOnChain(
+    userId: string,
+    taskId: string,
+    policyId: string,
+    budget: number,
+  ): Promise<void> {
+    if (!this.vault?.active || !this.delegates?.available) return;
+    const policy = await this.prisma.policy.findFirst({ where: { id: policyId, userId } });
+    if (!policy) return;
+    const delegate = await this.prisma.agentDelegate.findUnique({ where: { userId } });
+    if (!delegate?.registered) return; // delegate must be authorized on-chain first
+    try {
+      const kp = await this.delegates.keypairFor(userId);
+      if (!kp) return;
+      const vaultTaskId = await this.vault.createTaskWithPolicy(kp, budget, policy.commitment);
+      await this.prisma.task.update({
+        where: { id: taskId },
+        data: { vaultTaskId, policy: { connect: { id: policyId } } },
+      });
+      this.logger.log(`Locked task ${taskId} on-chain as vault task ${vaultTaskId}`);
+    } catch (err) {
+      this.logger.warn(`On-chain lock skipped for task ${taskId}: ${(err as Error).message}`);
+    }
+  }
 
   /**
    * Create a task for the current buyer. The task starts in DRAFT; no money
@@ -56,6 +147,18 @@ export class TasksService {
    * later (in the worker layer). Execution and settlement are wired separately.
    */
   async create(userId: string, params: CreateTaskParams) {
+    // Idempotent replay: a retried hire with the same Idempotency-Key returns the
+    // original task instead of hiring (and locking budget) a second time.
+    if (params.idempotencyKey) {
+      const prior = await this.prisma.task.findUnique({
+        where: {
+          buyerId_idempotencyKey: { buyerId: userId, idempotencyKey: params.idempotencyKey },
+        },
+        include: { steps: { select: { id: true, status: true } }, payments: true },
+      });
+      if (prior) return serialize(prior);
+    }
+
     const data: Prisma.TaskCreateInput = {
       buyer: { connect: { id: userId } },
       title: params.title,
@@ -64,6 +167,7 @@ export class TasksService {
       budget: new Prisma.Decimal(params.budget),
       asset: 'USDC',
       status: TaskStatus.DRAFT,
+      idempotencyKey: params.idempotencyKey ?? null,
     };
 
     if (params.mode === TaskMode.DIRECT) {
@@ -89,11 +193,216 @@ export class TasksService {
       if (!service) throw new BadRequestException('Unknown service');
     }
 
-    const created = await this.prisma.task.create({
-      data,
-      include: { steps: { select: { id: true, status: true } }, payments: true },
-    });
+    let created: TaskRow;
+    try {
+      created = await this.prisma.task.create({
+        data,
+        include: { steps: { select: { id: true, status: true } }, payments: true },
+      });
+    } catch (err) {
+      // A concurrent retry with the same key races past the replay check above and
+      // loses on the unique (buyerId, idempotencyKey); return the winner's task.
+      if (
+        params.idempotencyKey &&
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const winner = await this.prisma.task.findUnique({
+          where: {
+            buyerId_idempotencyKey: { buyerId: userId, idempotencyKey: params.idempotencyKey },
+          },
+          include: { steps: { select: { id: true, status: true } }, payments: true },
+        });
+        if (winner) return serialize(winner);
+      }
+      throw err;
+    }
+    // If a policy is attached, lock the budget on-chain under it before running,
+    // so released steps can settle to providers via the delegate. Best-effort.
+    if (params.policyId) {
+      await this.lockOnChain(userId, created.id, params.policyId, params.budget);
+    }
+    // A task with steps (a DIRECT hire) is ready to run now; hand it to the
+    // worker queue. SEARCH/COMPOSE have no steps yet (planning is a later job).
+    if (created.steps.length > 0) await this.queue?.enqueueTaskExecution(created.id);
     return serialize(created);
+  }
+
+  /**
+   * The core spend primitive: pay one address (kind='pay') or disburse to many
+   * (kind='disburse'), each line bounded by a policy and released directly from
+   * the vault via the proof-gated path. Reuses the same lock-under-policy and
+   * settlement machinery as a hire, minus the provider-execution step.
+   *
+   * Every payment is bounded: a chosen limit, or one derived from the lines
+   * themselves (allowlist = these payees, cap = the largest line). The task
+   * budget (sum of lines) is enforced on-chain; the caps/allowlist are enforced
+   * here in v1 and recorded as a private commitment (full on-chain rule
+   * enforcement is the ZK circuit, a later milestone).
+   */
+  async createPayment(userId: string, params: CreatePaymentParams) {
+    // Idempotent replay: a retried request (e.g. an agent whose call timed out
+    // after the server already processed it) with the same Idempotency-Key returns
+    // the original task instead of creating a second spend.
+    if (params.idempotencyKey) {
+      const prior = await this.prisma.task.findUnique({
+        where: {
+          buyerId_idempotencyKey: { buyerId: userId, idempotencyKey: params.idempotencyKey },
+        },
+        include: { steps: { select: { id: true, status: true } }, payments: true },
+      });
+      if (prior) return serialize(prior);
+    }
+
+    const lines = params.lines
+      .map((l) => ({
+        payee: l.payee.trim(),
+        amount: Number(l.amount),
+        reason: l.reason?.trim() || undefined,
+      }))
+      .filter((l) => l.payee && Number.isFinite(l.amount) && l.amount > 0);
+    if (lines.length === 0) {
+      throw new BadRequestException('At least one valid payment line is required');
+    }
+    if (params.kind === 'pay' && lines.length !== 1) {
+      throw new BadRequestException('A single payment has exactly one line');
+    }
+    for (const l of lines) {
+      if (!STELLAR_ADDR.test(l.payee)) {
+        throw new BadRequestException(`Invalid payee address: ${l.payee}`);
+      }
+    }
+    const total = lines.reduce((s, l) => s + l.amount, 0);
+
+    // Resolve the bounding policy: a chosen limit, or a tight one derived from
+    // the lines (allowlist = these payees, cap = the largest single line).
+    let policyId = params.policyId;
+    let rules: PolicyRules | null = null;
+    if (policyId) {
+      const p = await this.prisma.policy.findFirst({ where: { id: policyId, userId } });
+      if (!p) throw new BadRequestException('Unknown policy');
+      rules = (p.ruleSummary as PolicyRules | null) ?? null; // null for private
+    } else {
+      if (!this.policies) throw new BadRequestException('A policy is required for payments');
+      const derived: PolicyRules = {
+        allowlist: [...new Set(lines.map((l) => l.payee))],
+        perPaymentCeilingUsdc: Math.max(...lines.map((l) => l.amount)),
+      };
+      const created = await this.policies.create(userId, { rules: derived, isPrivate: false });
+      policyId = created.id;
+      rules = derived;
+    }
+
+    // Enforce known rules off-chain (v1). Where the rule is private (rules null)
+    // the owner is responsible; the on-chain budget still bounds the total.
+    if (rules) {
+      for (const l of lines) {
+        if (rules.perPaymentCeilingUsdc != null && l.amount > rules.perPaymentCeilingUsdc) {
+          throw new BadRequestException(
+            `Line to ${l.payee} exceeds the per-payment cap of ${rules.perPaymentCeilingUsdc}`,
+          );
+        }
+        if (rules.allowlist?.length && !rules.allowlist.includes(l.payee)) {
+          throw new BadRequestException(`Payee ${l.payee} is not on the policy allowlist`);
+        }
+      }
+    }
+
+    // Fail fast on config-level problems (no vault, Autopay not authorized) so the
+    // caller gets an immediate error; the on-chain lock itself happens in the
+    // worker (below) rather than blocking this request for several seconds.
+    await this.assertCanSettle(userId);
+
+    const mode = params.kind === 'pay' ? TaskMode.PAY : TaskMode.DISBURSE;
+    const title =
+      params.title ??
+      (params.kind === 'pay'
+        ? `Pay ${lines[0].payee.slice(0, 6)}…${lines[0].payee.slice(-4)}`
+        : `Disburse to ${lines.length} recipients`);
+
+    const data: Prisma.TaskCreateInput = {
+      buyer: { connect: { id: userId } },
+      title,
+      mode,
+      budget: new Prisma.Decimal(total),
+      asset: 'USDC',
+      // Bind the policy now so the worker can lock + settle against its
+      // commitment. Previously the (synchronous) lock connected it.
+      policy: { connect: { id: policyId } },
+      // No provider execution: the steps are authorized to pay immediately and
+      // settle out of band via the delegate. The task completes once finalized.
+      status: TaskStatus.RUNNING,
+      idempotencyKey: params.idempotencyKey ?? null,
+      steps: {
+        create: lines.map((l, i) => ({
+          index: i,
+          action: l.reason ?? 'Payment',
+          payee: l.payee,
+          estimatedCost: new Prisma.Decimal(l.amount),
+          status: StepStatus.RELEASED,
+        })),
+      },
+    };
+
+    let created: TaskRow;
+    try {
+      created = await this.prisma.task.create({
+        data,
+        include: { steps: { select: { id: true, status: true } }, payments: true },
+      });
+    } catch (err) {
+      // Two retries with the same key can race past the replay check above; the
+      // unique (buyerId, idempotencyKey) makes the loser hit P2002. Return the
+      // winner's task rather than creating a duplicate spend.
+      if (
+        params.idempotencyKey &&
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const winner = await this.prisma.task.findUnique({
+          where: {
+            buyerId_idempotencyKey: { buyerId: userId, idempotencyKey: params.idempotencyKey },
+          },
+          include: { steps: { select: { id: true, status: true } }, payments: true },
+        });
+        if (winner) return serialize(winner);
+      }
+      throw err;
+    }
+
+    // Enqueue a direct release per line. The worker locks the budget on-chain
+    // under the policy commitment on the first step to run (the async lock), then
+    // pays each payee and finalizes. This keeps the request path off the chain.
+    for (const s of created.steps) await this.queue?.enqueueSettlement(s.id);
+    return serialize(created);
+  }
+
+  /**
+   * Raise a dispute on one of the caller's tasks. One open dispute per task;
+   * records the buyer's wallet as the raiser. Operators resolve it from the
+   * admin console.
+   */
+  async raiseDispute(userId: string, taskId: string, reason?: string) {
+    const task = await this.prisma.task.findFirst({ where: { id: taskId, buyerId: userId } });
+    if (!task) throw new NotFoundException('Task not found');
+    const open = await this.prisma.dispute.findFirst({
+      where: { taskId, status: 'OPEN' },
+    });
+    if (open) throw new BadRequestException('This task already has an open dispute');
+    const wallet = await this.prisma.wallet.findFirst({
+      where: { userId },
+      orderBy: { isPrimary: 'desc' },
+      select: { address: true },
+    });
+    const d = await this.prisma.dispute.create({
+      data: {
+        taskId,
+        raisedBy: wallet?.address ?? userId,
+        reason: reason ?? null,
+        status: 'OPEN',
+      },
+    });
+    return { id: d.id, status: d.status, createdAt: d.createdAt };
   }
 
   /** The current user's tasks, newest first. */
@@ -152,6 +461,9 @@ export class TasksService {
         service: s.service?.name ?? null,
         latencyMs: s.latencyMs,
         error: s.error,
+        // The provider's returned result for this step, so the buyer sees what
+        // they paid for (truncated to 2000 chars at execution time).
+        output: s.output,
       })),
       receipts: t.payments.map((p) => ({
         id: p.id,

@@ -182,6 +182,29 @@ impl PolicyVerifier {
         verify_proof(&env, &vk_bytes, &pi_hash, &proof)
     }
 
+    /// Boolean verification entry point matching the `PolicyVerifier` interface
+    /// CleverVault calls in `release_payment_proved`. It is a thin wrapper over
+    /// [`Self::verify`] that collapses every non-`Ok(true)` outcome (a `false`,
+    /// a structural error, or an invalid amount) into a plain `false`, so the
+    /// vault sees a single clean rejection signal and never has to interpret a
+    /// typed error across the contract boundary. Fail-closed by construction.
+    ///
+    /// Public-input ordering is `(commitment, payee, amount, nullifier)` with
+    /// `proof` last, matching the vault call site and the #66 encoding.
+    pub fn verify_policy(
+        env: Env,
+        commitment: BytesN<32>,
+        payee: Address,
+        amount: i128,
+        nullifier: BytesN<32>,
+        proof: Bytes,
+    ) -> bool {
+        matches!(
+            Self::verify(env, commitment, payee, amount, nullifier, proof),
+            Ok(true)
+        )
+    }
+
     /// Return the SHA-256 hash of the currently active verifying key.
     ///
     /// The vault and UI can call this to confirm which circuit version is in

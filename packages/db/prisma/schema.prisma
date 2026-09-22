@@ -29,9 +29,45 @@ model User {
   services  Service[]  @relation("ProviderServices")
   policies  Policy[]
   webhooks  Webhook[]
-  auditLogs AuditLog[]
+  auditLogs   AuditLog[]
+  delegate    AgentDelegate?
+  agentWallet AgentWallet?
 
   @@map("users")
+}
+
+/// The per-user spending delegate (orchestrator) the platform provisions and the
+/// user authorizes on the vault. The secret is stored encrypted at rest (AES-GCM;
+/// KMS in production). Bounded by the vault policy, so even if leaked it cannot
+/// overspend; holds only a little XLM for fees, never user funds.
+model AgentDelegate {
+  userId       String   @id
+  publicKey    String   @unique // the Stellar G... address the user registers
+  secretCipher String // AES-256-GCM ciphertext of the secret key (base64 iv:tag:data)
+  registered   Boolean  @default(false) // whether register_orchestrator has been confirmed
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("agent_delegates")
+}
+
+/// The user's OWN agent key (for the agent-key payment mode: paying external
+/// x402/MPP services). The platform stores ONLY the public key and NEVER the
+/// secret, so it is non-custodial by construction: the vault tops this address
+/// up in bounded amounts under the user's policy, and the user's agent signs
+/// its own payments. Distinct from AgentDelegate (a platform-held authorizer
+/// that never holds funds).
+model AgentWallet {
+  userId    String   @id
+  publicKey String   @unique // the agent's Stellar G... address; secret held by the user, not us
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("agent_wallets")
 }
 
 model Wallet {
@@ -100,10 +136,14 @@ model ApiKey {
   userId     String
   name       String
   prefix     String    @unique // shown to the user; the rest is secret
-  keyHash    String
-  scopes     String[]  @default([])
-  lastUsedAt DateTime?
-  expiresAt  DateTime?
+  keyHash      String
+  scopes       String[]  @default([])
+  lastUsedAt   DateTime?
+  requestCount Int       @default(0) // lifetime authenticated calls (usage metering)
+  quotaPerDay  Int       @default(0) // max calls per UTC day; 0 = unlimited
+  usageDay     String? // current quota window, YYYY-MM-DD (UTC)
+  usageToday   Int       @default(0) // calls in the current window
+  expiresAt    DateTime?
   revokedAt  DateTime?
   createdAt  DateTime  @default(now())
 
@@ -193,6 +233,8 @@ enum TaskMode {
   DIRECT // pay a chosen provider
   SEARCH // find and pay one service
   COMPOSE // multi-service job
+  PAY // direct payment to one address (no provider execution)
+  DISBURSE // direct payments to many addresses (no provider execution)
 }
 
 enum TaskStatus {
@@ -224,7 +266,12 @@ model Task {
   asset       String
   status      TaskStatus @default(DRAFT)
   vaultTaskId BigInt? // on-chain task id once locked
+  vaultFinalizedAt DateTime? // set once complete_task finalized the on-chain task (unlocks remainder)
   policyId    String?
+  // Client-supplied Idempotency-Key: a retried spend request with the same key
+  // returns the original task instead of creating a duplicate. NULLs are distinct
+  // in Postgres, so keyless requests never collide.
+  idempotencyKey String?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
@@ -234,6 +281,7 @@ model Task {
   payments Payment[]
   disputes Dispute[]
 
+  @@unique([buyerId, idempotencyKey])
   @@index([buyerId])
   @@index([status])
   @@map("tasks")
@@ -244,6 +292,7 @@ model TaskStep {
   taskId        String
   index         Int
   serviceId     String?
+  payee         String? // direct recipient for PAY/DISBURSE steps (no provider)
   action        String
   dependsOn     Int[]      @default([])
   estimatedCost Decimal    @db.Decimal(20, 7)

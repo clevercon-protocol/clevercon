@@ -3,6 +3,7 @@
  * Runs only when TEST_DATABASE_URL is set.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { Keypair } from '@stellar/stellar-sdk';
 
 const DB = process.env.TEST_DATABASE_URL;
 
@@ -74,6 +75,25 @@ describe.skipIf(!DB)('Vault + Tasks (integration, real Postgres)', () => {
     const v = await vault.getForUser(user.id);
     expect(v).toMatchObject({ balance: 0, available: 0, locked: 0 });
     expect(v.accounts).toHaveLength(0);
+  });
+
+  it('registers and reads the agent wallet (public key only), rejecting invalid keys', async () => {
+    const user = await prisma.user.create({ data: {} });
+    expect(await vault.getAgentWallet(user.id)).toEqual({ publicKey: null });
+
+    const pk = Keypair.random().publicKey();
+    expect(await vault.setAgentWallet(user.id, pk)).toEqual({ publicKey: pk });
+    expect(await vault.getAgentWallet(user.id)).toEqual({ publicKey: pk });
+
+    // Upsert: a new key replaces the old one (one agent wallet per user).
+    const pk2 = Keypair.random().publicKey();
+    await vault.setAgentWallet(user.id, pk2);
+    expect((await vault.getAgentWallet(user.id)).publicKey).toBe(pk2);
+
+    // Invalid keys are rejected. The row has no secret column: non-custodial by construction.
+    await expect(vault.setAgentWallet(user.id, 'not-a-key')).rejects.toThrow(/Invalid Stellar/);
+    const row = await prisma.agentWallet.findUnique({ where: { userId: user.id } });
+    expect(Object.keys(row)).not.toContain('secretCipher');
   });
 
   it('lists the user tasks with confirmed spend and step counts, scoped to the buyer', async () => {

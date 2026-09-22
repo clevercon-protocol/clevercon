@@ -33,7 +33,7 @@ function HireBox({ serviceId, serviceName }: { serviceId: string; serviceName: s
         e.preventDefault();
         if (canSubmit) hire.mutate();
       }}
-      className="rounded-2xl border border-white/10 bg-white/[0.02] p-6"
+      className="rounded-2xl bg-white/[0.04] p-6"
     >
       <h2 className="font-semibold text-slate-300">Hire this service</h2>
       <p className="mt-1 text-sm text-slate-400">
@@ -44,7 +44,7 @@ function HireBox({ serviceId, serviceName }: { serviceId: string; serviceName: s
         onChange={(e) => setBudget(e.target.value)}
         inputMode="decimal"
         placeholder="Budget (USDC)"
-        className="mt-4 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
+        className="mt-4 w-full rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
       />
       <button
         type="submit"
@@ -104,7 +104,7 @@ export function ServiceDetail() {
                 value: service.avgLatencyMs != null ? `${service.avgLatencyMs}ms` : 'n/a',
               },
             ].map((s) => (
-              <div key={s.label} className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+              <div key={s.label} className="rounded-2xl bg-white/[0.04] p-4">
                 <s.icon size={16} className="text-violet-300" />
                 <div className="mt-2 text-xl font-bold">{s.value}</div>
                 <div className="text-xs text-slate-500">{s.label}</div>
@@ -113,7 +113,7 @@ export function ServiceDetail() {
           </div>
 
           <div className="grid lg:grid-cols-2 gap-6">
-            <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+            <div className="rounded-2xl bg-white/[0.04] p-6">
               <h2 className="font-semibold text-slate-300">Capabilities</h2>
               {service.capabilities.length === 0 ? (
                 <p className="mt-4 text-sm text-slate-500">No capabilities listed.</p>
@@ -122,7 +122,7 @@ export function ServiceDetail() {
                   {service.capabilities.map((c) => (
                     <span
                       key={c}
-                      className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-slate-300"
+                      className="rounded-full bg-white/[0.06] px-3 py-1 text-xs text-slate-300"
                     >
                       {c}
                     </span>

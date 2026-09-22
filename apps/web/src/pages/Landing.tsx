@@ -11,7 +11,6 @@ import {
   Zap,
   Layers,
   CheckCircle2,
-  ExternalLink,
   Sparkles,
   Search,
   Workflow,
@@ -21,7 +20,6 @@ import {
 } from 'lucide-react';
 
 const GITHUB_URL = 'https://github.com/clevercon-protocol/clevercon';
-const CIPHERMIT_URL = 'https://github.com/Bosun-Josh121/ciphermit';
 
 /** Fade-and-rise on scroll into view. */
 function Reveal({
@@ -82,22 +80,22 @@ function LaunchButton() {
 
 const PILLARS = [
   {
+    icon: Wallet,
+    tint: 'from-cyan-500/20 to-transparent',
+    ring: 'text-cyan-300',
+    border: 'border-cyan-800/40',
+    tag: 'What it is',
+    title: 'A spending account, bounded',
+    body: 'Fund a non-custodial vault and set rules. The contract holds the money and refuses any payment that breaks a rule, so the platform never has custody and the agent can never overspend or pay an unapproved party.',
+  },
+  {
     icon: Shield,
     tint: 'from-violet-500/20 to-transparent',
     ring: 'text-violet-300',
     border: 'border-violet-800/40',
     tag: 'The differentiator',
     title: 'Private by design',
-    body: 'Spending rules are enforced on-chain but never revealed. Your budget, approved payees, and payment history stay yours, proven with zero-knowledge, not broadcast to a public ledger.',
-  },
-  {
-    icon: Store,
-    tint: 'from-cyan-500/20 to-transparent',
-    ring: 'text-cyan-300',
-    border: 'border-cyan-800/40',
-    tag: 'The live application',
-    title: 'An open marketplace',
-    body: 'Hire real services in USDC: AI agents, human specialists, and business services across seven categories. Fund a non-custodial vault, and the agent pays per step, always within your limit.',
+    body: 'The rules are enforced on-chain but never published. Your budget and approved payees stay yours, proven with a compliance proof, not broadcast to a public ledger. This is what transparent enforcers and escrows cannot do.',
   },
   {
     icon: Boxes,
@@ -105,8 +103,8 @@ const PILLARS = [
     ring: 'text-emerald-300',
     border: 'border-emerald-800/40',
     tag: 'The reach',
-    title: 'Build on it',
-    body: 'A reusable SDK and a Stellar MCP server let any app or agent embed safe, private spending in a few calls. CleverCon is a rail others build on, not just a destination app.',
+    title: 'Works with any agent',
+    body: 'A Stellar MCP server gives any MCP-capable agent (Claude Desktop, Cursor, your own) a bounded spending account in minutes. An SDK embeds the same rail in a few calls. No custom integration.',
   },
 ];
 
@@ -129,12 +127,12 @@ const USAGE_MODES = [
   {
     icon: Search,
     title: 'Find and pay one service',
-    body: 'Describe what you need and the open registry returns matching providers by capability, price, and reputation. Pick one, or take the top-ranked, and pay.',
+    body: 'Describe what you need and the curated directory returns matching services by capability, price, and reputation. Pick one, or take the top-ranked, and pay.',
   },
   {
     icon: Workflow,
     title: 'Compose a multi-service job',
-    body: 'For work that spans services, gather data, analyze it, write a report, a delegate plans the steps, hires a provider for each, and pays in sequence. Optional, and only when the job needs it.',
+    body: 'For work that spans services, gather data, analyze it, write a report, a delegate plans the steps, hires a service for each, and pays in sequence. Optional, and only when the job needs it.',
   },
 ];
 
@@ -148,33 +146,33 @@ const OFFERINGS: { icon: typeof Wallet; name: string; status: OfferStatus; body:
   },
   {
     icon: Store,
-    name: 'Services marketplace',
+    name: 'Service directory',
     status: 'live',
-    body: 'Hire AI agents, human specialists, and business services, paid in USDC over x402 and MPP.',
+    body: 'A curated set of automated services an agent can hire, paid per step from the vault. Discovery, not a two-sided marketplace.',
   },
   {
     icon: Shield,
     name: 'Private spending policies',
-    status: 'dev',
-    body: 'Spending rules enforced on-chain but kept private, with proof of compliance. Built on zero-knowledge.',
+    status: 'live',
+    body: 'Spending rules enforced on-chain but kept private, with a compliance proof. Live today via a binding proof; the full zero-knowledge circuit is on the roadmap.',
   },
   {
     icon: Boxes,
     name: 'Agent SDK',
-    status: 'planned',
+    status: 'live',
     body: 'Embed safe, private spending into any app or agent in a few lines of code.',
   },
   {
     icon: Layers,
     name: 'Stellar MCP server',
-    status: 'planned',
-    body: 'Let any AI agent discover and pay for services under a policy, natively over MCP.',
+    status: 'live',
+    body: 'Give any MCP-capable agent a bounded spending account: discover services, hire, and track tasks, natively over MCP.',
   },
   {
     icon: Sparkles,
     name: 'On-chain registry',
-    status: 'planned',
-    body: 'Verifiable service discovery and reputation, stored on Soroban.',
+    status: 'live',
+    body: 'Verifiable service discovery and reputation, deployed on Soroban.',
   },
 ];
 const STATUS: Record<OfferStatus, { label: string; cls: string }> = {
@@ -323,8 +321,8 @@ export function Landing() {
             <a href="#platform" className="hover:text-white transition-colors">
               Product
             </a>
-            <a href="#marketplace" className="hover:text-white transition-colors">
-              Marketplace
+            <a href="#directory" className="hover:text-white transition-colors">
+              Directory
             </a>
             <a href="#how" className="hover:text-white transition-colors">
               How it works
@@ -363,7 +361,7 @@ export function Landing() {
           <Reveal>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-400">
               <Sparkles size={12} className="text-violet-400" />
-              Payment infrastructure for AI agents on Stellar
+              Spending control for AI agents on Stellar
             </span>
           </Reveal>
           <Reveal delay={80}>
@@ -376,8 +374,8 @@ export function Landing() {
           <Reveal delay={160}>
             <p className="mt-6 text-base sm:text-lg text-slate-400 max-w-2xl mx-auto leading-relaxed">
               CleverCon gives an AI agent a budget it cannot overspend, enforced on-chain and kept
-              private. Fund a non-custodial vault, hire services from an open marketplace, and stay
-              in control the whole time.
+              private. Fund a non-custodial vault, set your rules, and connect any agent over MCP or
+              the SDK. You stay in control the whole time.
             </p>
           </Reveal>
           <Reveal delay={240}>
@@ -412,9 +410,9 @@ export function Landing() {
         <div className="max-w-6xl mx-auto">
           <Reveal className="text-center max-w-2xl mx-auto">
             <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight text-balance">
-              A private rail, a live marketplace, and infrastructure to build on
+              Bounded, private, and pluggable into any agent
             </h2>
-            <p className="mt-3 text-slate-400">Three layers, one coherent product.</p>
+            <p className="mt-3 text-slate-400">Three things, one coherent product.</p>
           </Reveal>
           <div className="mt-12 grid md:grid-cols-3 gap-5">
             {PILLARS.map((p, i) => (
@@ -450,7 +448,8 @@ export function Landing() {
               Everything CleverCon offers
             </h2>
             <p className="mt-3 text-slate-400">
-              The vault and marketplace are live today. The rest is on the way, built in the open.
+              The vault, policies, SDK, and MCP server are live on testnet today. The full
+              zero-knowledge circuit and mainnet are on the way, built in the open.
             </p>
           </Reveal>
           <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -477,27 +476,28 @@ export function Landing() {
         </div>
       </section>
 
-      {/* Marketplace */}
-      <section id="marketplace" className="px-5 py-20 border-t border-white/5">
+      {/* Directory */}
+      <section id="directory" className="px-5 py-20 border-t border-white/5">
         <div className="max-w-6xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
           <Reveal>
             <p className="text-xs uppercase tracking-wider text-cyan-400 font-medium">
-              The live application
+              Somewhere to spend
             </p>
             <h2 className="mt-2 text-2xl sm:text-3xl font-bold text-white tracking-tight text-balance">
-              An open marketplace of services, paid on Stellar
+              A curated directory of services an agent can hire
             </h2>
             <p className="mt-4 text-slate-400 leading-relaxed">
-              Connect a wallet, fund a non-custodial vault, and hire from a marketplace that spans
-              automated AI agents, human specialists, and business services. Search, filter by
-              category, and sort by rating, price, or speed. The vault holds the funds and releases
-              payment per step, so the platform never has custody.
+              Connect a wallet, fund a non-custodial vault, and hire from a curated directory of
+              automated services. Search, filter by category, and sort by rating, price, or speed.
+              The vault holds the funds and releases payment per step, so the platform never has
+              custody. The directory is for discovery: the spending control works whether you pay
+              one endpoint or many.
             </p>
             <ul className="mt-5 space-y-2 text-sm text-slate-300">
               {[
-                'Three provider types: AI agents, human specialists, and businesses',
-                'Paid per call in USDC over x402 and MPP',
-                'Open registry: any service with a Stellar wallet can join',
+                'Pay one service you choose, or let a delegate compose many',
+                'Paid per step in USDC, released by the vault under your policy',
+                'Open to services that register with a Stellar wallet',
               ].map((t) => (
                 <li key={t} className="flex items-start gap-2">
                   <CheckCircle2 size={15} className="text-cyan-400 mt-0.5 shrink-0" /> {t}
@@ -526,12 +526,12 @@ export function Landing() {
               </div>
               <div className="mt-5 grid grid-cols-3 gap-3 text-center">
                 {[
-                  ['7', 'categories'],
-                  ['3', 'provider types'],
-                  ['2', 'payment rails'],
+                  ['MCP', 'connect any agent'],
+                  ['SDK', 'embed in code'],
+                  ['dApp', 'try in browser'],
                 ].map(([n, l]) => (
                   <div key={l} className="rounded-xl border border-white/10 bg-white/[0.02] py-4">
-                    <div className="text-2xl font-bold text-white">{n}</div>
+                    <div className="text-xl font-bold text-white">{n}</div>
                     <div className="text-xs text-slate-500 mt-0.5">{l}</div>
                   </div>
                 ))}
@@ -599,23 +599,16 @@ export function Landing() {
               Enforcement on-chain. Rules kept private.
             </h2>
             <p className="mt-4 text-slate-400 leading-relaxed">
-              Most agent-payment tools put your budget, your approved payees, and every payment on a
-              public ledger for anyone to read. CleverCon is built so the contract can enforce your
-              spending policy and prove it was followed, without revealing the policy, the amounts,
-              or the counterparties. That is what separates it from transparent, custodial, or
-              SDK-only alternatives.
+              Most agent-payment tools put your budget, your approved payees, and your limits on a
+              public ledger for anyone to read. CleverCon is built so the contract enforces your
+              spending policy and proves it was followed, without revealing the policy. That is what
+              separates it from transparent, custodial, or SDK-only alternatives.
             </p>
             <p className="mt-4 text-sm text-slate-500">
-              Built on the zero-knowledge engine already running on Stellar testnet as{' '}
-              <a
-                href={CIPHERMIT_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-violet-400 hover:text-violet-300 inline-flex items-center gap-1"
-              >
-                CipherMit <ExternalLink size={11} />
-              </a>
-              . Bringing it into CleverVault is the core of the roadmap.
+              Stated honestly: what stays private today is the policy (your caps, allowlist, and
+              limits). Hiding amounts and counterparties as well is the deeper end of the roadmap
+              and leans on Stellar's confidential-token support. Landing the full zero-knowledge
+              circuit is the headline roadmap item.
             </p>
           </Reveal>
 
@@ -649,8 +642,8 @@ export function Landing() {
               Give your agent a wallet it can't misuse.
             </h2>
             <p className="mt-3 text-slate-300 max-w-xl mx-auto">
-              Try it on Stellar testnet: connect a wallet, fund a vault, and explore the
-              marketplace.
+              Try it on Stellar testnet: connect a wallet, fund a vault, set a private policy, and
+              connect your agent.
             </p>
             <div className="mt-8 flex items-center justify-center gap-3 flex-wrap">
               <LaunchButton />
@@ -683,14 +676,6 @@ export function Landing() {
               aria-label="GitHub"
             >
               <Github size={17} />
-            </a>
-            <a
-              href={CIPHERMIT_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
-            >
-              CipherMit
             </a>
             <Link
               to="/connect"

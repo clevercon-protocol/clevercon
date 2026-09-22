@@ -4,8 +4,10 @@ import { ServicesService } from './services.service.js';
 import { parseBody } from '../auth/validate.js';
 
 const listQuery = z.object({
+  q: z.string().optional(),
   category: z.string().optional(),
   capability: z.string().optional(),
+  sort: z.enum(['recent', 'rating', 'price_asc', 'price_desc']).optional(),
   limit: z.coerce.number().int().positive().optional(),
   offset: z.coerce.number().int().nonnegative().optional(),
 });

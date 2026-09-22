@@ -10,6 +10,14 @@ export const envSchema = z.object({
   NETWORK: z.enum(['local', 'testnet', 'mainnet']).default('testnet'),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url().optional(),
+  // Number of trusted proxy hops in front of the API (load balancer / ingress).
+  // Controls Express `trust proxy` so rate limiting sees the real client IP from
+  // X-Forwarded-For instead of the proxy's. Keep 0 for direct local runs.
+  TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+  // Comma-separated CORS allowlist (e.g. https://app.example.com,https://demo.example.com).
+  // Set this in production to restrict who can call the API from a browser. When
+  // unset, any origin is reflected (convenient for local dev).
+  CORS_ORIGINS: z.string().optional(),
   JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
   JWT_ACCESS_TTL: z.string().default('15m'),
   // SEP-10 wallet auth. If SERVER_SIGNING_KEY is unset, an ephemeral key is used
@@ -19,12 +27,46 @@ export const envSchema = z.object({
   HOME_DOMAIN: z.string().default('localhost'),
   WEB_AUTH_DOMAIN: z.string().default('localhost'),
   LOG_LEVEL: z.string().default('info'),
+  // OpenTelemetry: tracing is off unless OTEL_EXPORTER_OTLP_ENDPOINT points at a
+  // collector (e.g. http://localhost:4318). Read in src/tracing.ts at startup.
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
+  OTEL_SERVICE_NAME: z.string().default('clevercon-api'),
   // CleverVault (Soroban). Optional: when the contract id is unset or a
   // placeholder the vault client stays inactive and deposit/withdraw report
   // "not configured" instead of touching the chain.
   AGENT_VAULT_CONTRACT_ID: z.string().optional(),
   STELLAR_RPC_URL: z.string().url().default('https://soroban-testnet.stellar.org'),
   USDC_SAC: z.string().optional(),
+  // Deployed policy-verifier (Phase 3). When set, the app knows which on-chain
+  // verifier gates proof-backed releases; the vault's set_policy_verifier must
+  // point here for release_payment_proved to succeed.
+  POLICY_VERIFIER_CONTRACT_ID: z.string().optional(),
+  // On-chain agent registry (Phase 4). When REGISTRY_CONTRACT_ID and
+  // REGISTRY_ADMIN_KEY are set, the API anchors service manifest hashes and
+  // reputation on-chain (the platform is the registry admin/owner). KMS in prod.
+  REGISTRY_CONTRACT_ID: z.string().optional(),
+  REGISTRY_ADMIN_KEY: z.string().optional(),
+  // Vault admin key (the address passed to the vault's init). Lets the operator
+  // console read + set the protocol fee and view accrued fees. KMS in prod.
+  VAULT_ADMIN_KEY: z.string().optional(),
+  // At-rest encryption key for per-user delegate secrets (32-byte hex or base64;
+  // KMS in production). When set, the platform can provision per-user spending
+  // delegates and automatic settlement is enabled; when unset, tasks run
+  // off-chain only. Shared with the worker (which reads it from process.env).
+  DELEGATE_ENCRYPTION_KEY: z.string().optional(),
+  // The chat agent's brain: parses a natural-language instruction into a
+  // structured plan (server-side; the plan is re-validated and the vault enforces
+  // limits regardless). Provider-agnostic: native Anthropic OR any OpenAI-compatible
+  // endpoint (OpenAI, Gemini's OpenAI-compat, OpenRouter, local Ollama/vLLM). When
+  // no key is set, a deterministic parser + the quick-action forms keep it working.
+  // AGENT_PROVIDER forces one ('anthropic' | 'openai' | 'none'); 'auto' (default)
+  // picks whichever key is present.
+  AGENT_PROVIDER: z.enum(['auto', 'anthropic', 'openai', 'none']).default('auto'),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_MODEL: z.string().default('claude-opus-4-8'),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
+  OPENAI_MODEL: z.string().default('gpt-4o-mini'),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

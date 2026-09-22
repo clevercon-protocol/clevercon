@@ -35,7 +35,10 @@ export async function getPolicies(): Promise<Policy[]> {
   return res.items;
 }
 
-/** Create a policy. Private (ZK) mode is gated until the prover lands. */
+/**
+ * Create a policy. Private mode stores only the commitment (the plaintext rule
+ * is not persisted server-side); transparent mode stores the rule too.
+ */
 export async function createPolicy(rules: PolicyRules, isPrivate: boolean): Promise<Policy> {
   if (isDemo()) {
     return {
@@ -43,10 +46,52 @@ export async function createPolicy(rules: PolicyRules, isPrivate: boolean): Prom
       commitment: Array.from({ length: 64 }, () =>
         Math.floor(Math.random() * 16).toString(16),
       ).join(''),
-      isPrivate: false,
-      rules,
+      isPrivate,
+      // Private policies do not keep the plaintext rule, mirroring the API.
+      rules: isPrivate ? null : rules,
       createdAt: new Date().toISOString(),
     };
   }
   return apiPost<Policy>('/policies', { rules, isPrivate });
+}
+
+export interface ProofStatus {
+  id: string;
+  status: 'REQUESTED' | 'GENERATING' | 'READY' | 'VERIFIED' | 'REJECTED' | 'FAILED';
+  hasProof: boolean;
+  nullifier: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Request a binding proof authorising a release (payee + amount) under a policy.
+ * The worker generates it asynchronously; poll getProofStatus (or listen for
+ * `proof.updated`) until it is READY.
+ */
+export async function requestProof(
+  policyId: string,
+  payeeAddress: string,
+  amountUsdc: number,
+): Promise<{ proofId: string; status: string }> {
+  if (isDemo()) return { proofId: 'proof-' + Date.now(), status: 'REQUESTED' };
+  return apiPost<{ proofId: string; status: string }>(`/policies/${policyId}/proofs`, {
+    payeeAddress,
+    amountUsdc,
+  });
+}
+
+/** Poll a proof's status. */
+export async function getProofStatus(proofId: string): Promise<ProofStatus> {
+  if (isDemo()) {
+    return {
+      id: proofId,
+      status: 'READY',
+      hasProof: true,
+      nullifier: 'demo'.padEnd(64, '0'),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+  return apiFetch<ProofStatus>(`/policies/proofs/${proofId}`);
 }
