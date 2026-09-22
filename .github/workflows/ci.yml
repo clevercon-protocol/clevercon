@@ -50,9 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # budget-guardian is unused legacy code (see docs/architecture.md) and
-        # its pinned soroban-sdk dev-dependencies currently fail to build with
-        # the `testutils` feature, so it's excluded from CI for now.
+        # The two production contracts (registry has no Rust test suite in CI).
         contract: [agent-vault, policy-verifier]
     steps:
       - name: Checkout repository

@@ -1,9 +1,41 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { Prisma, PaymentStatus, PricingModel, Role, ServiceStatus } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { RegistryContractService } from './registry-contract.service.js';
 
 const ZERO = new Prisma.Decimal(0);
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Tamper-evident hash of what a provider published. This is the value the
+ * on-chain registry anchors (contracts/registry): a client can hash a service's
+ * advertised fields and compare to the chain to confirm it was not altered.
+ * Keys are emitted in a fixed order so the hash is stable.
+ */
+export function manifestHash(m: {
+  name: string;
+  description: string;
+  category?: string | null;
+  capabilities: string[];
+  pricingModel: string;
+  pricePerCall: string | number;
+  endpoint: string;
+  stellarAddress: string;
+}): string {
+  const canonical = JSON.stringify({
+    v: 1,
+    name: m.name,
+    description: m.description,
+    category: m.category ?? null,
+    capabilities: [...m.capabilities].sort(),
+    pricingModel: m.pricingModel,
+    pricePerCall: String(m.pricePerCall),
+    endpoint: m.endpoint,
+    stellarAddress: m.stellarAddress,
+  });
+  return createHash('sha256').update(canonical).digest('hex');
+}
 
 export interface RegisterServiceParams {
   name: string;
@@ -14,6 +46,17 @@ export interface RegisterServiceParams {
   pricePerCall: number;
   endpoint: string;
   stellarAddress: string;
+}
+
+/** Fields a provider may edit after registration. All optional (partial update). */
+export interface UpdateServiceParams {
+  name?: string;
+  description?: string;
+  category?: string;
+  capabilities?: string[];
+  pricePerCall?: number;
+  endpoint?: string;
+  stellarAddress?: string;
 }
 
 /** Stable, URL-safe id from a display name plus a short random suffix. */
@@ -46,7 +89,10 @@ function serializeService(s: ServiceWithRep) {
 
 @Injectable()
 export class ProviderService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly registry?: RegistryContractService,
+  ) {}
 
   /**
    * Register a service under the current user and grant them the PROVIDER role,
@@ -68,6 +114,16 @@ export class ProviderService {
           endpoint: params.endpoint,
           stellarAddress: params.stellarAddress,
           status: ServiceStatus.ACTIVE,
+          manifestHash: manifestHash({
+            name: params.name,
+            description: params.description,
+            category: params.category,
+            capabilities: params.capabilities ?? [],
+            pricingModel: params.pricingModel,
+            pricePerCall: params.pricePerCall,
+            endpoint: params.endpoint,
+            stellarAddress: params.stellarAddress,
+          }),
           reputation: { create: {} },
         },
         include: { reputation: true },
@@ -79,7 +135,82 @@ export class ProviderService {
       });
       return service;
     });
+    // Anchor the manifest hash on-chain (best-effort, background). The DB hash is
+    // already the cache; the chain anchor makes it publicly verifiable.
+    void this.registry?.anchorManifest(
+      created.agentId,
+      created.manifestHash ?? '',
+      created.stellarAddress,
+    );
     return serializeService(created);
+  }
+
+  /**
+   * Edit a service the caller owns. Ownership is enforced in the WHERE clause
+   * (id + providerId), so a provider can never mutate another provider's
+   * service. Only the provided fields change.
+   */
+  async updateService(userId: string, serviceId: string, params: UpdateServiceParams) {
+    // Ownership enforced here; also gives us the current values to merge so the
+    // manifest hash stays consistent with the stored fields.
+    const current = await this.prisma.service.findFirst({
+      where: { id: serviceId, providerId: userId },
+    });
+    if (!current) throw new NotFoundException('Service not found');
+
+    const merged = {
+      name: params.name ?? current.name,
+      description: params.description ?? current.description,
+      category: params.category ?? current.category,
+      capabilities: params.capabilities ?? current.capabilities,
+      pricingModel: current.pricingModel,
+      pricePerCall: params.pricePerCall ?? Number(current.pricePerCall),
+      endpoint: params.endpoint ?? current.endpoint,
+      stellarAddress: params.stellarAddress ?? current.stellarAddress,
+    };
+
+    const data: Prisma.ServiceUpdateInput = { manifestHash: manifestHash(merged) };
+    if (params.name !== undefined) data.name = params.name;
+    if (params.description !== undefined) data.description = params.description;
+    if (params.category !== undefined) data.category = params.category;
+    if (params.capabilities !== undefined) data.capabilities = params.capabilities;
+    if (params.pricePerCall !== undefined)
+      data.pricePerCall = new Prisma.Decimal(params.pricePerCall);
+    if (params.endpoint !== undefined) data.endpoint = params.endpoint;
+    if (params.stellarAddress !== undefined) data.stellarAddress = params.stellarAddress;
+
+    const updated = await this.prisma.service.update({
+      where: { id: serviceId },
+      data,
+      include: { reputation: true },
+    });
+    // Re-anchor the refreshed manifest hash on-chain (best-effort, background).
+    void this.registry?.anchorManifest(
+      updated.agentId,
+      updated.manifestHash ?? '',
+      updated.stellarAddress,
+    );
+    return serializeService(updated);
+  }
+
+  /**
+   * Pause (INACTIVE) or resume (ACTIVE) a service the caller owns. A paused
+   * service drops out of the public marketplace (which lists only ACTIVE/NEW)
+   * but is not deleted, so reputation and history are preserved.
+   */
+  async setServiceStatus(userId: string, serviceId: string, active: boolean) {
+    const status = active ? ServiceStatus.ACTIVE : ServiceStatus.INACTIVE;
+    const result = await this.prisma.service.updateMany({
+      where: { id: serviceId, providerId: userId },
+      data: { status },
+    });
+    if (result.count === 0) throw new NotFoundException('Service not found');
+
+    const updated = await this.prisma.service.findUniqueOrThrow({
+      where: { id: serviceId },
+      include: { reputation: true },
+    });
+    return serializeService(updated);
   }
 
   /** Services owned by the current provider. */
@@ -90,6 +221,38 @@ export class ProviderService {
       orderBy: { registeredAt: 'desc' },
     });
     return { items: rows.map(serializeService), total: rows.length };
+  }
+
+  /**
+   * Incoming work for the current provider: the task steps routed to any service
+   * they own, newest first, with live status. This reflects real marketplace
+   * activity (buyers hiring the provider's services) independently of settlement,
+   * so it is honest even before any payment is recorded.
+   */
+  async jobs(userId: string, limit = 25) {
+    const steps = await this.prisma.taskStep.findMany({
+      where: { service: { providerId: userId } },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        service: { select: { name: true } },
+        task: { select: { title: true } },
+      },
+    });
+    return {
+      items: steps.map((s) => ({
+        id: s.id,
+        taskId: s.taskId,
+        taskTitle: s.task.title,
+        service: s.service?.name ?? null,
+        action: s.action,
+        status: s.status,
+        estimatedCost: Number(s.estimatedCost),
+        latencyMs: s.latencyMs,
+        createdAt: s.createdAt,
+      })),
+      total: steps.length,
+    };
   }
 
   /**

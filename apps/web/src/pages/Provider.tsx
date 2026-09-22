@@ -1,17 +1,27 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DollarSign, Briefcase, Star, Boxes } from 'lucide-react';
-import { getProviderServices, getProviderEarnings, registerService } from '../lib/provider';
+import {
+  getProviderServices,
+  getProviderEarnings,
+  getProviderJobs,
+  registerService,
+  setServiceStatus,
+} from '../lib/provider';
 import { refreshRoles } from '../lib/sessionSync';
 import { PageHeader, StatCard } from '../components/ui';
 
 const JOB_STYLE: Record<string, string> = {
   CONFIRMED: 'text-emerald-300',
   COMPLETED: 'text-emerald-300',
+  RELEASED: 'text-emerald-300',
   PENDING: 'text-amber-300',
+  AWAITING_APPROVAL: 'text-amber-300',
+  RUNNING: 'text-sky-300',
   SUBMITTED: 'text-sky-300',
   DISPUTED: 'text-red-300',
   FAILED: 'text-red-400',
+  SKIPPED: 'text-slate-500',
 };
 
 /** Shows an ISO timestamp as a short date, or passes demo strings through. */
@@ -99,14 +109,14 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
     !reg.isPending;
 
   const field =
-    'w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40';
+    'w-full rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40';
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
         if (canSubmit) reg.mutate();
       }}
-      className="mt-4 space-y-2 rounded-xl border border-white/10 bg-white/[0.02] p-4"
+      className="mt-4 space-y-2 rounded-xl bg-white/[0.04] p-4"
     >
       <div className="grid sm:grid-cols-2 gap-2">
         <input
@@ -168,13 +178,22 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
 
 function ServicesCard() {
   const [registering, setRegistering] = useState(false);
+  const qc = useQueryClient();
   const {
     data: services = [],
     isLoading,
     error,
   } = useQuery({ queryKey: ['provider-services'], queryFn: getProviderServices });
+
+  const toggle = useMutation({
+    mutationFn: ({ id, active }: { id: string; active: boolean }) => setServiceStatus(id, active),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['provider-services'] });
+      qc.invalidateQueries({ queryKey: ['services'] }); // the public marketplace
+    },
+  });
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-slate-300">
           <Boxes size={18} className="text-violet-300" />
@@ -197,17 +216,35 @@ function ServicesCard() {
         {services.map((s) => (
           <div
             key={s.id}
-            className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3"
+            className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3"
           >
-            <div>
-              <div className="font-medium">{s.name}</div>
+            <div className="min-w-0">
+              <div className="truncate font-medium">{s.name}</div>
               <div className="text-xs text-slate-500">{s.category ?? 'Uncategorised'}</div>
             </div>
-            <div className="text-right text-xs">
-              <div className="text-slate-300">${s.pricePerCall}/call</div>
-              <div className="inline-flex items-center gap-1 text-emerald-300">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> {s.status}
+            <div className="flex items-center gap-3">
+              <div className="text-right text-xs">
+                <div className="text-slate-300">${s.pricePerCall}/call</div>
+                <div
+                  className={`inline-flex items-center gap-1 ${
+                    s.status === 'ACTIVE' ? 'text-emerald-300' : 'text-slate-500'
+                  }`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      s.status === 'ACTIVE' ? 'bg-emerald-400' : 'bg-slate-500'
+                    }`}
+                  />{' '}
+                  {s.status}
+                </div>
               </div>
+              <button
+                onClick={() => toggle.mutate({ id: s.id, active: s.status !== 'ACTIVE' })}
+                disabled={toggle.isPending}
+                className="shrink-0 rounded-lg bg-white/[0.05] px-2.5 py-1 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
+              >
+                {s.status === 'ACTIVE' ? 'Pause' : 'Activate'}
+              </button>
             </div>
           </div>
         ))}
@@ -217,13 +254,16 @@ function ServicesCard() {
 }
 
 function JobsCard() {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['provider-earnings'],
-    queryFn: getProviderEarnings,
+  const {
+    data: jobs = [],
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['provider-jobs'],
+    queryFn: getProviderJobs,
   });
-  const jobs = data?.recent ?? [];
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
       <h2 className="font-semibold text-slate-300">Incoming jobs</h2>
       {isLoading && <p className="mt-4 text-sm text-slate-500">Loading jobs…</p>}
       {error && <p className="mt-4 text-sm text-red-400">Could not load jobs.</p>}
@@ -234,16 +274,16 @@ function JobsCard() {
         {jobs.map((j) => (
           <div
             key={j.id}
-            className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm"
+            className="flex items-center justify-between rounded-xl bg-white/[0.04] p-3 text-sm"
           >
             <div className="min-w-0">
-              <div className="truncate font-medium">{j.service}</div>
-              <div className="text-xs text-slate-500">
-                {j.from} · {when(j.createdAt)}
+              <div className="truncate font-medium">{j.action}</div>
+              <div className="truncate text-xs text-slate-500">
+                {j.service ?? 'service'} · {j.taskTitle} · {when(j.createdAt)}
               </div>
             </div>
             <div className="text-right">
-              <div className="text-slate-300">${j.amount}</div>
+              <div className="text-slate-300">${j.estimatedCost}</div>
               <div className={`text-xs ${JOB_STYLE[j.status] ?? 'text-slate-400'}`}>{j.status}</div>
             </div>
           </div>

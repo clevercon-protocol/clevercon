@@ -1,8 +1,8 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { TaskMode, TaskStatus } from '@clevercon/db';
 import { TasksService } from './tasks.service.js';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
+import { ApiAuthGuard } from '../auth/api-auth.guard.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { parseBody } from '../auth/validate.js';
 import type { AuthUser } from '../auth/types.js';
@@ -18,18 +18,30 @@ const createSchema = z.object({
   mode: z.nativeEnum(TaskMode),
   budget: z.number().positive(),
   serviceId: z.string().optional(),
+  policyId: z.string().optional(),
   description: z.string().max(2000).optional(),
+  // Also accepted in the body for clients that cannot set a header.
+  idempotencyKey: z.string().min(1).max(255).optional(),
 });
 
-/** The current session's tasks (buyer-scoped). */
+const disputeSchema = z.object({ reason: z.string().max(1000).optional() });
+
+/** The current session's tasks (buyer-scoped). Works with a JWT (console) or an
+ *  x-api-key (programmatic/SDK), so developers can hire + query on the rail. */
 @Controller('tasks')
-@UseGuards(JwtAuthGuard)
+@UseGuards(ApiAuthGuard)
 export class TasksController {
   constructor(private readonly tasks: TasksService) {}
 
   @Post()
-  create(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    return this.tasks.create(user.userId, parseBody(createSchema, body));
+  create(
+    @CurrentUser() user: AuthUser,
+    @Body() body: unknown,
+    @Headers('idempotency-key') headerKey?: string,
+  ) {
+    const parsed = parseBody(createSchema, body);
+    const idempotencyKey = headerKey?.trim().slice(0, 255) || parsed.idempotencyKey || undefined;
+    return this.tasks.create(user.userId, { ...parsed, idempotencyKey });
   }
 
   @Get()
@@ -40,5 +52,12 @@ export class TasksController {
   @Get(':id')
   get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.tasks.getForUser(user.userId, id);
+  }
+
+  /** Raise a dispute on one of the caller's tasks. */
+  @Post(':id/dispute')
+  dispute(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: unknown) {
+    const { reason } = parseBody(disputeSchema, body);
+    return this.tasks.raiseDispute(user.userId, id, reason);
   }
 }

@@ -69,6 +69,37 @@ describe.skipIf(!DB)('Services + Users (integration, real Postgres)', () => {
     expect(paged.total).toBe(2);
   });
 
+  it('sorts by price ascending and descending', async () => {
+    await seedService('cheap', 'Data & Oracles', '0.03');
+    await seedService('mid', 'Data & Oracles', '0.10');
+    await seedService('pricey', 'Data & Oracles', '0.25');
+
+    const asc = await services.list({ sort: 'price_asc' });
+    expect(asc.items.map((s: { pricePerCall: number }) => s.pricePerCall)).toEqual([
+      0.03, 0.1, 0.25,
+    ]);
+
+    const desc = await services.list({ sort: 'price_desc' });
+    expect(desc.items.map((s: { pricePerCall: number }) => s.pricePerCall)).toEqual([
+      0.25, 0.1, 0.03,
+    ]);
+  });
+
+  it('searches name/description case-insensitively and paginates the matches', async () => {
+    await seedService('Alpha Oracle', 'Data & Oracles', '0.05');
+    await seedService('Beta Oracle', 'Data & Oracles', '0.06');
+    await seedService('Gamma Widget', 'AI & Analysis', '0.07');
+
+    const hits = await services.list({ q: 'oracle' });
+    expect(hits.total).toBe(2);
+    expect(hits.items.every((s: { name: string }) => /oracle/i.test(s.name))).toBe(true);
+
+    const page1 = await services.list({ q: 'oracle', sort: 'price_asc', limit: 1, offset: 0 });
+    const page2 = await services.list({ q: 'oracle', sort: 'price_asc', limit: 1, offset: 1 });
+    expect(page1.items[0].pricePerCall).toBe(0.05);
+    expect(page2.items[0].pricePerCall).toBe(0.06);
+  });
+
   it('filters by category', async () => {
     await seedService('a', 'Data & Oracles', '0.05');
     await seedService('b', 'AI & Analysis', '0.10');

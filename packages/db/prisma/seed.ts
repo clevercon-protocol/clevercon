@@ -29,13 +29,14 @@ async function main() {
   const services = [
     {
       agentId: 'stellar-oracle',
-      name: 'Stellar Oracle',
-      description: 'Live Stellar price and network data.',
+      name: 'Stellar Market Oracle',
+      description: 'Live Stellar network stats and XLM/USDC spot price from Horizon.',
       category: 'Data & Oracles',
-      capabilities: ['price', 'orderbook', 'account'],
+      capabilities: ['price', 'orderbook', 'network'],
       pricingModel: PricingModel.X402,
       pricePerCall: '0.05',
-      endpoint: 'http://localhost:4001',
+      // The real reference provider (services/reference-provider) runs here.
+      endpoint: 'http://localhost:4200',
       stellarAddress: 'GORACLE000000000000000000000000000000000000000000000000000',
     },
     {

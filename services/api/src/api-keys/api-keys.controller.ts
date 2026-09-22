@@ -6,7 +6,11 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import { parseBody } from '../auth/validate.js';
 import type { AuthUser } from '../auth/types.js';
 
-const createSchema = z.object({ name: z.string().min(1), scopes: z.array(z.string()).optional() });
+const createSchema = z.object({
+  name: z.string().min(1),
+  scopes: z.array(z.string()).optional(),
+  quotaPerDay: z.number().int().nonnegative().optional(),
+});
 
 /** Developer API-key management. Requires a logged-in user (wallet session). */
 @Controller('api-keys')
@@ -17,8 +21,8 @@ export class ApiKeysController {
   /** Create a key; the full secret is returned exactly once. */
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    const { name, scopes } = parseBody(createSchema, body);
-    return this.apiKeys.create(user.userId, name, scopes ?? []);
+    const { name, scopes, quotaPerDay } = parseBody(createSchema, body);
+    return this.apiKeys.create(user.userId, name, scopes ?? [], quotaPerDay ?? 0);
   }
 
   @Get()

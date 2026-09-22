@@ -1,6 +1,7 @@
 import { isDemo } from '../config';
 import { apiFetch, apiPost } from './api';
 import { signTransaction } from './wallet';
+import { useSession } from '../store/session';
 import { demoVault } from './demo';
 
 export interface Vault {
@@ -38,13 +39,37 @@ interface BuildResp {
   networkPassphrase: string;
 }
 
+interface ChallengeResp {
+  transaction: string;
+  networkPassphrase: string;
+}
+
 /**
- * Deposit into (or withdraw from) the vault: the API builds an unsigned XDR, the
- * wallet signs it, then the API submits it. On-chain is the source of truth, so
- * the mirrored balance updates once the indexer catches the event.
+ * Obtain a fresh step-up wallet signature authorizing a money action. The server
+ * requires this (x-stepup header) on deposit/withdraw so a leaked access token
+ * alone cannot move funds: get a SEP-10 challenge for the connected wallet and
+ * sign it. Single-use and short-lived server-side.
+ */
+async function stepUpSignature(): Promise<string> {
+  const address = useSession.getState().session?.address;
+  if (!address) throw new Error('Connect a wallet first');
+  const challenge = await apiPost<ChallengeResp>('/auth/challenge', { address });
+  return signTransaction(challenge.transaction, challenge.networkPassphrase);
+}
+
+/**
+ * Deposit into (or withdraw from) the vault: prove wallet control with a step-up
+ * signature, the API builds an unsigned XDR, the wallet signs it, then the API
+ * submits it. On-chain is the source of truth, so the mirrored balance updates
+ * once the indexer catches the event.
  */
 async function signAndSubmit(path: '/vault/deposit' | '/vault/withdraw', amountUsdc: number) {
-  const built = await apiPost<BuildResp>(path, { amountUsdc });
+  const stepUp = await stepUpSignature();
+  const built = await apiFetch<BuildResp>(path, {
+    method: 'POST',
+    body: JSON.stringify({ amountUsdc }),
+    headers: { 'x-stepup': stepUp },
+  });
   const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
   return apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
 }
@@ -55,4 +80,44 @@ export function depositToVault(amountUsdc: number): Promise<{ txHash: string }> 
 
 export function withdrawFromVault(amountUsdc: number): Promise<{ txHash: string }> {
   return signAndSubmit('/vault/withdraw', amountUsdc);
+}
+
+export interface Delegate {
+  orchestrator: string | null;
+  settlementEnabled: boolean;
+  registered: boolean;
+}
+
+/** The user's spending delegate (provisioned on first read). */
+export async function getDelegate(): Promise<Delegate> {
+  if (isDemo()) return { orchestrator: null, settlementEnabled: false, registered: false };
+  return apiFetch<Delegate>('/vault/delegate');
+}
+
+/**
+ * Authorize the user's delegate once (register_orchestrator): the API builds the
+ * XDR, the wallet signs it, the API submits, then we confirm it. After this the
+ * delegate can lock and pay within the user's policy without further prompts,
+ * bounded by the vault so it can never overspend.
+ */
+export async function authorizeDelegate(): Promise<{ txHash: string }> {
+  const built = await apiPost<BuildResp>('/vault/delegate/register', {});
+  const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
+  const res = await apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
+  await apiPost('/vault/delegate/confirm', {});
+  return res;
+}
+
+/**
+ * The user's own agent key (for the agent-key payment mode: paying external
+ * x402/MPP services). The platform stores only the public key; the user's agent
+ * holds the secret, so it stays non-custodial.
+ */
+export async function getAgentWallet(): Promise<{ publicKey: string | null }> {
+  if (isDemo()) return { publicKey: null };
+  return apiFetch<{ publicKey: string | null }>('/vault/agent-wallet');
+}
+
+export async function setAgentWallet(publicKey: string): Promise<{ publicKey: string }> {
+  return apiPost<{ publicKey: string }>('/vault/agent-wallet', { publicKey });
 }

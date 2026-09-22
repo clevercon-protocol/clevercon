@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Wallet,
   Search,
@@ -11,22 +11,53 @@ import {
   ShieldCheck,
   Copy,
   Check,
+  CheckCircle2,
   ExternalLink,
   Plus,
   Vault as VaultIcon,
   Coins,
   Briefcase,
   ArrowRight,
+  Rocket,
+  KeyRound,
+  Eye,
+  EyeOff,
+  Fingerprint,
 } from 'lucide-react';
 import { isDemo } from '../../config';
 import { useSession } from '../../store/session';
 import { demoCategories } from '../../lib/demo';
-import { getServices } from '../../lib/services';
-import { getVault, getVaultStatus, depositToVault, withdrawFromVault } from '../../lib/vault';
+import { getServices, type ServiceSort } from '../../lib/services';
+import {
+  getVault,
+  getVaultStatus,
+  depositToVault,
+  withdrawFromVault,
+  getDelegate,
+  authorizeDelegate,
+  getAgentWallet,
+  setAgentWallet,
+} from '../../lib/vault';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
-import { getPolicies, createPolicy } from '../../lib/policies';
+import {
+  getPolicies,
+  createPolicy,
+  requestProof,
+  getProofStatus,
+  type Policy,
+} from '../../lib/policies';
 import { getWalletBalances, addUsdcTrustline, explorerAccount } from '../../lib/stellar';
-import { Card, CardHeader, StatCard, EmptyState, Badge } from '../../components/ui';
+import { getApiKeys } from '../../lib/apiKeys';
+import {
+  Card,
+  CardHeader,
+  StatCard,
+  EmptyState,
+  ErrorState,
+  Loading,
+  Badge,
+  controls,
+} from '../../components/ui';
 
 type Mode = 'direct' | 'search' | 'compose';
 
@@ -51,10 +82,8 @@ const MODES: { id: Mode; icon: typeof UserCheck; label: string; blurb: string }[
   },
 ];
 
-const inputCls =
-  'w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-500/40';
-const primaryBtn =
-  'rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:from-violet-500 hover:to-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 transition-all';
+const inputCls = controls.field;
+const primaryBtn = controls.primary;
 
 const explorerContract = (id: string) => `https://stellar.expert/explorer/testnet/contract/${id}`;
 
@@ -287,7 +316,7 @@ export function VaultCard() {
               href={explorerContract(contract)}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 font-mono text-[11px] text-slate-400 hover:text-white"
+              className="inline-flex items-center gap-1 rounded-lg bg-white/[0.05] px-2 py-1 font-mono text-[11px] text-slate-400 hover:text-white"
               title={contract}
             >
               {contract.slice(0, 4)}…{contract.slice(-4)} <ExternalLink size={11} />
@@ -302,7 +331,7 @@ export function VaultCard() {
             <div
               key={label}
               title={VAULT_HINTS[label]}
-              className="cursor-help rounded-xl border border-white/[0.08] bg-black/20 p-3 text-center"
+              className="cursor-help rounded-xl bg-black/25 p-3 text-center"
             >
               <div className={`text-lg font-bold ${tint}`}>
                 {isLoading ? '…' : `$${v.toFixed(2)}`}
@@ -337,7 +366,7 @@ export function VaultCard() {
               <button
                 onClick={() => canMove && move.mutate('withdraw')}
                 disabled={!canMove}
-                className="flex-1 rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                className={`flex-1 ${controls.secondary} disabled:cursor-not-allowed disabled:opacity-50`}
               >
                 Withdraw
               </button>
@@ -367,8 +396,14 @@ export function HirePanel() {
   const [title, setTitle] = useState('');
   const [budget, setBudget] = useState('');
   const [serviceId, setServiceId] = useState('');
+  const [policyId, setPolicyId] = useState('');
   const activeMode = MODES.find((m) => m.id === mode)!;
-  const { data: services = [] } = useQuery({ queryKey: ['services'], queryFn: getServices });
+  const { data: servicePage } = useQuery({
+    queryKey: ['services', { picker: true }],
+    queryFn: () => getServices({ limit: 100 }),
+  });
+  const services = servicePage?.items ?? [];
+  const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
 
   const hire = useMutation({
     mutationFn: () =>
@@ -377,6 +412,7 @@ export function HirePanel() {
         mode: mode.toUpperCase() as HireMode,
         budget: Number(budget),
         serviceId: mode === 'direct' ? serviceId || undefined : undefined,
+        policyId: policyId || undefined,
       }),
     onSuccess: () => {
       setTitle('');
@@ -446,6 +482,21 @@ export function HirePanel() {
             placeholder="Budget (USDC)"
             className={inputCls}
           />
+          {policies.length > 0 && (
+            <select
+              value={policyId}
+              onChange={(e) => setPolicyId(e.target.value)}
+              className={inputCls}
+              aria-label="Spending policy"
+            >
+              <option value="">No limit (this hire is not bounded or private)</option>
+              {policies.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.isPrivate ? 'Private' : 'Transparent'} policy {p.commitment.slice(0, 8)}…
+                </option>
+              ))}
+            </select>
+          )}
           <button type="submit" disabled={!canSubmit} className={primaryBtn}>
             {hire.isPending ? 'Creating…' : 'Create job'}
           </button>
@@ -483,8 +534,8 @@ export function TasksCard({ limit }: { limit?: number }) {
         }
       />
       <div className="p-5 pt-4">
-        {isLoading && <p className="text-sm text-slate-500">Loading jobs…</p>}
-        {error && <p className="text-sm text-red-400">Could not load your jobs.</p>}
+        {isLoading && <Loading rows={limit ?? 3} />}
+        {error && <ErrorState>Could not load your jobs.</ErrorState>}
         {!isLoading && !error && tasks.length === 0 && (
           <EmptyState>No jobs yet. Start one to get going.</EmptyState>
         )}
@@ -493,7 +544,7 @@ export function TasksCard({ limit }: { limit?: number }) {
             <Link
               key={t.id}
               to={`/app/tasks/${t.id}`}
-              className="flex items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 hover:border-violet-500/40 hover:bg-white/[0.04] transition-colors"
+              className="flex items-center justify-between rounded-xl bg-white/[0.03] p-3 hover:bg-white/[0.06] transition-colors"
             >
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium">{t.title}</div>
@@ -552,8 +603,8 @@ export function PoliciesCard() {
     <Card className="p-0">
       <CardHeader
         icon={ShieldCheck}
-        title="Spending policies"
-        hint="Bound how funds can be spent"
+        title="Spending limits (policies)"
+        hint="Reusable rules you apply per hire, enforced on-chain, kept private"
       />
       <div className="p-5 pt-4">
         <form
@@ -589,13 +640,27 @@ export function PoliciesCard() {
             {save.isPending ? 'Saving…' : 'Create policy'}
           </button>
         </form>
-        {save.error && (
-          <p className="mt-2 text-sm text-amber-300">
-            Private policies are not enabled yet. Uncheck it to save a transparent policy for now.
+        {isPrivate && (
+          <p className="mt-2 text-xs text-slate-500">
+            Private policies store only a commitment. The rule itself is never sent to or kept by
+            the server; releases are authorized with a zero-knowledge binding proof.
           </p>
         )}
-        {isLoading && <p className="mt-4 text-sm text-slate-500">Loading policies…</p>}
-        {error && <p className="mt-4 text-sm text-red-400">Could not load your policies.</p>}
+        {save.error && (
+          <p className="mt-2 text-sm text-red-400">
+            Could not create the policy. Please try again.
+          </p>
+        )}
+        {isLoading && (
+          <div className="mt-4">
+            <Loading rows={2} />
+          </div>
+        )}
+        {error && (
+          <div className="mt-4">
+            <ErrorState>Could not load your policies.</ErrorState>
+          </div>
+        )}
         {!isLoading && !error && policies.length === 0 && (
           <div className="mt-4">
             <EmptyState>No policies yet.</EmptyState>
@@ -605,18 +670,21 @@ export function PoliciesCard() {
           {policies.map((p) => (
             <div
               key={p.id}
-              className="flex items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 text-sm"
+              className="flex items-center justify-between rounded-xl bg-white/[0.04] p-3 text-sm"
             >
               <div>
-                <span className="text-slate-200">
+                <span className="inline-flex items-center gap-1.5 text-slate-200">
+                  {p.isPrivate ? <ShieldCheck size={13} className="text-violet-300" /> : null}
                   {p.isPrivate ? 'Private' : 'Transparent'} policy
                 </span>
-                {p.rules && (
+                {p.rules ? (
                   <div className="mt-0.5 text-xs text-slate-500">
                     {p.rules.perPaymentCeilingUsdc != null &&
                       `ceiling $${p.rules.perPaymentCeilingUsdc} `}
                     {p.rules.rollingCapUsdc != null && `· daily cap $${p.rules.rollingCapUsdc}`}
                   </div>
+                ) : (
+                  <div className="mt-0.5 text-xs text-slate-500">commitment only, rule hidden</div>
                 )}
               </div>
               <span className="font-mono text-[11px] text-slate-500">
@@ -630,28 +698,206 @@ export function PoliciesCard() {
   );
 }
 
+// ── Prove a release ─────────────────────────────────────────────────────────────
+
+const PROOF_TINT: Record<string, string> = {
+  REQUESTED: 'text-amber-300',
+  GENERATING: 'text-sky-300',
+  READY: 'text-emerald-300',
+  VERIFIED: 'text-emerald-300',
+  REJECTED: 'text-red-400',
+  FAILED: 'text-red-400',
+};
+
+/**
+ * Request a zero-knowledge binding proof authorizing a release (payee + amount)
+ * under a chosen policy, and watch its status. The worker builds the proof the
+ * on-chain verifier checks; this is the proof-gated-release step made visible.
+ */
+export function ProveReleaseCard() {
+  const [policyId, setPolicyId] = useState('');
+  const [payee, setPayee] = useState('');
+  const [amount, setAmount] = useState('');
+  const [proofId, setProofId] = useState<string | null>(null);
+
+  const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
+
+  const prove = useMutation({
+    mutationFn: () => requestProof(policyId, payee.trim(), Number(amount)),
+    onSuccess: (r) => setProofId(r.proofId),
+  });
+
+  // Poll the proof status until it settles.
+  const { data: status } = useQuery({
+    queryKey: ['proof', proofId],
+    queryFn: () => getProofStatus(proofId as string),
+    enabled: !!proofId,
+    refetchInterval: (q) => {
+      const s = (q.state.data as { status?: string } | undefined)?.status;
+      return s === 'READY' || s === 'VERIFIED' || s === 'REJECTED' || s === 'FAILED' ? false : 800;
+    },
+  });
+
+  const usable = policies.filter((p: Policy) => p.isPrivate);
+  const selected = usable.find((p: Policy) => p.id === policyId);
+  const revealed = status?.status === 'READY' || status?.status === 'VERIFIED';
+  const canProve =
+    policyId !== '' && payee.trim().length > 0 && Number(amount) > 0 && !prove.isPending;
+
+  return (
+    <Card className="p-0">
+      <CardHeader
+        icon={ShieldCheck}
+        title="Prove a release"
+        hint="Authorize a payment with a zero-knowledge proof"
+      />
+      <div className="p-5 pt-4">
+        {usable.length === 0 ? (
+          <EmptyState>Create a private policy first to authorize releases with a proof.</EmptyState>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (canProve) prove.mutate();
+            }}
+            className="grid gap-2"
+          >
+            <select
+              value={policyId}
+              onChange={(e) => setPolicyId(e.target.value)}
+              className={inputCls}
+              aria-label="Policy"
+            >
+              <option value="">Select a private policy…</option>
+              {usable.map((p: Policy) => (
+                <option key={p.id} value={p.id}>
+                  {p.commitment.slice(0, 10)}… (private)
+                </option>
+              ))}
+            </select>
+            <input
+              value={payee}
+              onChange={(e) => setPayee(e.target.value)}
+              placeholder="Payee address (G…)"
+              className={inputCls}
+            />
+            <input
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              inputMode="decimal"
+              placeholder="Amount (USDC)"
+              className={inputCls}
+            />
+            <button type="submit" disabled={!canProve} className={primaryBtn}>
+              {prove.isPending ? 'Requesting…' : 'Generate proof'}
+            </button>
+          </form>
+        )}
+        {prove.error && <p className="mt-2 text-sm text-red-400">{readError(prove.error)}</p>}
+        {proofId && (
+          <div className="mt-4 flex items-center justify-between rounded-xl bg-white/[0.04] p-3 text-sm">
+            <span className="text-slate-400">Proof status</span>
+            <span
+              className={`font-medium ${PROOF_TINT[status?.status ?? 'REQUESTED'] ?? 'text-slate-300'}`}
+            >
+              {status?.status ?? 'REQUESTED'}
+              {status?.status === 'READY' && ' · ready to release'}
+            </span>
+          </div>
+        )}
+        {revealed && (
+          <div className="mt-4">
+            <p className="text-xs uppercase tracking-wider text-slate-500">
+              What this payment reveals
+            </p>
+            <div className="mt-2 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl bg-white/[0.04] p-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-slate-300">
+                  <Eye size={14} className="text-slate-400" /> On the public ledger
+                </div>
+                <ul className="mt-2 space-y-1 font-mono text-xs text-slate-400">
+                  <li>
+                    payment: {Number(amount).toFixed(2)} USDC to {payee.slice(0, 6)}…
+                    {payee.slice(-4)}
+                  </li>
+                  <li className="break-all">
+                    policy: {selected ? selected.commitment.slice(0, 18) + '…' : 'n/a'}
+                  </li>
+                  <li className="text-emerald-300">proof: verified, payment allowed</li>
+                </ul>
+              </div>
+              <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.04] p-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-violet-200">
+                  <EyeOff size={14} /> Stays private
+                </div>
+                <ul className="mt-2 space-y-1 text-xs text-slate-400">
+                  <li>your budget, caps, and allowlist</li>
+                  <li>the rule that authorized this payment</li>
+                  <li className="flex items-start gap-1.5 text-slate-300">
+                    <Fingerprint size={13} className="mt-0.5 shrink-0 text-violet-400" />
+                    the chain stores only the commitment, never the rule
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-600">
+              The ledger shows the payment happened and was allowed. The rule behind it is committed
+              as a hash and never published. (Amounts and counterparties are public in v1; hiding
+              those is on the roadmap.)
+            </p>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 // ── Marketplace ───────────────────────────────────────────────────────────────
+
+const SORT_OPTIONS: { value: ServiceSort; label: string }[] = [
+  { value: 'recent', label: 'Most recent' },
+  { value: 'rating', label: 'Top rated' },
+  { value: 'price_asc', label: 'Price: low to high' },
+  { value: 'price_desc', label: 'Price: high to low' },
+];
+
+const PAGE_SIZE = 12;
 
 export function Marketplace() {
   const [q, setQ] = useState('');
+  const [debouncedQ, setDebouncedQ] = useState('');
   const [cat, setCat] = useState<string>('All');
-  const {
-    data: services = [],
-    isLoading,
-    error,
-  } = useQuery({ queryKey: ['services'], queryFn: getServices });
+  const [sort, setSort] = useState<ServiceSort>('recent');
+  const [page, setPage] = useState(0);
 
-  const results = useMemo(
-    () =>
-      services.filter(
-        (s) =>
-          (cat === 'All' || s.category === cat) &&
-          (q === '' ||
-            s.name.toLowerCase().includes(q.toLowerCase()) ||
-            s.description.toLowerCase().includes(q.toLowerCase())),
-      ),
-    [services, q, cat],
-  );
+  // Debounce the search box so we hit the API once the user pauses, not per key.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  // Any filter/sort/search change resets to the first page.
+  useEffect(() => setPage(0), [debouncedQ, cat, sort]);
+
+  const { data, isLoading, isFetching, error } = useQuery({
+    queryKey: ['services', { q: debouncedQ, cat, sort, page }],
+    queryFn: () =>
+      getServices({
+        q: debouncedQ,
+        category: cat,
+        sort,
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      }),
+    placeholderData: keepPreviousData,
+  });
+
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const start = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const end = Math.min(total, page * PAGE_SIZE + items.length);
+  const hasPrev = page > 0;
+  const hasNext = (page + 1) * PAGE_SIZE < total;
 
   return (
     <Card className="p-0">
@@ -674,15 +920,35 @@ export function Marketplace() {
               <option key={c}>{c}</option>
             ))}
           </select>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as ServiceSort)}
+            className={`w-auto ${inputCls}`}
+            aria-label="Sort services"
+          >
+            {SORT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
         </div>
-        {isLoading && <p className="mt-4 text-sm text-slate-500">Loading services…</p>}
-        {error && <p className="mt-4 text-sm text-red-400">Could not load services.</p>}
+        {isLoading && (
+          <div className="mt-4">
+            <Loading rows={4} />
+          </div>
+        )}
+        {error && (
+          <div className="mt-4">
+            <ErrorState>Could not load services.</ErrorState>
+          </div>
+        )}
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          {results.map((s) => (
+          {items.map((s) => (
             <Link
               key={s.id}
               to={`/app/marketplace/${s.id}`}
-              className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-4 hover:border-violet-500/40 hover:bg-white/[0.04] transition-colors"
+              className="rounded-xl bg-white/[0.03] p-4 hover:bg-white/[0.06] transition-colors"
             >
               <div className="flex items-center justify-between">
                 <span className="font-medium">{s.name}</span>
@@ -699,10 +965,332 @@ export function Marketplace() {
               </div>
             </Link>
           ))}
-          {!isLoading && !error && results.length === 0 && (
+          {!isLoading && !error && items.length === 0 && (
             <p className="text-sm text-slate-500">No services match.</p>
           )}
         </div>
+        {total > 0 && (
+          <div className="mt-4 flex items-center justify-between text-sm text-slate-400">
+            <span>
+              {start}-{end} of {total}
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={!hasPrev || isFetching}
+                className="rounded-lg bg-white/[0.05] px-3 py-1.5 text-slate-200 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage((p) => p + 1)}
+                disabled={!hasNext || isFetching}
+                className="rounded-lg bg-white/[0.05] px-3 py-1.5 text-slate-200 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// ── Delegate authorization (bounded agent) ──────────────────────────────────────
+
+/**
+ * One-time authorization of the platform delegate (register_orchestrator). Once
+ * authorized, the delegate can lock and pay for jobs within the user's policy
+ * without further wallet prompts, and the vault guarantees it can never
+ * overspend. Shown only when automatic settlement is enabled server-side.
+ */
+export function DelegateCard() {
+  const qc = useQueryClient();
+  const { data: delegate } = useQuery({ queryKey: ['delegate'], queryFn: getDelegate });
+  const authorize = useMutation({
+    mutationFn: authorizeDelegate,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['delegate'] }),
+  });
+
+  if (!delegate?.settlementEnabled || !delegate.orchestrator) return null;
+
+  return (
+    <Card className="p-0">
+      <CardHeader
+        icon={ShieldCheck}
+        title="Autopay"
+        hint="Let CleverCon settle your hires automatically, within your limits"
+      />
+      <div className="p-5 pt-4">
+        <p className="text-sm text-slate-400">
+          Enable autopay once so your jobs settle automatically without a wallet prompt each time.
+          The vault enforces your spending limits on every payment, so autopay can never overspend
+          or pay an unapproved party. (This is CleverCon's bounded delegate; it holds no funds.)
+        </p>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <span className="font-mono text-xs text-slate-500">
+            {delegate.orchestrator.slice(0, 6)}…{delegate.orchestrator.slice(-4)}
+          </span>
+          {delegate.registered ? (
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-300">
+              <Check size={14} /> Enabled
+            </span>
+          ) : (
+            <button
+              onClick={() => authorize.mutate()}
+              disabled={authorize.isPending}
+              className={primaryBtn}
+            >
+              {authorize.isPending ? 'Enabling…' : 'Enable autopay'}
+            </button>
+          )}
+        </div>
+        {authorize.error && (
+          <p className="mt-2 text-sm text-red-400">{readError(authorize.error)}</p>
+        )}
+        {authorize.isSuccess && !delegate.registered && (
+          <p className="mt-2 text-sm text-emerald-300">
+            Autopay enabled. Jobs now settle automatically.
+          </p>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// ── Activation funnel (getting started) ─────────────────────────────────────────
+
+const ONBOARDING_HIDDEN_KEY = 'cc:onboarding:hidden';
+
+/**
+ * Guided first-run checklist: connect, fund, set a policy, connect an agent, make
+ * a bounded payment. Detects progress from live data and points at the next
+ * action, so a new buyer reaches their first policy-bounded payment without help.
+ * Collapses to a slim confirmation once complete (dismissible).
+ */
+export function GettingStarted() {
+  const session = useSession((s) => s.session);
+  const { data: vault } = useQuery({ queryKey: ['vault'], queryFn: getVault });
+  const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
+  const { data: apiKeys = [] } = useQuery({ queryKey: ['apiKeys'], queryFn: getApiKeys });
+  const { data: tasks = [] } = useQuery({ queryKey: ['tasks'], queryFn: getTasks });
+  const [hidden, setHidden] = useState(() => localStorage.getItem(ONBOARDING_HIDDEN_KEY) === '1');
+
+  const steps = [
+    {
+      icon: Wallet,
+      title: 'Connect your wallet',
+      desc: 'Sign in with a Stellar wallet to open your account.',
+      done: !!session,
+      href: '/connect',
+      cta: 'Connect',
+    },
+    {
+      icon: VaultIcon,
+      title: 'Fund your vault',
+      desc: 'Deposit USDC into the non-custodial vault. The platform never holds it.',
+      done: (vault?.balance ?? 0) > 0,
+      href: '/app/vault',
+      cta: 'Fund vault',
+    },
+    {
+      icon: ShieldCheck,
+      title: 'Set spending limits (optional but recommended)',
+      desc: 'A reusable rule (caps + allowlist) the vault enforces, kept private. You pick one per hire; you do not need a job yet.',
+      done: policies.length > 0,
+      href: '/app/policies',
+      cta: 'Create a limit',
+    },
+    {
+      icon: KeyRound,
+      title: 'Connect your agent',
+      desc: 'Create an API key (also used in the MCP config) so your agent can spend.',
+      done: apiKeys.length > 0,
+      href: '/developers',
+      cta: 'Create API key',
+    },
+    {
+      icon: Briefcase,
+      title: 'Make a bounded payment',
+      desc: 'Hire a service; the vault releases payment per step, within your policy.',
+      done: tasks.some((t) => t.spent > 0 || t.status === 'COMPLETED'),
+      href: '/app/marketplace',
+      cta: 'Hire a service',
+    },
+  ];
+
+  const doneCount = steps.filter((s) => s.done).length;
+  const allDone = doneCount === steps.length;
+  const currentIndex = steps.findIndex((s) => !s.done);
+
+  if (hidden) return null;
+
+  if (allDone) {
+    return (
+      <Card className="p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-sm text-emerald-300">
+            <CheckCircle2 size={18} /> Setup complete. Your agent can spend within your policy.
+          </div>
+          <button
+            onClick={() => {
+              localStorage.setItem(ONBOARDING_HIDDEN_KEY, '1');
+              setHidden(true);
+            }}
+            className="text-xs text-slate-500 hover:text-slate-300"
+          >
+            Hide
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-0">
+      <CardHeader
+        icon={Rocket}
+        title="Get started"
+        hint="A few steps to your first bounded, private payment"
+        action={
+          <span className="text-xs text-slate-500">
+            {doneCount}/{steps.length} done
+          </span>
+        }
+      />
+      <div className="p-5 pt-4">
+        <div className="mb-4 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all"
+            style={{ width: `${(doneCount / steps.length) * 100}%` }}
+          />
+        </div>
+        <ol className="space-y-2">
+          {steps.map((s, i) => {
+            const isCurrent = i === currentIndex;
+            return (
+              <li
+                key={s.title}
+                className={`flex items-center gap-3 rounded-xl border p-3 transition-colors ${
+                  isCurrent
+                    ? 'border-violet-500/40 bg-violet-500/[0.06]'
+                    : 'border-white/[0.08] bg-white/[0.02]'
+                }`}
+              >
+                <div
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                    s.done
+                      ? 'bg-emerald-500/15 text-emerald-300'
+                      : isCurrent
+                        ? 'bg-violet-500/15 text-violet-300'
+                        : 'bg-white/5 text-slate-500'
+                  }`}
+                >
+                  {s.done ? <Check size={15} /> : <s.icon size={15} />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div
+                    className={`text-sm font-medium ${s.done ? 'text-slate-400 line-through' : 'text-white'}`}
+                  >
+                    {s.title}
+                  </div>
+                  {!s.done && <div className="text-xs text-slate-500">{s.desc}</div>}
+                </div>
+                {!s.done &&
+                  (isCurrent ? (
+                    <Link to={s.href} className={`${primaryBtn} shrink-0 whitespace-nowrap`}>
+                      {s.cta}
+                    </Link>
+                  ) : (
+                    <Link
+                      to={s.href}
+                      className="shrink-0 whitespace-nowrap text-xs text-slate-500 hover:text-slate-300"
+                    >
+                      {s.cta}
+                    </Link>
+                  ))}
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    </Card>
+  );
+}
+
+// ── Agent wallet (agent-key mode, for paying external x402/MPP services) ─────────
+
+/**
+ * Register the user's OWN agent key. We store only the public key; the agent
+ * holds the secret and signs its own payments, so it stays non-custodial. The
+ * vault will top this address up in bounded amounts under the user's policy
+ * (agent-key mode). Top-up + x402 payment are a later slice.
+ */
+export function AgentWalletCard() {
+  const qc = useQueryClient();
+  const [value, setValue] = useState('');
+  const { data } = useQuery({ queryKey: ['agent-wallet'], queryFn: getAgentWallet });
+  const registered = data?.publicKey ?? null;
+
+  const save = useMutation({
+    mutationFn: () => setAgentWallet(value.trim()),
+    onSuccess: () => {
+      setValue('');
+      qc.invalidateQueries({ queryKey: ['agent-wallet'] });
+    },
+  });
+
+  if (isDemo()) return null;
+
+  return (
+    <Card className="p-0">
+      <CardHeader
+        icon={KeyRound}
+        title="Your agent's wallet"
+        hint="For paying services outside CleverCon (x402); we store only the public key"
+      />
+      <div className="p-5 pt-4">
+        <p className="text-sm text-slate-400">
+          To spend at services outside CleverCon (the open x402/MPP economy), your agent needs its
+          own key. You register only its public key here. The vault tops it up in bounded amounts
+          under your policy, and your agent signs its own payments. We never hold its secret or your
+          funds.
+        </p>
+        {registered ? (
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3">
+            <span className="font-mono text-xs text-slate-300">
+              {registered.slice(0, 6)}…{registered.slice(-4)}
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300">
+              <Check size={13} /> Registered
+            </span>
+          </div>
+        ) : null}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (value.trim() && !save.isPending) save.mutate();
+          }}
+          className="mt-3 flex gap-2"
+        >
+          <input
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="Agent public key (G…)"
+            className={inputCls}
+          />
+          <button type="submit" disabled={!value.trim() || save.isPending} className={primaryBtn}>
+            {save.isPending ? 'Saving…' : registered ? 'Update' : 'Register'}
+          </button>
+        </form>
+        {save.error && <p className="mt-2 text-sm text-red-400">{readError(save.error)}</p>}
+        <p className="mt-2 text-[11px] text-slate-600">
+          Bounded top-up and the x402 payment flow are coming next. Registered services are paid
+          directly by the vault and do not need this.
+        </p>
       </div>
     </Card>
   );
