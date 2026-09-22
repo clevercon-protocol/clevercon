@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { DollarSign, Briefcase, Star, Boxes } from 'lucide-react';
+import { DollarSign, Briefcase, Star, Boxes, Plus } from 'lucide-react';
 import {
   getProviderServices,
   getProviderEarnings,
@@ -9,7 +9,16 @@ import {
   setServiceStatus,
 } from '../lib/provider';
 import { refreshRoles } from '../lib/sessionSync';
-import { PageHeader, StatCard } from '../components/ui';
+import {
+  PageHeader,
+  StatCard,
+  Card,
+  CardHeader,
+  EmptyState,
+  Loading,
+  ErrorState,
+  controls,
+} from '../components/ui';
 
 const JOB_STYLE: Record<string, string> = {
   CONFIRMED: 'text-emerald-300',
@@ -23,6 +32,16 @@ const JOB_STYLE: Record<string, string> = {
   FAILED: 'text-red-400',
   SKIPPED: 'text-slate-500',
 };
+
+const STELLAR_ADDR = /^G[A-Z2-7]{55}$/;
+function isUrl(v: string): boolean {
+  try {
+    const u = new URL(v);
+    return u.protocol === 'https:' || u.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
 
 /** Shows an ISO timestamp as a short date, or passes demo strings through. */
 function when(v: string): string {
@@ -97,74 +116,85 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
     },
   });
 
+  // Strict, field-level validation so a bad endpoint or payout address is caught
+  // here rather than failing silently at hire time.
   const priceNum = Number(price);
+  const endpointOk = endpoint.trim() === '' || isUrl(endpoint.trim());
+  const addressOk = address.trim() === '' || STELLAR_ADDR.test(address.trim());
+  const priceOk = price === '' || (Number.isFinite(priceNum) && priceNum >= 0);
   const canSubmit =
-    name.trim() &&
-    description.trim() &&
-    endpoint.trim() &&
-    address.trim() &&
+    !!name.trim() &&
+    !!description.trim() &&
+    isUrl(endpoint.trim()) &&
+    STELLAR_ADDR.test(address.trim()) &&
     price !== '' &&
     Number.isFinite(priceNum) &&
     priceNum >= 0 &&
     !reg.isPending;
 
-  const field =
-    'w-full rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40';
+  const hint = (bad: boolean, msg: string) =>
+    bad ? <p className="mt-1 text-xs text-red-400">{msg}</p> : null;
+
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
         if (canSubmit) reg.mutate();
       }}
-      className="mt-4 space-y-2 rounded-xl bg-white/[0.04] p-4"
+      className="mt-4 space-y-3 rounded-xl bg-black/20 p-4"
     >
-      <div className="grid sm:grid-cols-2 gap-2">
+      <div className="grid gap-3 sm:grid-cols-2">
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Service name"
-          className={field}
+          className={controls.field}
         />
         <input
           value={category}
           onChange={(e) => setCategory(e.target.value)}
           placeholder="Category (optional)"
-          className={field}
+          className={controls.field}
         />
       </div>
       <input
         value={description}
         onChange={(e) => setDescription(e.target.value)}
         placeholder="What it does"
-        className={field}
+        className={controls.field}
       />
-      <div className="grid sm:grid-cols-3 gap-2">
-        <input
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-          inputMode="decimal"
-          placeholder="Price/call (USDC)"
-          className={field}
-        />
-        <input
-          value={endpoint}
-          onChange={(e) => setEndpoint(e.target.value)}
-          placeholder="https://endpoint"
-          className={`sm:col-span-2 ${field}`}
-        />
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div>
+          <input
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            inputMode="decimal"
+            placeholder="Price/call (USDC)"
+            className={controls.field}
+          />
+          {hint(!priceOk, 'Enter a non-negative number.')}
+        </div>
+        <div className="sm:col-span-2">
+          <input
+            value={endpoint}
+            onChange={(e) => setEndpoint(e.target.value)}
+            placeholder="https://your-service.example.com/query"
+            className={controls.field}
+          />
+          {hint(!endpointOk, 'Must be a valid http(s) URL.')}
+        </div>
       </div>
-      <input
-        value={address}
-        onChange={(e) => setAddress(e.target.value)}
-        placeholder="Stellar payout address (G…)"
-        className={field}
-      />
+      <div>
+        <input
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          placeholder="Stellar payout address (G…)"
+          className={`${controls.field} font-mono`}
+        />
+        {hint(!addressOk, 'Must be a valid Stellar public key (G… , 56 chars).')}
+      </div>
       <div className="flex items-center gap-3">
-        <button
-          type="submit"
-          disabled={!canSubmit}
-          className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <button type="submit" disabled={!canSubmit} className={controls.primary}>
           {reg.isPending ? 'Registering…' : 'Register service'}
         </button>
         <button type="button" onClick={onDone} className="text-sm text-slate-400 hover:text-white">
@@ -193,63 +223,74 @@ function ServicesCard() {
     },
   });
   return (
-    <div className="rounded-2xl bg-white/[0.04] p-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-slate-300">
-          <Boxes size={18} className="text-violet-300" />
-          <h2 className="font-semibold">Your services</h2>
-        </div>
-        <button
-          onClick={() => setRegistering((v) => !v)}
-          className="rounded-lg bg-white/10 px-3 py-1 text-sm text-slate-200 hover:bg-white/20"
-        >
-          {registering ? 'Close' : 'Register'}
-        </button>
-      </div>
-      {registering && <RegisterForm onDone={() => setRegistering(false)} />}
-      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading services…</p>}
-      {error && <p className="mt-4 text-sm text-red-400">Could not load your services.</p>}
-      {!isLoading && !error && services.length === 0 && (
-        <p className="mt-4 text-sm text-slate-500">You have not registered any services yet.</p>
-      )}
-      <div className="mt-4 space-y-2">
-        {services.map((s) => (
-          <div
-            key={s.id}
-            className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3"
-          >
-            <div className="min-w-0">
-              <div className="truncate font-medium">{s.name}</div>
-              <div className="text-xs text-slate-500">{s.category ?? 'Uncategorised'}</div>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="text-right text-xs">
-                <div className="text-slate-300">${s.pricePerCall}/call</div>
+    <Card className="p-5">
+      <CardHeader
+        icon={Boxes}
+        title="Your services"
+        hint="Register endpoints agents can hire; pause one to remove it from the directory."
+        action={
+          <button onClick={() => setRegistering((v) => !v)} className={controls.chip}>
+            {registering ? (
+              'Close'
+            ) : (
+              <>
+                <Plus size={14} /> Register
+              </>
+            )}
+          </button>
+        }
+      />
+      <div className="px-5 pb-5">
+        {registering && <RegisterForm onDone={() => setRegistering(false)} />}
+        <div className="mt-4">
+          {isLoading ? (
+            <Loading rows={2} />
+          ) : error ? (
+            <ErrorState>Could not load your services.</ErrorState>
+          ) : services.length === 0 ? (
+            <EmptyState>You have not registered any services yet.</EmptyState>
+          ) : (
+            <div className="space-y-2">
+              {services.map((s) => (
                 <div
-                  className={`inline-flex items-center gap-1 ${
-                    s.status === 'ACTIVE' ? 'text-emerald-300' : 'text-slate-500'
-                  }`}
+                  key={s.id}
+                  className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.03] p-3"
                 >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      s.status === 'ACTIVE' ? 'bg-emerald-400' : 'bg-slate-500'
-                    }`}
-                  />{' '}
-                  {s.status}
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{s.name}</div>
+                    <div className="text-xs text-slate-500">{s.category ?? 'Uncategorised'}</div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right text-xs">
+                      <div className="text-slate-300">${s.pricePerCall}/call</div>
+                      <div
+                        className={`inline-flex items-center gap-1 ${
+                          s.status === 'ACTIVE' ? 'text-emerald-300' : 'text-slate-500'
+                        }`}
+                      >
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${
+                            s.status === 'ACTIVE' ? 'bg-emerald-400' : 'bg-slate-500'
+                          }`}
+                        />{' '}
+                        {s.status}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => toggle.mutate({ id: s.id, active: s.status !== 'ACTIVE' })}
+                      disabled={toggle.isPending}
+                      className={`${controls.chip} shrink-0 disabled:opacity-50`}
+                    >
+                      {s.status === 'ACTIVE' ? 'Pause' : 'Activate'}
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <button
-                onClick={() => toggle.mutate({ id: s.id, active: s.status !== 'ACTIVE' })}
-                disabled={toggle.isPending}
-                className="shrink-0 rounded-lg bg-white/[0.05] px-2.5 py-1 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
-              >
-                {s.status === 'ACTIVE' ? 'Pause' : 'Activate'}
-              </button>
+              ))}
             </div>
-          </div>
-        ))}
+          )}
+        </div>
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -263,33 +304,44 @@ function JobsCard() {
     queryFn: getProviderJobs,
   });
   return (
-    <div className="rounded-2xl bg-white/[0.04] p-6">
-      <h2 className="font-semibold text-slate-300">Incoming jobs</h2>
-      {isLoading && <p className="mt-4 text-sm text-slate-500">Loading jobs…</p>}
-      {error && <p className="mt-4 text-sm text-red-400">Could not load jobs.</p>}
-      {!isLoading && !error && jobs.length === 0 && (
-        <p className="mt-4 text-sm text-slate-500">No jobs yet.</p>
-      )}
-      <div className="mt-4 space-y-2">
-        {jobs.map((j) => (
-          <div
-            key={j.id}
-            className="flex items-center justify-between rounded-xl bg-white/[0.04] p-3 text-sm"
-          >
-            <div className="min-w-0">
-              <div className="truncate font-medium">{j.action}</div>
-              <div className="truncate text-xs text-slate-500">
-                {j.service ?? 'service'} · {j.taskTitle} · {when(j.createdAt)}
+    <Card className="p-5">
+      <CardHeader
+        icon={Briefcase}
+        title="Incoming jobs"
+        hint="Steps agents hired your services for."
+      />
+      <div className="px-5 pb-5 pt-4">
+        {isLoading ? (
+          <Loading rows={2} />
+        ) : error ? (
+          <ErrorState>Could not load jobs.</ErrorState>
+        ) : jobs.length === 0 ? (
+          <EmptyState>No jobs yet.</EmptyState>
+        ) : (
+          <div className="space-y-2">
+            {jobs.map((j) => (
+              <div
+                key={j.id}
+                className="flex items-center justify-between rounded-xl bg-white/[0.03] p-3 text-sm"
+              >
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{j.action}</div>
+                  <div className="truncate text-xs text-slate-500">
+                    {j.service ?? 'service'} · {j.taskTitle} · {when(j.createdAt)}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-slate-300">${j.estimatedCost}</div>
+                  <div className={`text-xs ${JOB_STYLE[j.status] ?? 'text-slate-400'}`}>
+                    {j.status}
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="text-right">
-              <div className="text-slate-300">${j.estimatedCost}</div>
-              <div className={`text-xs ${JOB_STYLE[j.status] ?? 'text-slate-400'}`}>{j.status}</div>
-            </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -297,12 +349,13 @@ export function Provider() {
   return (
     <section className="space-y-6">
       <PageHeader
+        eyebrow="Earn"
         title="Provider console"
         subtitle="Register services, handle jobs, and track earnings and reputation."
       />
       <Stats />
 
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid gap-6 lg:grid-cols-2">
         <ServicesCard />
         <JobsCard />
       </div>

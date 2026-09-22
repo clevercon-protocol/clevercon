@@ -1,6 +1,6 @@
-import type { ComponentType, ReactNode } from 'react';
+import { useState, type ComponentType, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Layers, Bot, Store, ShieldCheck, Terminal } from 'lucide-react';
+import { Layers, Bot, Store, ShieldCheck, Terminal, PanelLeftClose, PanelLeft } from 'lucide-react';
 import { useSession, type Role } from '../store/session';
 import { useWalletAuth } from '../auth/useWalletAuth';
 import { DemoBanner } from './DemoBanner';
@@ -94,50 +94,103 @@ export function Shell({ children }: { children: ReactNode }) {
   const session = useSession((s) => s.session);
   const loc = useLocation();
   const roles = session?.roles ?? [];
+  const [collapsed, setCollapsed] = useState(
+    () => typeof localStorage !== 'undefined' && localStorage.getItem('cc:nav:collapsed') === '1',
+  );
 
   // The landing page is a full-bleed marketing page with its own header/footer.
   if (loc.pathname === '/') return <>{children}</>;
 
   const items = NAV.filter((n) => roles.includes(n.role) || (n.selfServe && session));
   const isActive = (to: string) => loc.pathname === to || loc.pathname.startsWith(to + '/');
+  const net = NETWORKS[config.network] ?? NETWORKS.testnet;
+  const toggle = () =>
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem('cc:nav:collapsed', next ? '1' : '0');
+      } catch {
+        /* storage unavailable */
+      }
+      return next;
+    });
 
   return (
     <div className="relative min-h-screen text-slate-100">
       <div className="app-ambient" aria-hidden />
-      {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-white/5 bg-black/30 px-4 py-5 backdrop-blur-xl lg:flex">
-        <Brand />
-        <nav className="mt-8 flex flex-col gap-1">
-          <p className="px-3 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-slate-600">
-            Consoles
-          </p>
+      {/* Desktop sidebar, collapsible to an icon rail. */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-30 hidden flex-col border-r border-white/5 bg-black/30 py-5 backdrop-blur-xl transition-[width] duration-200 lg:flex ${
+          collapsed ? 'w-16 items-center px-2' : 'w-60 px-4'
+        }`}
+      >
+        <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between'}`}>
+          <Brand compact={collapsed} />
+          {!collapsed && (
+            <button
+              onClick={toggle}
+              aria-label="Collapse sidebar"
+              title="Collapse sidebar"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-white"
+            >
+              <PanelLeftClose size={16} />
+            </button>
+          )}
+        </div>
+
+        <nav className="mt-8 flex w-full flex-col gap-1">
+          {!collapsed && (
+            <p className="px-3 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-slate-600">
+              Consoles
+            </p>
+          )}
           {items.map((n) => {
             const active = isActive(n.to);
             return (
               <Link
                 key={n.to}
                 to={n.to}
-                className={`relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                title={collapsed ? n.label : undefined}
+                className={`relative flex items-center gap-3 rounded-lg py-2 text-sm transition-colors ${
+                  collapsed ? 'justify-center px-0' : 'px-3'
+                } ${
                   active
                     ? 'bg-violet-500/[0.12] text-white'
                     : 'text-slate-400 hover:bg-white/[0.04] hover:text-white'
                 }`}
               >
-                {active && (
+                {active && !collapsed && (
                   <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-violet-400" />
                 )}
                 <n.icon size={16} className={active ? 'text-violet-300' : ''} />
-                {n.label}
+                {!collapsed && n.label}
               </Link>
             );
           })}
-          {items.length === 0 && (
+          {items.length === 0 && !collapsed && (
             <p className="px-3 text-xs text-slate-600">Connect a wallet to begin.</p>
           )}
         </nav>
-        <div className="mt-auto space-y-3">
-          <NetworkBadge />
-          <WalletButton full />
+
+        <div className={`mt-auto flex flex-col gap-3 ${collapsed ? 'items-center' : ''}`}>
+          {collapsed ? (
+            <>
+              <span className={`h-2 w-2 rounded-full ${net.dot}`} title={net.label} />
+              <button
+                onClick={toggle}
+                aria-label="Expand sidebar"
+                title="Expand sidebar"
+                className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white"
+              >
+                <PanelLeft size={16} />
+              </button>
+            </>
+          ) : (
+            <>
+              <NetworkBadge />
+              <WalletButton full />
+            </>
+          )}
         </div>
       </aside>
 
@@ -160,7 +213,11 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <div className="relative z-10 lg:pl-60">
+      <div
+        className={`relative z-10 transition-[padding] duration-200 ${
+          collapsed ? 'lg:pl-16' : 'lg:pl-60'
+        }`}
+      >
         <DemoBanner />
         <main className="mx-auto max-w-6xl px-5 py-8 sm:px-8">{children}</main>
       </div>

@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Vault as VaultIcon,
-  ExternalLink,
   Sparkles,
   ShieldCheck,
   EyeOff,
@@ -20,7 +19,6 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { isDemo } from '../../config';
-import { useSession } from '../../store/session';
 import { getVault } from '../../lib/vault';
 import { getServices } from '../../lib/services';
 import { getPolicies, createPolicy, type Policy } from '../../lib/policies';
@@ -31,7 +29,6 @@ import {
   planInstruction,
   type HireMode,
 } from '../../lib/tasks';
-import { explorerAccount } from '../../lib/stellar';
 import { Card, CardHeader, EmptyState, controls } from '../../components/ui';
 import { LimitsBuilder } from './limits';
 import {
@@ -60,63 +57,38 @@ const STATUS_TINT: Record<string, string> = {
 
 // ── Vault hero: the money the agent can spend is the main number ────────────────
 
-export function VaultHero() {
+/**
+ * Compact budget strip. The agent's spendable budget is important context, but
+ * secondary to the command surface below, so it reads as a slim status bar, not a
+ * hero. Full funding, the wallet link, and the locked breakdown live on the Vault
+ * tab (linked here).
+ */
+function VaultStrip() {
   const { data: vault } = useQuery({ queryKey: ['vault'], queryFn: getVault });
-  const address = useSession((s) => s.session?.address ?? '');
   const available = vault?.available ?? 0;
   const balance = vault?.balance ?? 0;
   const locked = vault?.locked ?? 0;
-  const pct = balance > 0 ? Math.min(100, Math.round((locked / balance) * 100)) : 0;
   return (
-    <Card className="relative overflow-hidden p-6">
-      {/* Signature wash to mark this as the primary surface. */}
-      <div
-        className="pointer-events-none absolute -right-16 -top-24 h-64 w-64 rounded-full bg-violet-600/15 blur-3xl"
-        aria-hidden
-      />
-      <div className="relative flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500">
-            <VaultIcon size={13} className="text-violet-300" /> Your agent&apos;s budget
-          </div>
-          <div className="mt-2 flex items-end gap-2">
-            <span className="text-5xl font-bold tracking-tight text-white">
+    <Card className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300 ring-1 ring-inset ring-violet-500/15">
+          <VaultIcon size={16} />
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2">
+            <span className="text-xl font-bold tracking-tight text-white">
               ${available.toFixed(2)}
             </span>
-            <span className="pb-1.5 text-sm text-slate-500">available to spend</span>
+            <span className="text-xs text-slate-500">available to spend</span>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-400">
-            <span>${balance.toFixed(2)} in vault</span>
-            <span className="text-slate-600">·</span>
-            <span>${locked.toFixed(2)} locked by active jobs</span>
+          <div className="truncate text-xs text-slate-500">
+            ${balance.toFixed(2)} in vault · ${locked.toFixed(2)} locked by active jobs
           </div>
-          {balance > 0 && (
-            <div className="mt-3 h-1.5 w-56 max-w-full overflow-hidden rounded-full bg-white/[0.06]">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500"
-                style={{ width: `${pct}%` }}
-                title={`${pct}% of the vault is locked by active jobs`}
-              />
-            </div>
-          )}
-        </div>
-        <div className="flex flex-col items-end gap-2">
-          <Link to="/app/vault" className={primaryBtn}>
-            Fund / manage
-          </Link>
-          {!isDemo() && address && (
-            <a
-              href={explorerAccount(address)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-500 hover:text-slate-300"
-              title="Your personal wallet (funding source)"
-            >
-              wallet {address.slice(0, 4)}…{address.slice(-4)} <ExternalLink size={10} />
-            </a>
-          )}
         </div>
       </div>
+      <Link to="/app/vault" className={chipBtn}>
+        Fund / manage
+      </Link>
     </Card>
   );
 }
@@ -933,9 +905,11 @@ function FirstRunGuide() {
 export function Home() {
   return (
     <div className="space-y-6">
-      <VaultHero />
-      <FirstRunGuide />
+      {/* Command-first: the agent prompt + quick actions are the subject of the
+          page; the budget is a compact strip above it, funding lives on Vault. */}
+      <VaultStrip />
       <CommandChat />
+      <FirstRunGuide />
       <RecentActivity />
     </div>
   );
