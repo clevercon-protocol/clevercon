@@ -109,6 +109,22 @@ body {
   mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 40%, transparent 100%);
   -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 40%, transparent 100%);
 }
+/* A gentle entrance for in-app page content, replayed on each route change so
+   the app feels as alive as the landing. Fades + rises once, then settles. */
+@keyframes cc-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.cc-page {
+  animation: cc-rise 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cc-reveal {
     opacity: 1;
@@ -117,6 +133,9 @@ body {
   }
   .cc-orb,
   .cc-gradient-text {
+    animation: none;
+  }
+  .cc-page {
     animation: none;
   }
 }

@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { MessagesSquare, Vault, Search, Activity, SlidersHorizontal } from 'lucide-react';
 import { useRealtime } from '../../lib/useRealtime';
 import { PageHeader } from '../../components/ui';
@@ -16,6 +16,7 @@ const TABS = [
 
 export function BuyerLayout() {
   useRealtime();
+  const location = useLocation();
   return (
     <section className="space-y-6">
       <PageHeader
@@ -44,7 +45,10 @@ export function BuyerLayout() {
         ))}
       </nav>
 
-      <Outlet />
+      {/* Keyed on the path so the entrance animation replays per sub-page. */}
+      <div key={location.pathname} className="cc-page">
+        <Outlet />
+      </div>
     </section>
   );
 }

@@ -7,12 +7,15 @@ type Icon = ComponentType<{ size?: number; className?: string }>;
 // In-app primary is a solid violet (calm); the brand gradient is reserved for
 // the top-level Connect action so it stays a signature, not noise.
 
+// Shared interaction affordances: a visible keyboard focus ring (a11y) and a
+// subtle press response (only when motion is allowed).
+const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-0';
+const press = 'transition duration-150 motion-safe:active:scale-[0.97]';
+
 export const controls = {
-  primary:
-    'inline-flex items-center justify-center gap-1.5 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-violet-950/40 hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50 transition-colors',
-  secondary:
-    'inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/[0.05] px-4 py-2 text-sm font-medium text-slate-300 hover:bg-white/[0.1] hover:text-white transition-colors',
-  chip: 'inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-3 py-1.5 text-sm text-slate-300 hover:bg-white/[0.09] hover:text-white transition-colors',
+  primary: `inline-flex items-center justify-center gap-1.5 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-violet-950/40 hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 ${focusRing} focus-visible:ring-violet-400/70 ${press}`,
+  secondary: `inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/[0.05] px-4 py-2 text-sm font-medium text-slate-300 hover:bg-white/[0.1] hover:text-white ${focusRing} focus-visible:ring-white/25 ${press}`,
+  chip: `inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-3 py-1.5 text-sm text-slate-300 hover:bg-white/[0.09] hover:text-white ${focusRing} focus-visible:ring-white/20 ${press}`,
   // A recessed well: darker fill + inset shadow instead of a border. Violet ring on focus.
   field:
     'w-full rounded-lg bg-black/30 px-3 py-2 text-sm text-slate-100 shadow-[inset_0_1px_2px_rgba(0,0,0,0.35)] outline-none placeholder:text-slate-600 focus:ring-2 focus:ring-violet-500/40 transition-shadow',
@@ -81,7 +84,9 @@ export function Card({
   return (
     <div
       className={`rounded-2xl bg-surface shadow-card ${
-        interactive ? 'transition-colors hover:bg-surface-2' : ''
+        interactive
+          ? 'cursor-pointer transition duration-200 hover:bg-surface-2 hover:shadow-pop motion-safe:hover:-translate-y-0.5'
+          : ''
       } ${className}`}
     >
       {children}

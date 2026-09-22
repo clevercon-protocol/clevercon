@@ -154,19 +154,25 @@ const OFFERINGS: { icon: typeof Wallet; name: string; status: OfferStatus; body:
     icon: Shield,
     name: 'Private spending policies',
     status: 'live',
-    body: 'Spending rules enforced on-chain but kept private, with a compliance proof. Live today via a binding proof; the full zero-knowledge circuit is on the roadmap.',
+    body: 'Spending rules enforced on-chain but kept private, with a compliance proof. Live today via a binding proof on-chain; the Noir zero-knowledge circuit is built and proven in CI, with full on-chain verification on the roadmap.',
   },
   {
     icon: Boxes,
     name: 'Agent SDK',
     status: 'live',
-    body: 'Embed safe, private spending into any app or agent in a few lines of code.',
+    body: 'Embed a bounded spending account, or agent-key mode for external x402 services, into any app or agent in a few lines.',
   },
   {
     icon: Layers,
     name: 'Stellar MCP server',
     status: 'live',
-    body: 'Give any MCP-capable agent a bounded spending account: discover services, hire, and track tasks, natively over MCP.',
+    body: 'Give any MCP-capable agent a bounded spending account: pay, disburse, hire, set limits, and read its budget, natively over MCP.',
+  },
+  {
+    icon: Zap,
+    name: 'Agent-key mode (x402)',
+    status: 'live',
+    body: "Top up an agent's own wallet from the vault under your policy, then let it pay external x402 services, settling in the same USDC.",
   },
   {
     icon: Sparkles,
@@ -418,7 +424,7 @@ export function Landing() {
             {PILLARS.map((p, i) => (
               <Reveal key={p.title} delay={i * 90}>
                 <div
-                  className={`relative h-full rounded-2xl border ${p.border} bg-white/[0.02] p-6 overflow-hidden`}
+                  className={`relative h-full rounded-2xl border ${p.border} bg-white/[0.02] p-6 overflow-hidden transition duration-200 hover:bg-white/[0.03] motion-safe:hover:-translate-y-1`}
                 >
                   <div
                     className={`absolute inset-0 bg-gradient-to-b ${p.tint} pointer-events-none`}
@@ -457,7 +463,7 @@ export function Landing() {
               const st = STATUS[o.status];
               return (
                 <Reveal key={o.name} delay={(i % 3) * 80}>
-                  <div className="h-full rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+                  <div className="h-full rounded-2xl border border-white/10 bg-white/[0.02] p-6 transition duration-200 hover:border-white/20 hover:bg-white/[0.03] motion-safe:hover:-translate-y-1">
                     <div className="flex items-center justify-between">
                       <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
                         <o.icon size={17} className="text-slate-300" />
@@ -556,7 +562,7 @@ export function Landing() {
           <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {USAGE_MODES.map((s, i) => (
               <Reveal key={s.title} delay={i * 80}>
-                <div className="h-full rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+                <div className="h-full rounded-2xl border border-white/10 bg-white/[0.02] p-6 transition duration-200 hover:border-white/20 hover:bg-white/[0.03] motion-safe:hover:-translate-y-1">
                   <div className="flex items-center justify-between">
                     <div className="w-10 h-10 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
                       <s.icon size={17} className="text-violet-300" />
@@ -578,7 +584,7 @@ export function Landing() {
                 <span className="text-white font-medium">
                   Whatever does the spending is just a delegate.
                 </span>{' '}
-                CleverCon's orchestrator, your own agent via the SDK, or an MCP client, it makes no
+                The built-in chat agent, your own agent via the SDK, or an MCP client, it makes no
                 difference. The rail is what makes delegation safe: even a compromised or careless
                 delegate cannot spend outside the budget and private rules you set. That, not the
                 planning, is the point.
