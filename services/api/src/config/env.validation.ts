@@ -14,6 +14,10 @@ export const envSchema = z.object({
   // Controls Express `trust proxy` so rate limiting sees the real client IP from
   // X-Forwarded-For instead of the proxy's. Keep 0 for direct local runs.
   TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+  // Comma-separated CORS allowlist (e.g. https://app.example.com,https://demo.example.com).
+  // Set this in production to restrict who can call the API from a browser. When
+  // unset, any origin is reflected (convenient for local dev).
+  CORS_ORIGINS: z.string().optional(),
   JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
   JWT_ACCESS_TTL: z.string().default('15m'),
   // SEP-10 wallet auth. If SERVER_SIGNING_KEY is unset, an ephemeral key is used

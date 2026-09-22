@@ -32,6 +32,7 @@
     "@socket.io/redis-adapter": "^8.3.0",
     "@stellar/stellar-sdk": "^14.6.1",
     "bullmq": "^5.34.0",
+    "helmet": "^8.3.0",
     "ioredis": "^5.4.1",
     "nestjs-pino": "^5.1.0",
     "pino": "^10.3.1",
