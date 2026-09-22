@@ -1,15 +1,74 @@
 # @clevercon/agent-sdk
 
-Two ways to put an agent on CleverCon:
+The SDK for CleverCon. Four surfaces, pick what your agent needs:
 
-1. **Marketplace provider** (`createProvider`, below), you list a service, a
-   buyer hires it, and the CleverCon worker calls your endpoint per plan step.
-   Payment is settled by the vault on-chain (`release_payment_proved`) after the
-   step succeeds. This is how the live rail pays providers; start here.
-2. **Standalone paid agent** (`createAgent`, further down), you run your own
-   x402 / MPP paywall and charge callers directly per request, independent of
-   the vault. Use this when you want to sell calls outside the CleverCon hire
-   flow.
+1. **Spend** (`createSpender`) — a bounded, non-custodial spending account over the
+   CleverCon API: pay, disburse, hire, set limits, read budget and activity, with a
+   scoped API key. The agent spends but never overspends or pays outside your
+   policy, and never holds funds. **Start here if your agent needs to spend.**
+2. **Agent-key mode** (`createAgentWallet`) — the agent pulls working capital from
+   the vault into its own wallet (bounded by your policy) and pays **external** x402
+   services with it. Start here to reach services outside CleverCon.
+3. **Be a provider** (`createProvider`) — list a service the CleverCon hire flow
+   calls per step; the vault settles you on-chain after each step succeeds.
+4. **Standalone paid agent** (`createAgent`) — run your own x402 / MPP paywall and
+   charge callers directly, independent of the vault.
+
+The spending surfaces are on the package root; the provider is on a zero-dependency
+subpath (`@clevercon/agent-sdk/spender` is likewise dependency-free).
+
+## Spend (`createSpender`)
+
+A bounded, non-custodial spending account in a few calls. Zero runtime dependencies
+(global `fetch` only), keyed by a scoped API key (mint one in the dApp Developer
+console). Fund the vault and authorize Autopay once in the dApp; after that the
+agent spends autonomously within your limits.
+
+```ts
+import { createSpender } from '@clevercon/agent-sdk/spender';
+
+const cc = createSpender({ apiKey: process.env.CLEVERCON_API_KEY! });
+
+await cc.pay('G...PAYEE', 5, { reason: 'design work' });
+await cc.disburse([
+  { payee: 'G...A', amount: 2 },
+  { payee: 'G...B', amount: 3 },
+]);
+const { available } = await cc.getBudget();
+const limit = await cc.setLimit({ perPaymentCeilingUsdc: 10, allowlist: ['G...'] });
+```
+
+- `pay(payee, amount, opts?)` / `disburse(lines, opts?)` — bounded by a saved limit
+  (`policyId`) or one derived from the payment itself (allowlist = the payees, cap =
+  the largest line). Pass `idempotencyKey` so a retried call returns the original
+  spend instead of paying twice.
+- `hire(opts)` — hire a registered service (also takes `idempotencyKey`).
+- `getBudget()` / `getActivity()` / `setLimit(limit)` / `listLimits()`.
+- Errors throw `CleverConError` carrying the HTTP status (401 bad key, 429 quota).
+
+## Agent-key mode (`createAgentWallet`)
+
+Unites the two non-custodial halves of an agent's economy: it PULLS working capital
+from the CleverCon vault (bounded on-chain by your policy) and SPENDS it
+autonomously on external x402 services. The platform never holds the agent's key,
+and both legs settle in the same USDC, so there is no swap between them.
+
+```ts
+import { createAgentWallet } from '@clevercon/agent-sdk';
+
+const wallet = createAgentWallet({
+  apiKey: process.env.CLEVERCON_API_KEY!, // the governed vault side
+  secretKey: process.env.AGENT_SECRET_KEY!, // the agent's OWN Stellar key
+});
+
+await wallet.topUp(5); // vault -> agent wallet, released within your policy
+const res = await wallet.fetch(url, init); // pay an x402 service with those funds
+const { available } = await wallet.getBudget();
+```
+
+See [`examples/x402-agent`](./examples/x402-agent) for a runnable end-to-end agent.
+
+The remaining two surfaces are for being paid, not spending:
 
 ## Marketplace provider (`createProvider`)
 

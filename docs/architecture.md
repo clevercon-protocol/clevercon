@@ -1,250 +1,209 @@
 # Architecture
 
-How CleverCon's pieces fit together, and where the architecture is headed
-per [ROADMAP.md](../ROADMAP.md).
+How CleverCon's pieces fit together on Stellar testnet today, and where the
+architecture is headed per [ROADMAP.md](../ROADMAP.md).
 
 CleverCon is the non-custodial spending-control layer that lets an AI agent spend
-money on Stellar within private, on-chain-enforced limits. Stellar is the rail;
-CleverCon governs how an agent may spend on it. You fund a vault, set a private
-policy, and your agent pays within it (to registered services, or to any address
-you allowlist).
+money on Stellar within private, on-chain-enforced limits. You fund a vault, set a
+policy (optionally private), authorize a delegate once, and your agent spends
+within the policy through any of three doors (dApp, SDK, or MCP). The vault
+guarantees on-chain that the agent cannot exceed the budget or pay an unapproved
+party, and the platform never holds your funds.
 
-> **Note:** the system diagram and component tables below still describe the
-> earlier hackathon stack (a single Express orchestrator + dashboard + JSON
-> registry). The production stack is the NestJS API, event indexer, and BullMQ
-> workers behind `apps/web`, with deployed CleverVault + PolicyVerifier +
-> Registry contracts, see the [README](../README.md) "What runs today" and
-> "Architecture" for the current shape. This document is being updated to match.
+> The earlier hackathon stack (a single Express `orchestrator` + `dashboard` +
+> JSON `registry` + the `packages/agents/*` samples + `contracts/budget-guardian`)
+> is kept in the repo for history but is **not** the system described here. This
+> document describes the production stack: `apps/web`, `services/*`, `packages/*`,
+> and the deployed CleverVault + PolicyVerifier + Registry contracts.
 
 ## System overview
 
 ```mermaid
 flowchart LR
     User["User\n(Stellar wallet)"]
-    Dashboard["Dashboard\nReact 19"]
-    Orchestrator["Orchestrator\nPlanner + Executor"]
-    Registry["Registry\nManifests + Reputation"]
-    Vault["CleverVault\nSoroban Contract"]
-    Agents["Specialist Agents\nstellar-oracle, web-intel,\nweb-intel-v2, analysis, reporter"]
+    Web["apps/web\ndApp (React 19)"]
+    Agent["AI agent\n(SDK / MCP / chat)"]
+    API["services/api\nNestJS"]
+    Workers["services/workers\nBullMQ"]
+    Indexer["services/indexer\nevent cursor"]
+    Vault["CleverVault\nSoroban"]
+    Verifier["PolicyVerifier\nSoroban"]
+    Provider["Provider\n(x402 or vault-paid)"]
 
-    User -->|connect + sign| Dashboard
-    Dashboard <-->|WebSocket + REST| Orchestrator
-    Orchestrator -->|query agents| Registry
-    Orchestrator -->|create_task /\nrelease_payment| Vault
-    Vault -->|USDC| Orchestrator
-    Orchestrator -->|x402 / MPP payment| Agents
-    Agents -->|self-register +\nfeedback| Registry
+    User -->|connect + sign| Web
+    Web -->|REST + WebSocket| API
+    Agent -->|x-api-key: pay/disburse/hire| API
+    API -->|enqueue settlement| Workers
+    Workers -->|create_task / release / complete\n(as the delegate)| Vault
+    Vault -->|verify_policy| Verifier
+    Vault -->|USDC direct to payee| Provider
+    Indexer -->|poll events| Vault
+    Indexer -->|mirror balances| API
 ```
+
+The user's funds sit in CleverVault. A per-user **delegate** key (authorized once
+on-chain) is the only thing that can move them, and only within the committed
+policy. The delegate holds no funds: the vault pays the payee (or the user's own
+agent wallet) directly. Any of the three doors is just a way to tell the API what
+to spend; the API validates and records it, and the worker performs the on-chain
+lock and proof-gated release as the delegate.
 
 ## Components
 
 | Package | Role |
 |---|---|
-| `packages/common` | Shared TypeScript types (`AgentManifest`, `AgentRecord`, `ExecutionPlan`, `TaskResult`), Stellar network constants, a logger, and wallet helpers. Imported by every backend package. |
-| `packages/registry` | Express API for agent discovery and reputation. Agents self-register on startup, the orchestrator queries it when building a plan, and feedback after each job updates an agent's score. Backed by `data/registry.json`. |
-| `packages/orchestrator` | The reference **delegate**: the thing that spends on the user's behalf. It adapts to the job, for a chosen provider or a single service it skips planning; for a genuinely multi-service job it plans steps with an LLM (optional and pluggable). Either way it selects and executes, locks and releases funds via CleverVault within the user's (private) policy, pays agents over x402/MPP, and serves the dashboard over REST and WebSocket. Because the vault enforces the limit, any SDK or MCP client can act as the delegate instead, without becoming a trusted party. |
-| `packages/dashboard` | React frontend for connecting a wallet, funding the vault, submitting and approving tasks, and viewing history. |
-| `packages/agents/*` | Five specialist agents, each an Express server with a manifest, a `/health` endpoint, and a paid query endpoint. |
-| `contracts/agent-vault` | CleverVault, the Soroban contract that holds user USDC and enforces the budget lifecycle on-chain. |
-| `contracts/budget-guardian` | An earlier budget-tracking contract, superseded by CleverVault and kept for reference. |
+| `apps/web` | The dApp: connect a wallet, fund the vault, build spending limits, instruct an agent in natural language, and watch releases settle live over Socket.IO. React 19 + Vite + Tailwind + TanStack Query. |
+| `services/api` | NestJS API. SEP-10 wallet auth, rotating JWTs, RBAC, hashed scoped API keys with daily quotas, step-up auth for money actions, rate limiting, helmet + lockable CORS, `/health` liveness + `/ready` readiness, structured logging, and an OpenTelemetry skeleton. Owns tasks, policies, vault views, activity, webhooks, admin, and the developer platform. |
+| `services/workers` | BullMQ workers: task execution (hires), proof generation, and exactly-once **settlement**. Settlement locks the budget on-chain lazily, releases each step proof-gated, and finalizes, all signed by the user's delegate. Per-signer serialization + txBadSeq retry let different users settle in parallel. |
+| `services/indexer` | Polls CleverVault events with a resumable cursor and projects them into the read-model (the balance mirror the API serves), so `available` reflects on-chain truth. |
+| `services/reference-provider` | A canonical provider implementing the fulfillment contract, built on `createProvider`. Used by the hire flow and the E2E harness. |
+| `packages/common` | Shared types, the policy-input encoding, the binding-proof prover, a Redis mutex, and a logger. |
+| `packages/db` | Prisma schema + client and AES-256-GCM secret crypto (the delegate secret is stored encrypted, never in the clear). |
+| `packages/agent-sdk` | The SDK. `createSpender` (a bounded, non-custodial spending client over the API), `createAgentWallet` (x402 agent-key mode: governed top-up + a paying fetch), and `createProvider` / `createAgent` (be a paid service). |
+| `packages/mcp` | The Model Context Protocol server (12 tools) that gives any MCP client a bounded spending account: search, pay, disburse, hire, set limits, read budget and activity. |
+| `contracts/agent-vault` | **CleverVault**: non-custodial USDC custody, per-task budget locking, proof-gated per-step release, refunds, replay protection, storage TTL, and admin controls. |
+| `contracts/policy-verifier` | **PolicyVerifier**: a fail-closed `verify_policy` the vault cross-calls on every release. |
+| `contracts/registry` | On-chain service registration and reputation. |
 
 ## Trust model
 
-CleverCon's trustlessness applies to some layers and not others. Being clear
-about this matters for anyone evaluating it.
+Being precise about what is and is not trustless matters for anyone evaluating
+CleverCon.
 
 ### Enforced on-chain
 
-- **Custody.** CleverVault holds all user funds. The contract is the only thing
-  that can release payments. The operator cannot touch user balances.
-- **Per-step release.** Payments release only after a step is executed, capped
-  on-chain at the task's remaining budget. The operator cannot drain funds even
-  if the orchestrator misbehaves.
+- **Custody.** CleverVault holds all user funds; only the contract can release
+  them. The operator and the delegate cannot touch balances outside a policy-passing
+  release.
+- **Budget.** `create_task_with_policy` locks a plan cost; releases are capped at
+  the task's remaining budget; unused budget is refunded on `complete_task`.
+- **Policy gate.** Each release calls `PolicyVerifier.verify_policy` fail-closed
+  (no verifier set, or a rejected proof, means no funds move and the nullifier is
+  not consumed). Replays are blocked per (task, step) and by the nullifier.
 - **Settlement.** Every payment is a real Stellar transaction with a verifiable
-  hash. No off-chain accounting.
+  hash; no off-chain accounting of moved funds.
 
-### Requires trusting the operator
+### Trusted in v1 (stated honestly)
 
-- **Task decomposition.** The orchestrator decides how to split a task into
-  steps. A bad orchestrator could produce wasteful plans. Plans are shown to the
-  user for approval before execution.
-- **Agent selection.** The orchestrator picks which agent fills each step. The
-  selection logic is open source and the reputation scoring is transparent.
-- **Quality rating.** Reputation updates come from an LLM rating service, which
-  the operator could influence. Moving to multiple providers and user-driven
-  ratings is on the roadmap.
-
-### Where it is headed
-
-Private spending policies (see [ROADMAP.md](../ROADMAP.md)) let a user commit a
-spending rule that the vault enforces on every release without revealing it. At
-that point the orchestrator cannot spend outside the rule the user set, which
-removes most of the task-decomposition and agent-selection trust above. The
-commitment, proof, and verification protocol is specified in
-[docs/private-policies.md](private-policies.md).
-
-## Task lifecycle
-
-```mermaid
-flowchart TD
-    A[User submits task + budget] --> B{Feasibility check}
-    B -->|infeasible| Z[Reject with reason]
-    B -->|feasible| C[Planner builds ExecutionPlan]
-    C --> D[Validate plan: agents exist,\nbudget OK, no circular deps]
-    D --> E[Broadcast plan, wait for approval\n60s auto-approve]
-    E -->|rejected| Z
-    E -->|approved| F[Vault: create_task locks budget]
-    F --> G[Executor runs steps in\ndependency order]
-    G --> H[Per step: Vault release_payment\nto orchestrator wallet]
-    H --> I[Orchestrator pays agent\nover x402 or MPP]
-    I --> J[LLM rates output 1-5,\nfeedback posted to registry]
-    J --> K{More steps?}
-    K -->|yes| G
-    K -->|no| L[Vault: complete_task,\nrefund unused budget]
-    L --> M[Result + receipts in dashboard]
-```
-
-The current implementation uses Claude Sonnet for planning and Claude Haiku for
-feasibility checks and output rating. The pipeline lives in
-`packages/orchestrator/src/server.ts` (`runTask()`) and
-`packages/orchestrator/src/executor.ts` (`PlanExecutor`).
+- **Policy predicate soundness.** The on-chain verifier performs a
+  host-accelerated **binding check** over the four public inputs (commitment,
+  payee, amount, nullifier), not a full pairing-based UltraHonk verification
+  (Soroban has no pairing host function). The Noir circuit that proves the rule was
+  satisfied is built and proven in CI, but on-chain today it is the binding anchor,
+  so the proving stack is trusted for predicate soundness. See
+  [docs/private-policies.md](private-policies.md) section 7.
+- **Off-chain rule enforcement.** In v1 the API enforces the caps/allowlist while
+  the on-chain budget + commitment + binding proof anchor the release. Full on-chain
+  rule verification is blocked on Stellar pairing precompiles.
+- **Agent decisions.** The agent chooses who to pay and when within the allowed
+  set; it can be wrong about choice or timing, never about the money boundary.
 
 ## Fund flow
 
-CleverVault holds USDC on behalf of users. The orchestrator only touches user
-funds for the moment it takes to relay a per-step payment to an agent.
+CleverVault holds USDC on behalf of users. The delegate never holds funds: the
+vault transfers directly to the payee on a policy-passing release.
 
 ```mermaid
 sequenceDiagram
     participant U as User wallet
+    participant API as API + Worker (delegate)
     participant V as CleverVault
-    participant O as Orchestrator wallet
-    participant A as Specialist agent
+    participant PV as PolicyVerifier
+    participant P as Payee
 
-    U->>V: deposit(amount)
-    U->>V: register_orchestrator (one-time)
-    O->>V: create_task(plan_cost)
+    U->>V: deposit(amount)              (step-up signed)
+    U->>V: register_orchestrator        (authorize the delegate, one-time)
+    Note over API: agent instructs pay/disburse/hire via dApp, SDK, or MCP
+    API->>V: create_task_with_policy(delegate, asset, plan_cost, commitment)
     V->>V: lock plan_cost
-    loop per step
-        O->>V: release_payment(task_id, amount)
-        V->>O: transfer USDC
-        O->>A: x402 or MPP payment
-        A->>O: step output
+    loop per released step
+        API->>V: release_payment_proved(task, step, amount, payee, nullifier, proof)
+        V->>PV: verify_policy(commitment, payee, amount, nullifier, proof)
+        PV-->>V: ok / reject (fail-closed)
+        V->>P: transfer USDC directly (only on ok)
     end
-    O->>V: complete_task(task_id)
+    API->>V: complete_task(task)
     V->>U: refund (plan_cost - spent)
 ```
+
+The on-chain lock and release run in the **worker**, not the request path: the API
+records the task and returns immediately, and the worker locks the budget lazily on
+the first step to settle (inside a per-signer mutex so a signer's transactions never
+race the sequence number). This keeps `POST /payments` and `POST /tasks` fast under
+load while releases stay serialized per delegate.
 
 ### On-chain guarantees
 
 | Guarantee | Enforcement |
 |---|---|
-| One active task per user at a time | `active_tasks_count == 0` required to start a task |
-| No overspending | `release_payment` capped at the task's remaining `plan_cost` |
-| No mid-task withdrawals | `active_tasks_count == 0` required to `withdraw` |
-| Unused budget refunded | `finalize_task` returns `plan_cost - spent` to the user |
-| Stuck task recovery | Anyone can call `force_complete_stale_task` after the stale threshold |
-| Abort anytime | `cancel_task` (user-authorized) refunds remaining funds immediately |
+| No overspending | releases capped at the task's remaining `plan_cost` |
+| Policy obeyed | `verify_policy` must pass (fail-closed) before any transfer |
+| No replay / double-pay | idempotent per (task, step); the nullifier is consumed only on a successful release |
+| Unused budget refunded | `complete_task` returns `plan_cost - spent` to the user |
+| Non-custody | only CleverVault moves funds; the delegate holds none |
 
-### Contract data model
+### Contract data model (summary)
 
-- `UserAssetAccount`: per-asset `balance`, `locked`, `total_deposited`,
-  `total_spent`, `created_at`.
-- `UserConfig`: user-wide settings, including the linked `orchestrator` and
-  `active_tasks_count`.
-- `TaskInfo`: `user`, `orchestrator`, `asset`, `plan_cost`, `spent`,
-  `completed`, `created_at`.
-- `OrchestratorOwner(orchestrator) -> user`: reverse lookup that resolves which
-  user's funds an orchestrator call affects.
+Per-asset user account (`balance`, `locked`, `total_deposited`, `total_spent`),
+a per-user config (the linked delegate + active-task count), per-task info (asset,
+`plan_cost`, `spent`, the policy `commitment`, completion), a consumed-nullifier
+set, and the configured PolicyVerifier address. See the doc comments in
+[`contracts/agent-vault/src/lib.rs`](../contracts/agent-vault/src/lib.rs) for the
+exact fields, parameters, and authorization.
 
-See the doc comments in
-[`contracts/agent-vault/src/lib.rs`](../contracts/agent-vault/src/lib.rs) for
-per-function parameters, return values, and authorization.
+## Settlement and reliability
 
-## Payment protocols
+- **Exactly-once.** A release is idempotent on-chain by (task, step); the Payment
+  mirror is written under a unique key, so a retry or a race never double-pays.
+- **Transient vs deterministic failures.** A transient failure (RPC blip, timeout,
+  sequence contention) is retried with backoff; a deterministic one (the contract
+  rejected the call) fails the task fast rather than retrying forever.
+- **Client idempotency.** `POST /payments` and `POST /tasks` honor an
+  `Idempotency-Key` (a `(buyerId, key)` unique), so an agent that retries a timed-out
+  call gets the original task back instead of spending twice.
+- **Finalization.** Once every released step has settled, the worker calls
+  `complete_task` to unlock the remainder and refund the unused budget; PAY/DISBURSE
+  tasks are completed here (they have no executor), and registered webhooks are
+  notified of the terminal outcome.
 
-### x402, per-call micropayments
+## Privacy
 
-Used by `stellar-oracle`, `web-intel`, `web-intel-v2`, and `reporter`.
+A policy is committed on-chain as a hash; the rule itself (caps, allowlist,
+window) is never persisted in private mode. Each release carries that commitment,
+the payee, the amount, and a one-time nullifier, and the vault verifies a proof
+that binds the release to the commitment before moving funds. The ledger shows a
+payment was allowed without revealing the rule that allowed it.
 
-```
-Orchestrator                          Specialist agent
-     |-- POST /query ----------------->|
-     |<-- 402 Payment Required --------|
-     |    { amount: "0.02", currency: "USDC" }
-     |                                  |
-     |-- POST /query + X-Payment: <tx> >|
-     |<-- 200 OK + data ---------------|
-```
+The zero-knowledge circuit ([`circuits/spend-policy`](../circuits/spend-policy),
+Noir) proves the four composable rule types (per-payment ceiling, rolling cap,
+allowlist Merkle membership, deny-list + threshold) without revealing them, and is
+green in CI. On-chain verification is the binding check described in the trust
+model; full pairing-based verification is pending Stellar precompiles. The
+normative spec and threat model are frozen in
+[docs/private-policies.md](private-policies.md).
 
-Implemented in `packages/orchestrator/src/x402-client.ts` (`makeX402Payment`),
-built on `@x402/fetch` and `@x402/stellar`. Each attempt (up to 3, with
-exponential backoff) uses a fresh signer to avoid stale sequence numbers.
+## Payment protocols (agent-key / open economy)
 
-### MPP, streaming session payments
-
-Used by `analysis`. Opens a pre-authorized session and settles the actual amount
-used at the end of the call.
-
-```
-Orchestrator                          AnalysisBot
-     |-- open MPP session (auth amount) ->|
-     |<-- stream output ----------------  |
-     |-- settle: actual amount used ----->|
-     |   (difference returned to vault)   |
-```
-
-Implemented in `packages/orchestrator/src/mpp-client.ts` (`makeMPPPayment`),
-built on `mppx` / `@stellar/mpp`.
-
-## Agent selection and reputation
-
-Two scores drive the system.
-
-**Reputation score** (`packages/registry/src/reputation.ts`, `calculateScore`):
-a 0-100 score on each `AgentRecord`, recomputed after every job.
-
-| Factor | Weight |
-|---|---|
-| Success rate | 40% |
-| Average quality rating (1-5) | 35% |
-| Speed | 15% |
-| Experience bonus (jobs completed, capped at 50) | 10% |
-
-**Selection score** (`packages/orchestrator/src/selector.ts`, `scoreAgents`):
-used when choosing which agent fills a step.
-
-| Factor | Weight |
-|---|---|
-| Capability match | 35% |
-| Reputation score | 30% |
-| Price efficiency | 15% |
-| Latency | 10% |
-| Discovery bonus (agents with < 5 jobs) | 10% |
-
-After each step, `packages/orchestrator/src/rater.ts` asks the LLM to rate the
-output 1-5 (defaulting to 3 on error), and the executor posts that feedback to
-the registry's `POST /feedback` endpoint.
+Beyond direct vault-settled releases, an agent can pay **external** x402 or MPP
+services with `createAgentWallet`: the vault tops up the agent's own key in bounded
+amounts under the policy, and the agent signs the outbound payment. Because
+`@x402/stellar` settles testnet payments in the same Circle USDC the vault
+dispenses, the two economies compose without a swap, and the platform still never
+holds the agent's key. `createPayingFetch` / `withX402` / `withMpp` in the SDK
+implement the client and server sides.
 
 ## Data persistence
 
-The registry and orchestrator persist state as JSON files under `data/`
-(gitignored, created at runtime):
-
-| File | Written by | Contents |
-|---|---|---|
-| `data/registry.json` | `registry/src/store.ts` | Agent manifests and reputation |
-| `data/orchestrators.json` | `orchestrator/src/orchestrator-store.ts` | Per-user orchestrator wallet records, including secret keys in plaintext (a known pre-production gap, see [SECURITY.md](../SECURITY.md)) |
-| `data/vault-ledger.json` | `orchestrator/src/vault-ledger.ts` | Deposit, withdrawal, and payment ledger for the dashboard |
-| `data/activity-log.json` | `orchestrator/src/activity-store.ts` | Recent task lifecycle events |
-| `data/task-results.json` | `orchestrator/src/task-results.ts` | Completed task results |
-
-These stores have no file-locking yet, so concurrent writes can race. See the
-open issues for planned fixes.
+- **PostgreSQL (Prisma)** is the system of record for users, tasks, steps,
+  payments, policies (commitment + optional rule summary), API keys, webhooks, the
+  balance mirror, and the audit log. The delegate secret is stored **AES-256-GCM
+  encrypted** (`packages/db` secret crypto), never in the clear.
+- **Redis** backs BullMQ (execution, proofs, settlement), the shared rate limiter,
+  the cross-process settlement lock, and the Socket.IO adapter for live updates.
 
 ## Where it is headed
 
-Per [ROADMAP.md](../ROADMAP.md), the next steps are private spending policies in
-CleverVault, an on-chain agent registry, a Stellar MCP server, a reusable agent
-SDK, and a pluggable LLM provider interface. See
-[CONTRIBUTING.md](../CONTRIBUTING.md) for priority areas.
+Per [ROADMAP.md](../ROADMAP.md): full on-chain ZK verification (pending Stellar
+pairing precompiles), a security audit, mainnet with a testnet/mainnet switch,
+published SDK + MCP on npm, and real design-partner traction. Longer term,
+confidential amounts and counterparties (pending Stellar confidential tokens).

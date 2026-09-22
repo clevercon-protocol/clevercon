@@ -1,5 +1,13 @@
 ﻿# Vault Reconciliation
 
+> **Legacy (earlier hackathon stack).** This describes the `packages/orchestrator`
+> JSON-ledger reconciliation and `contracts/budget-guardian`, neither of which is
+> part of the production stack. There the on-chain vault is the sole source of truth
+> and the balance mirror the API serves is derived directly from CleverVault events
+> by `services/indexer` (a resumable cursor), so there is no off-chain ledger to
+> reconcile. A production-grade reconciliation/monitoring pass over the indexer
+> mirror is a future ops item (see [ROADMAP.md](../ROADMAP.md)). Kept for history.
+
 `packages/orchestrator/src/reconciliation.ts` reconciles the off-chain vault
 ledger (`vault-ledger.ts`) against the on-chain AgentVault contract, which is
 treated as the source of truth.

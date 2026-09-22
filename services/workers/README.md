@@ -1,8 +1,9 @@
 # `@clevercon/workers`
 
-The BullMQ worker layer (Phase 1 scalable core). Slow or at-risk work, task
-execution, and later proof jobs and settlement, runs here off the request path,
-with retries, backoff, and idempotency, so the API stays stateless and fast.
+The BullMQ worker layer. Slow or at-risk work runs here off the request path with
+retries, backoff, and idempotency, so the API stays fast: **task execution**
+(hires), **proof generation**, and **exactly-once settlement** (the on-chain budget
+lock, proof-gated release, and finalization), all signed by the user's delegate.
 
 ## Task-execution worker
 
@@ -16,8 +17,26 @@ with retries, backoff, and idempotency, so the API stays stateless and fast.
   Idempotent (released steps and terminal tasks are skipped), so BullMQ retries
   never double-execute.
 
-On-chain payment/settlement per released step (x402 / vault release) is a
-separate job, not done here, so no `Payment` rows are fabricated.
+## Settlement worker
+
+- **Producer:** the API (`enqueueSettlement`) enqueues one job per released step of
+  a pay/disburse; the executor enqueues one per released hire step. The job id is the
+  step id, so a step is never settled twice.
+- **Consumer (`src/settlement.ts`):** as the user's delegate, lock the task budget
+  on-chain lazily on the first step to settle (the async lock, inside a per-signer
+  mutex so a signer's transactions never race the sequence number), then
+  `release_payment_proved` the step (proof-gated, paid directly to the payee) and
+  record a `Payment` mirror **only after a real on-chain release**, never fabricated.
+  Idempotent by (task, step) plus a unique mirror key; transient failures retry with
+  backoff, deterministic ones fail the task fast. Once every released step has
+  settled, `finalizeTaskIfComplete` calls `complete_task` to unlock the remainder and
+  refund, and notifies the buyer's webhooks.
+
+## Proof-generation worker
+
+Builds the policy inputs and binding proof for a release (`src/prover.ts`); that
+proof is submitted with `release_payment_proved` and checked on-chain by the
+PolicyVerifier before any funds move.
 
 ## Run
 

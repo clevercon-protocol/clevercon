@@ -427,10 +427,11 @@ specialist could be:
 - A human-in-the-loop service (tasks fulfilled by a human for USDC payment)
 - Any other service that can accept a task query and return a structured result
 
-Use one of the existing agents (e.g. `packages/agents/stellar-oracle`) as a
-reference for the manifest schema, payment middleware wiring, and
-self-registration pattern. The `@clevercon/agent-sdk` package (Phase 3 on the
-roadmap) will eventually package this scaffolding so you don't have to copy it.
+The `@clevercon/agent-sdk` package provides this scaffolding so you do not have to
+copy it: `createProvider` (a hireable service the vault settles on-chain per step)
+and `createAgent` (a standalone x402/MPP paywall). See its
+[README](../packages/agent-sdk/README.md); `services/reference-provider` is a live
+example built on `createProvider`.
 
 ## Debugging
 

@@ -92,7 +92,7 @@ Two kinds of conditions: **spending bounds** (caps, allowlist, budget, time wind
 ### Two ways funds move
 
 - **Direct (registered services and any Stellar address you allowlist):** the vault pays the payee directly under your policy. Strongest guarantee: payee and amount are enforced on-chain, and the platform never holds funds.
-- **Agent-key (the open x402/MPP economy):** the vault tops up your agent's own key in bounded amounts under your policy, and your agent signs the external payment. This reaches services outside CleverCon while the budget and privacy stay enforced; the platform still never holds funds. (Foundation shipped; the top-up and external-payment leg is the next build.)
+- **Agent-key (the open x402/MPP economy):** the vault tops up your agent's own key in bounded amounts under your policy, and your agent signs the external payment. This reaches services outside CleverCon while the budget and privacy stay enforced; the platform still never holds funds. Implemented and proven end to end on testnet: `createAgentWallet` in the SDK unites the governed top-up with an x402-paying fetch, and the vault, agent wallet, and external x402 service all settle in the same Stellar USDC through the public facilitator.
 
 ### Hiring services (one application)
 
@@ -121,9 +121,9 @@ The directory is discovery, not the product. The product is the spending-control
 - **Web app**: connect a wallet, add a USDC trustline, fund the vault, create a private policy, hire services, request a compliance proof, and watch releases settle, all live.
 - **Service directory**: browse, search, filter, and sort a curated set of automated services an agent can hire (discovery, not a two-sided marketplace).
 - **Admin console**: monitoring, user and role management, on-chain protocol-fee config, service moderation, and dispute arbitration.
-- **Developer platform**: API keys with quotas, signed webhooks, a provider **SDK** (`@clevercon/agent-sdk`), and a Stellar **MCP server** (`@clevercon/mcp`, 10 tools) that hires and tracks tasks on the live rail.
+- **Developer platform**: API keys with quotas, signed webhooks, an **SDK** (`@clevercon/agent-sdk`: `createSpender` for a bounded spending account, `createAgentWallet` for x402 agent-key mode, `createProvider`/`createAgent` to be a paid service), and a Stellar **MCP server** (`@clevercon/mcp`, 12 tools) that pays, disburses, hires, and tracks on the live rail.
 
-**Proven end to end:** a full paid hire on testnet, where a real provider endpoint fulfilled a step and earned USDC through a proof-gated vault release.
+**Proven end to end:** a headless testnet harness (`scripts/e2e-testnet.ts`, 29 stages) drives the whole loop with a fresh keypair and no browser: fund, set a policy, authorize the delegate, pay, disburse, hire a live provider, spend via the SDK and MCP, top up an agent wallet and pay an external x402 service, receive a signed webhook, retry idempotently, then withdraw. Every stage is a real on-chain settlement.
 
 **Recognition:** placed 2nd in the Stellar Agents hackathon.
 
@@ -145,8 +145,8 @@ clevercon/
 ├── packages/
 │   ├── common/                shared types, policy-input encoding, binding-proof prover
 │   ├── db/                    Prisma schema, client, secret crypto
-│   ├── agent-sdk/             provider + agent SDK (createProvider, createAgent)
-│   └── mcp/                   Stellar MCP server (discovery, vault, and hire-flow tools)
+│   ├── agent-sdk/             SDK: createSpender, createAgentWallet, createProvider, createAgent
+│   └── mcp/                   Stellar MCP server (spend, disburse, hire, limits, budget: 12 tools)
 └── docs/                      architecture, private-policies spec, development
 ```
 
@@ -157,11 +157,11 @@ Public demo: [`packages/dashboard`](packages/dashboard) is a lightweight wallet-
 | Layer | Technology |
 |---|---|
 | Smart contracts | Rust / Soroban (CleverVault, PolicyVerifier, Registry) |
-| Zero-knowledge | Binding-proof prover today; full Noir / RISC Zero circuit on the roadmap, verified on-chain |
+| Zero-knowledge | Noir circuit (`circuits/spend-policy`) built and proven in CI; on-chain verification is a binding check today, full pairing verification pending Stellar precompiles |
 | Frontend | React 19, Vite, Tailwind, TanStack Query, Zustand |
 | API | NestJS 11 (ESM + swc), PostgreSQL + Prisma, SEP-10 auth, RBAC |
 | Async | Redis + BullMQ (execution, proofs, settlement), Socket.IO + Redis adapter |
-| Payments | Direct vault-settled USDC releases (proof-gated) to allowlisted addresses; agent-key mode for the external x402 / MPP economy (foundation shipped, payment leg on the roadmap) |
+| Payments | Direct vault-settled USDC releases (proof-gated) to allowlisted addresses; agent-key mode for the external x402 / MPP economy (implemented, proven on testnet via `createAgentWallet`) |
 | Wallets | `@creit.tech/stellar-wallets-kit` (Freighter, xBull, Albedo, LOBSTR, Rabet) |
 | Chain access | `@stellar/stellar-sdk`, Soroban RPC, Horizon |
 

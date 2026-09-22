@@ -1,7 +1,7 @@
 {
   "name": "@clevercon/mcp",
   "version": "1.0.0",
-  "description": "Stellar MCP server exposing agent discovery, vault views, and payment helpers",
+  "description": "Stellar MCP server: give an AI agent a bounded, non-custodial spending account (pay, disburse, hire, set limits, read budget and activity)",
   "type": "module",
   "main": "dist/server.js",
   "bin": {
