@@ -229,3 +229,5 @@ Longer-term: confidential amounts and counterparties (pending Stellar confidenti
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+<!-- Updated documentation reference -->
