@@ -4,8 +4,8 @@
   "type": "module",
   "main": "./src/server.ts",
   "scripts": {
-    "dev": "npx tsx src/server.ts",
-    "start": "node dist/server.js"
+    "dev": "node init && npx tsx src/server.ts",
+    "start": "node init && node dist/server.js"
   },
   "dependencies": {
     "@clevercon/common": "*",
