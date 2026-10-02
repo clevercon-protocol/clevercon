@@ -2,7 +2,6 @@
 node_modules/
 
 # Environment & secrets
-.env
 wallets.json
 
 # Build output
@@ -26,11 +25,10 @@ contracts/*/test_snapshots/
 Thumbs.db
 
 # Editor
-.vscode/settings.json
 .idea/
 
 # Internal working files
 .local/
 circuits/*/target/
-.env.local
 .env.*.local
+config.bat

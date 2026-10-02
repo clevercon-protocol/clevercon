@@ -9,8 +9,8 @@
     "./queue": "./src/queue.ts"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "node init && tsx watch src/index.ts",
+    "start": "node init && tsx src/index.ts",
     "test": "vitest run"
   },
   "dependencies": {

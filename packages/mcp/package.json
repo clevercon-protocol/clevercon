@@ -8,9 +8,9 @@
     "clevercon-mcp": "dist/server.js"
   },
   "scripts": {
-    "dev": "npx tsx src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js",
+    "dev": "node init && npx tsx src/server.ts",
+    "build": "node init && tsc",
+    "start": "node init && node dist/server.js",
     "test": "node test-server.mjs"
   },
   "dependencies": {
