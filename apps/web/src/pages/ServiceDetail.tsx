@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { getService, getPlatformFeeBps, tierLabel, verificationBlurb } from '../lib/services';
 import { createTask } from '../lib/tasks';
+import { getDelegate } from '../lib/vault';
 import { uploadFile } from '../lib/uploads';
 
 function HireBox({ serviceId, serviceName }: { serviceId: string; serviceName: string }) {
@@ -24,6 +25,7 @@ function HireBox({ serviceId, serviceName }: { serviceId: string; serviceName: s
   const [budget, setBudget] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const { data: feeBps = 0 } = useQuery({ queryKey: ['platform-fee'], queryFn: getPlatformFeeBps });
+  const { data: delegate } = useQuery({ queryKey: ['delegate'], queryFn: getDelegate });
 
   const hire = useMutation({
     mutationFn: async () => {
@@ -107,6 +109,15 @@ function HireBox({ serviceId, serviceName }: { serviceId: string; serviceName: s
       {hire.error && (
         <p className="mt-2 text-sm text-red-400">
           {(hire.error as Error).message || 'Could not create the job.'}
+        </p>
+      )}
+      {delegate && !delegate.registered && (
+        <p className="mt-2 text-xs text-amber-300">
+          Autopay is off, so this hire will run but won&apos;t pay the provider until you{' '}
+          <Link to="/app/vault" className="underline hover:text-amber-200">
+            enable Autopay
+          </Link>
+          .
         </p>
       )}
     </form>

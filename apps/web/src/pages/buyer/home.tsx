@@ -156,7 +156,7 @@ export function CommandChat() {
   const idRef = useRef(2);
   const nextId = () => idRef.current++;
   const [messages, setMessages] = useState<Msg[]>([{ id: 1, role: 'agent', text: AGENT_INTRO }]);
-  // Keep the conversation scrolled to the newest message (it sits below the composer).
+  // Keep the conversation scrolled to the newest message (it sits above the composer).
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = scrollRef.current;
@@ -253,8 +253,23 @@ export function CommandChat() {
     let bind = currentBind();
     let appliedLimit = applied;
     const extracted = result.limit;
-    if (extracted && (extracted.perPaymentCeilingUsdc || extracted.rollingCapUsdc)) {
-      const d = draftFromSuggested(extracted);
+    // Pick the enforced limit for this plan, in priority order:
+    //  1. a limit the agent READ from the words ("max 500 each"),
+    //  2. else, if the buyer has no saved default, DERIVE a concrete per-payment
+    //     ceiling from the plan's own amounts — so the boundary is always a real
+    //     number the buyer can see and edit, never a vague "within budget only".
+    // An explicitly chosen saved limit is left untouched.
+    const amounts =
+      result.kind === 'hire' ? [result.budget] : result.lines.map((l) => l.amount);
+    const derivedCeiling = amounts.length ? Math.max(...amounts) : 0;
+    const adopt =
+      extracted && (extracted.perPaymentCeilingUsdc || extracted.rollingCapUsdc)
+        ? extracted
+        : limitChoice === 'default' && !defaultPolicy && derivedCeiling > 0
+          ? { perPaymentCeilingUsdc: derivedCeiling }
+          : null;
+    if (adopt) {
+      const d = draftFromSuggested(adopt);
       setCustomDraft(d);
       setLimitChoice('custom');
       bind = { draft: d };
@@ -518,9 +533,10 @@ export function CommandChat() {
         hint="It proposes a plan; you approve; the vault enforces the limit you pick"
       />
       <div className="flex flex-col p-5">
-        {/* Conversation — rendered below the composer (order-2) so the input is the
-            first thing on the page; scrolls to the newest and can be cleared. */}
-        <div className="order-2 mt-5 border-t border-line pt-4">
+        {/* Conversation sits ABOVE the composer and auto-scrolls to the newest
+            message, so a reply lands right over the input and you can keep typing
+            without scrolling. */}
+        <div className="mb-4">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-slate-500">
               Conversation
@@ -534,7 +550,10 @@ export function CommandChat() {
               </button>
             )}
           </div>
-          <div ref={scrollRef} className="max-h-[20rem] space-y-3 overflow-y-auto pr-1">
+          <div
+            ref={scrollRef}
+            className="max-h-[22rem] min-h-[8rem] space-y-3 overflow-y-auto pr-1"
+          >
             {messages.map((m) => (
               <ChatBubble
                 key={m.id}
@@ -546,8 +565,8 @@ export function CommandChat() {
           </div>
         </div>
 
-        {/* Composer (order-1 = top) */}
-        <div className="order-1">
+        {/* Composer, pinned below the conversation. */}
+        <div className="border-t border-line pt-4">
           {/* Natural language: the agent parses it into a plan. The instruction
               bar is the focal hero of this page, so give it an accented panel. */}
           <div className="rounded-2xl border border-violet-500/20 bg-violet-500/[0.05] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
@@ -563,9 +582,9 @@ export function CommandChat() {
                   askAgent();
                 }
               }}
-              rows={5}
+              rows={3}
               placeholder="e.g. Pay GC3F… 420 USDC for design and MEI… 275 for docs — max 500 each. Or: split 900 USDC evenly between these three addresses."
-              className="cc-input mt-1.5 min-h-[9rem] w-full resize-none text-base leading-relaxed"
+              className="cc-input mt-1.5 min-h-[5.5rem] w-full resize-none text-base leading-relaxed"
             />
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -579,14 +598,18 @@ export function CommandChat() {
                 aria-label="Limit the vault enforces for this instruction"
               >
                 <option value="default">
-                  {defaultPolicy ? `Default · ${describeSavedLimit(defaultPolicy)}` : 'Budget only'}
+                  {defaultPolicy
+                    ? `Default · ${describeSavedLimit(defaultPolicy)}`
+                    : 'Auto · derive a cap from the plan'}
                 </option>
                 {policies.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.isPrivate ? 'Private' : 'Transparent'} · {describeSavedLimit(p)}
                   </option>
                 ))}
-                {defaultPolicy && <option value="none">No limit (budget only)</option>}
+                {defaultPolicy && (
+                  <option value="none">No extra limit (up to vault balance)</option>
+                )}
               </select>
               <Link to="/app/limits" className="text-xs text-violet-300 hover:text-violet-200">
                 Manage limits
@@ -755,7 +778,7 @@ export function CommandChat() {
                     <option value="default">
                       {defaultPolicy
                         ? `Default limit · ${describeSavedLimit(defaultPolicy)}`
-                        : 'Budget only (no extra limit)'}
+                        : 'Auto · derive a cap from the amounts'}
                     </option>
                     {policies.map((p) => (
                       <option key={p.id} value={p.id}>
@@ -763,7 +786,9 @@ export function CommandChat() {
                       </option>
                     ))}
                     <option value="custom">Custom limit for this instruction…</option>
-                    {defaultPolicy && <option value="none">No limit (within budget only)</option>}
+                    {defaultPolicy && (
+                      <option value="none">No extra limit (up to vault balance)</option>
+                    )}
                   </select>
                   <Link
                     to="/app/limits"

@@ -11,8 +11,10 @@ import {
   CheckCircle2,
   Sparkles,
   Download,
+  AlertTriangle,
 } from 'lucide-react';
 import { getTask, raiseDispute, approveTask, type TaskDetail as TaskDetailData } from '../lib/tasks';
+import { getDelegate } from '../lib/vault';
 import { config } from '../config';
 
 const EXPLORER_NET = config.network === 'mainnet' ? 'public' : 'testnet';
@@ -108,6 +110,49 @@ function ReviewBanner({ task }: { task: TaskDetailData }) {
   );
 }
 
+/**
+ * Shown when a job finished running but no payment settled on-chain (spent is 0).
+ * The usual cause is Autopay being off, so the vault can't pay the provider on
+ * the buyer's behalf, or an unfunded vault. We say so plainly rather than letting
+ * a "COMPLETED" badge imply money moved.
+ */
+function UnpaidBanner({ task }: { task: TaskDetailData }) {
+  const { data: delegate } = useQuery({ queryKey: ['delegate'], queryFn: getDelegate });
+  const ranUnpaid = task.status === 'COMPLETED' && task.spent === 0 && task.budget > 0;
+  if (!ranUnpaid) return null;
+  const autopayOff = delegate ? !delegate.registered : false;
+  return (
+    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-4">
+      <div className="flex items-start gap-2">
+        <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-300" />
+        <div className="text-sm text-slate-300">
+          <div className="font-medium text-amber-200">Completed, but no payment settled</div>
+          {autopayOff ? (
+            <p className="mt-1 text-xs text-slate-400">
+              The job ran, but <span className="text-slate-300">Autopay is off</span>, so the vault
+              couldn&apos;t pay the provider on your behalf. No funds moved and no receipt was
+              created.{' '}
+              <Link to="/app/vault" className="text-violet-300 hover:text-violet-200">
+                Enable Autopay
+              </Link>{' '}
+              so future hires settle automatically.
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-slate-400">
+              The job ran, but nothing settled on-chain yet. If your vault is funded and Autopay is
+              on, settlement may still be processing; otherwise check your{' '}
+              <Link to="/app/vault" className="text-violet-300 hover:text-violet-200">
+                vault balance
+              </Link>
+              .
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const STATUS_TINT: Record<string, string> = {
   RUNNING: 'text-sky-300',
   RELEASED: 'text-emerald-300',
@@ -183,6 +228,7 @@ export function TaskDetail() {
           </div>
 
           {task.awaitingApproval && <ReviewBanner task={task} />}
+          <UnpaidBanner task={task} />
 
           <div className="grid grid-cols-3 gap-3">
             {[

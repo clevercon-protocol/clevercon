@@ -172,12 +172,18 @@ export class TasksService {
       idempotencyKey: params.idempotencyKey ?? null,
     };
 
+    // The provider address a direct hire pays, so a hire with no explicit limit
+    // still gets a tight derived one (pay only this provider, up to the budget)
+    // and can lock + settle on-chain like a payment, instead of running unpaid.
+    let directPayee: string | null = null;
+
     if (params.mode === TaskMode.DIRECT) {
       if (!params.serviceId) {
         throw new BadRequestException('A direct hire needs a serviceId');
       }
       const service = await this.prisma.service.findUnique({ where: { id: params.serviceId } });
       if (!service) throw new BadRequestException('Unknown service');
+      directPayee = service.stellarAddress ?? null;
       data.steps = {
         create: [
           {
@@ -220,10 +226,24 @@ export class TasksService {
       }
       throw err;
     }
-    // If a policy is attached, lock the budget on-chain under it before running,
-    // so released steps can settle to providers via the delegate. Best-effort.
-    if (params.policyId) {
-      await this.lockOnChain(userId, created.id, params.policyId, params.budget);
+    // Resolve the bounding policy: the chosen one, or (for a direct hire with no
+    // explicit limit) a tight derived one so the hire can lock + settle rather
+    // than run unpaid. Then lock the budget on-chain under it. Best-effort.
+    let policyId = params.policyId;
+    if (!policyId && params.mode === TaskMode.DIRECT && directPayee && this.policies) {
+      try {
+        const derived = await this.policies.create(userId, {
+          rules: { allowlist: [directPayee], perPaymentCeilingUsdc: params.budget },
+          isPrivate: false,
+        });
+        policyId = derived.id;
+      } catch {
+        // If deriving a policy fails, the task still runs; it just won't settle,
+        // which the task view surfaces honestly.
+      }
+    }
+    if (policyId) {
+      await this.lockOnChain(userId, created.id, policyId, params.budget);
     }
     // A task with steps (a DIRECT hire) is ready to run now; hand it to the
     // worker queue. SEARCH/COMPOSE have no steps yet (planning is a later job).
