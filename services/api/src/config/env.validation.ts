@@ -36,6 +36,10 @@ export const envSchema = z.object({
   // "not configured" instead of touching the chain.
   AGENT_VAULT_CONTRACT_ID: z.string().optional(),
   STELLAR_RPC_URL: z.string().url().default('https://soroban-testnet.stellar.org'),
+  // Horizon (classic) endpoint + the classic USDC issuer the vault's SAC wraps,
+  // used to check a provider payout wallet has a USDC trustline (can receive USDC).
+  HORIZON_URL: z.string().url().default('https://horizon-testnet.stellar.org'),
+  USDC_ISSUER: z.string().default('GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5'),
   USDC_SAC: z.string().optional(),
   // Deployed policy-verifier (Phase 3). When set, the app knows which on-chain
   // verifier gates proof-backed releases; the vault's set_policy_verifier must

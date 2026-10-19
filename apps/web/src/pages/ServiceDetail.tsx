@@ -14,30 +14,54 @@ import {
   Paperclip,
   X,
 } from 'lucide-react';
-import { getService, getPlatformFeeBps, tierLabel, verificationBlurb } from '../lib/services';
+import {
+  getService,
+  getPlatformFeeBps,
+  tierLabel,
+  verificationBlurb,
+  type JsonSchema,
+} from '../lib/services';
 import { createTask } from '../lib/tasks';
 import { getDelegate } from '../lib/vault';
 import { uploadFile } from '../lib/uploads';
 
-function HireBox({ serviceId, serviceName }: { serviceId: string; serviceName: string }) {
+function HireBox({
+  serviceId,
+  serviceName,
+  inputSchema,
+}: {
+  serviceId: string;
+  serviceName: string;
+  inputSchema: JsonSchema | null;
+}) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [budget, setBudget] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  // Values the buyer types for the service's declared inputs (e.g. data, address).
+  const [fields, setFields] = useState<Record<string, string>>({});
   const { data: feeBps = 0 } = useQuery({ queryKey: ['platform-fee'], queryFn: getPlatformFeeBps });
   const { data: delegate } = useQuery({ queryKey: ['delegate'], queryFn: getDelegate });
 
+  const props = inputSchema?.properties ?? {};
+  const propKeys = Object.keys(props);
+  const required = inputSchema?.required ?? [];
+  const missingRequired = required.filter((k) => !fields[k]?.trim());
+
   const hire = useMutation({
     mutationFn: async () => {
-      // Attach a file (if any) first: upload straight to R2, then hire with the
-      // resulting ArtifactRef as the job input for the provider.
-      const input = file ? { attachment: await uploadFile(file) } : undefined;
+      // Build the job input: the service's declared fields (non-empty) plus an
+      // optional uploaded attachment (direct to R2). The provider receives this.
+      const input: Record<string, unknown> = {};
+      for (const k of propKeys) if (fields[k]?.trim()) input[k] = fields[k].trim();
+      if (file) input.attachment = await uploadFile(file);
+      const hasInput = Object.keys(input).length > 0;
       return createTask({
         title: `Pay ${serviceName}`,
         mode: 'DIRECT',
         budget: Number(budget),
         serviceId,
-        ...(input ? { input } : {}),
+        ...(hasInput ? { input } : {}),
       });
     },
     onSuccess: (task) => {
@@ -47,7 +71,12 @@ function HireBox({ serviceId, serviceName }: { serviceId: string; serviceName: s
   });
 
   const budgetNum = Number(budget);
-  const canSubmit = budget !== '' && Number.isFinite(budgetNum) && budgetNum > 0 && !hire.isPending;
+  const canSubmit =
+    budget !== '' &&
+    Number.isFinite(budgetNum) &&
+    budgetNum > 0 &&
+    missingRequired.length === 0 &&
+    !hire.isPending;
 
   return (
     <form
@@ -76,6 +105,20 @@ function HireBox({ serviceId, serviceName }: { serviceId: string; serviceName: s
         placeholder="Budget (USDC)"
         className="mt-4 w-full rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
       />
+      {propKeys.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <div className="text-[11px] uppercase tracking-wider text-slate-500">Job input</div>
+          {propKeys.map((k) => (
+            <input
+              key={k}
+              value={fields[k] ?? ''}
+              onChange={(e) => setFields((f) => ({ ...f, [k]: e.target.value }))}
+              placeholder={`${k}${required.includes(k) ? ' (required)' : ''}${props[k]?.description ? ` — ${props[k].description}` : ''}`}
+              className="w-full rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
+            />
+          ))}
+        </div>
+      )}
       {file ? (
         <div className="mt-3 flex items-center gap-2 rounded-lg bg-black/30 px-3 py-2 text-xs text-slate-300">
           <Paperclip size={12} className="shrink-0 text-violet-300" />
@@ -254,7 +297,11 @@ export function ServiceDetail() {
               </dl>
             </div>
 
-            <HireBox serviceId={service.id} serviceName={service.name} />
+            <HireBox
+              serviceId={service.id}
+              serviceName={service.name}
+              inputSchema={service.inputSchema}
+            />
           </div>
         </>
       )}

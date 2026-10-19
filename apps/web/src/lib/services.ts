@@ -164,6 +164,12 @@ export async function getServices(params: ServiceQuery = {}): Promise<ServicePag
   return { items: res.items.map(mapApiService), total: res.total };
 }
 
+export interface JsonSchema {
+  type?: string;
+  required?: string[];
+  properties?: Record<string, { type?: string; description?: string }>;
+}
+
 export interface ServiceDetail extends Service {
   capabilities: string[];
   pricingModel: string;
@@ -172,6 +178,8 @@ export interface ServiceDetail extends Service {
   status: string;
   totalJobs: number;
   avgLatencyMs: number | null;
+  // What a job takes, so the hire form can collect it.
+  inputSchema: JsonSchema | null;
 }
 
 interface ApiServiceDetail extends ApiService {
@@ -179,6 +187,7 @@ interface ApiServiceDetail extends ApiService {
   currency: string;
   endpoint: string;
   status: string;
+  inputSchema?: JsonSchema | null;
   reputation: { score: number; totalJobs: number; avgLatencyMs: number } | null;
 }
 
@@ -206,6 +215,7 @@ export async function getService(id: string): Promise<ServiceDetail> {
       status: 'ACTIVE',
       totalJobs: 42,
       avgLatencyMs: 780,
+      inputSchema: null,
     };
   }
   const s = await apiFetch<ApiServiceDetail>(`/services/${id}`);
@@ -229,6 +239,7 @@ export async function getService(id: string): Promise<ServiceDetail> {
     status: s.status,
     totalJobs: s.reputation?.totalJobs ?? 0,
     avgLatencyMs: s.reputation?.avgLatencyMs ?? null,
+    inputSchema: s.inputSchema ?? null,
   };
 }
 

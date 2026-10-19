@@ -4,6 +4,7 @@ import { Prisma, PaymentStatus, PricingModel, Role, ServiceStatus } from '@cleve
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegistryContractService } from './registry-contract.service.js';
 import { issuePayoutChallenge, verifyPayoutOwnership } from './payout-proof.js';
+import { hasUsdcTrustline } from './trustline.js';
 
 const ZERO = new Prisma.Decimal(0);
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -95,7 +96,7 @@ function trustTier(
   return 'new';
 }
 
-function serializeService(s: ServiceWithRep, uniquePayers = 0) {
+function serializeService(s: ServiceWithRep, uniquePayers = 0, payoutReady: boolean | null = null) {
   const rep = s.reputation;
   const settlements = rep?.successfulJobs ?? 0;
   const score = rep?.score ?? 0;
@@ -117,6 +118,8 @@ function serializeService(s: ServiceWithRep, uniquePayers = 0) {
     uniquePayers,
     disputes: rep?.disputes ?? 0,
     disputesUpheld,
+    // Whether the payout wallet can receive USDC (has the trustline). null = unknown.
+    payoutReady,
     reputation: rep
       ? { score: rep.score, totalJobs: rep.totalJobs, avgLatencyMs: rep.avgLatencyMs }
       : null,
@@ -203,7 +206,10 @@ export class ProviderService {
       created.manifestHash ?? '',
       created.stellarAddress,
     );
-    return serializeService(created);
+    // Flag immediately if the payout wallet can't receive USDC yet, so the
+    // provider adds a trustline before buyers hire and the hire silently refunds.
+    const payoutReady = await hasUsdcTrustline(created.stellarAddress);
+    return serializeService(created, 0, payoutReady);
   }
 
   /**
@@ -300,8 +306,18 @@ export class ProviderService {
         // degrade to zero unique payers
       }
     }
+    // Payout readiness per DISTINCT address (one Horizon check each), so a provider
+    // sees which services can actually be paid. Best-effort; unknown on error.
+    const ready = new Map<string, boolean | null>();
+    await Promise.all(
+      [...new Set(rows.map((r) => r.stellarAddress))].map(async (addr) => {
+        ready.set(addr, await hasUsdcTrustline(addr));
+      }),
+    );
     return {
-      items: rows.map((r) => serializeService(r, payers.get(r.id) ?? 0)),
+      items: rows.map((r) =>
+        serializeService(r, payers.get(r.id) ?? 0, ready.get(r.stellarAddress) ?? null),
+      ),
       total: rows.length,
     };
   }

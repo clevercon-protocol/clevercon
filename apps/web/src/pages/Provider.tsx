@@ -407,6 +407,14 @@ function ServicesCard() {
                           {s.disputesUpheld}/{s.disputes} disputes upheld
                         </span>
                       )}
+                      {s.payoutReady === false && (
+                        <span
+                          className="font-semibold text-amber-300"
+                          title="This service's payout wallet has no USDC trustline, so a hire can't pay it and will refund. Add a USDC trustline to the payout address."
+                        >
+                          ⚠ no USDC trustline (can&apos;t be paid)
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">

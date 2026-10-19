@@ -15,6 +15,8 @@ export interface ProviderServiceItem {
   uniquePayers: number;
   disputes: number;
   disputesUpheld: number;
+  // Whether the payout wallet can receive USDC (has a trustline). null = unknown.
+  payoutReady: boolean | null;
 }
 
 export interface ProviderJob {
@@ -46,6 +48,7 @@ interface ApiProviderService {
   uniquePayers?: number;
   disputes?: number;
   disputesUpheld?: number;
+  payoutReady?: boolean | null;
   reputation: { score: number } | null;
 }
 
@@ -65,6 +68,7 @@ export async function getProviderServices(): Promise<ProviderServiceItem[]> {
       uniquePayers: 3,
       disputes: 0,
       disputesUpheld: 0,
+      payoutReady: true,
     }));
   }
   const res = await apiFetch<{ items: ApiProviderService[] }>('/provider/services');
@@ -81,6 +85,7 @@ export async function getProviderServices(): Promise<ProviderServiceItem[]> {
     uniquePayers: s.uniquePayers ?? 0,
     disputes: s.disputes ?? 0,
     disputesUpheld: s.disputesUpheld ?? 0,
+    payoutReady: s.payoutReady ?? null,
   }));
 }
 
@@ -158,6 +163,7 @@ const DEMO_TRUST = {
   uniquePayers: 0,
   disputes: 0,
   disputesUpheld: 0,
+  payoutReady: true,
 };
 
 function mapService(s: ApiProviderService): ProviderServiceItem {
@@ -174,6 +180,7 @@ function mapService(s: ApiProviderService): ProviderServiceItem {
     uniquePayers: s.uniquePayers ?? 0,
     disputes: s.disputes ?? 0,
     disputesUpheld: s.disputesUpheld ?? 0,
+    payoutReady: s.payoutReady ?? null,
   };
 }
 
