@@ -204,11 +204,15 @@ export async function executeTask(
 
     const started = Date.now();
     const input = (step.input as Record<string, unknown> | null) ?? {};
+    // Providers dispatch on the service's CAPABILITY (e.g. "data.hash"), not the
+    // step's display label ("Pay <name>"). Send the first declared capability so
+    // the right handler runs; fall back to the label for capability-less services.
+    const jobAction = step.service?.capabilities?.[0] ?? step.action;
     const request: JobRequestEnvelope = {
       jobId: step.id,
       taskId,
       stepId: step.id,
-      action: step.action,
+      action: jobAction,
       input,
       replyFormat: 'json',
       deadline: Math.floor(Date.now() / 1000) + Math.ceil(STEP_TIMEOUT_MS / 1000),
