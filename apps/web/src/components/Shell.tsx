@@ -20,6 +20,7 @@ import {
 import { useSession, type Role } from '../store/session';
 import { useWalletAuth } from '../auth/useWalletAuth';
 import { DemoBanner } from './DemoBanner';
+import { Toaster } from './Toaster';
 import { config } from '../config';
 
 type Icon = ComponentType<{ size?: number; className?: string }>;
@@ -249,6 +250,7 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="relative min-h-screen text-slate-100">
       <div className="app-ambient" aria-hidden />
+      <Toaster />
 
       {/* Desktop rail */}
       <aside

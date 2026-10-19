@@ -3,6 +3,7 @@ import { io } from 'socket.io-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { config, isDemo } from '../config';
 import { useSession } from '../store/session';
+import { useToasts } from '../store/toasts';
 
 /**
  * Subscribe to server-pushed updates over WebSocket (full mode only). The worker
@@ -41,17 +42,51 @@ export function useRealtime(): void {
       qc.invalidateQueries({ queryKey: ['admin-disputes'] });
       refresh();
     };
-    socket.on('task.updated', refresh);
+    const toast = useToasts.getState().push;
+
+    // Each server event refreshes the relevant data AND surfaces a visible toast,
+    // so a payout / completion / dispute outcome is noticed, not just silently
+    // refetched. Payloads are best-effort; guard every field.
+    const onTask = (p?: { status?: string; settled?: boolean; finalized?: boolean }) => {
+      refresh();
+      if (p?.status === 'completed') toast({ kind: 'success', title: 'Job completed' });
+      else if (p?.status === 'failed') toast({ kind: 'error', title: 'Job failed' });
+      else if (p?.settled || p?.finalized)
+        toast({ kind: 'success', title: 'Payment settled on-chain' });
+    };
+    const onPaid = (p?: { amountUsdc?: number; service?: string }) => {
+      refreshProvider();
+      toast({
+        kind: 'success',
+        title: 'You got paid',
+        body:
+          (typeof p?.amountUsdc === 'number' ? `$${p.amountUsdc.toFixed(2)} USDC` : 'Payment received') +
+          (p?.service ? ` · ${p.service}` : ''),
+      });
+    };
+    const onDisputeOpened = () => {
+      refreshDisputes();
+      toast({ kind: 'info', title: 'Dispute opened', body: 'A job you fulfilled was disputed.' });
+    };
+    const onDisputeResolved = (p?: { upheld?: boolean }) => {
+      refreshDisputes();
+      toast({
+        kind: 'info',
+        title: 'Dispute resolved',
+        body: p?.upheld === true ? 'Refunded to the buyer.' : 'Settled to the provider.',
+      });
+    };
+    socket.on('task.updated', onTask);
     socket.on('proof.updated', refreshProofs);
-    socket.on('job.paid', refreshProvider);
-    socket.on('dispute.opened', refreshDisputes);
-    socket.on('dispute.resolved', refreshDisputes);
+    socket.on('job.paid', onPaid);
+    socket.on('dispute.opened', onDisputeOpened);
+    socket.on('dispute.resolved', onDisputeResolved);
     return () => {
-      socket.off('task.updated', refresh);
+      socket.off('task.updated', onTask);
       socket.off('proof.updated', refreshProofs);
-      socket.off('job.paid', refreshProvider);
-      socket.off('dispute.opened', refreshDisputes);
-      socket.off('dispute.resolved', refreshDisputes);
+      socket.off('job.paid', onPaid);
+      socket.off('dispute.opened', onDisputeOpened);
+      socket.off('dispute.resolved', onDisputeResolved);
       socket.disconnect();
     };
   }, [token, qc]);
