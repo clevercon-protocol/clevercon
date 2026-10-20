@@ -270,6 +270,13 @@ export function CommandChat() {
           : null;
     if (adopt) {
       const d = draftFromSuggested(adopt);
+      // Pin WHO can be paid: for a pay/disburse, the enforced rule should allow
+      // only the plan's payees, not just cap the amount to anyone. (A hire's payee
+      // is the service, bound server-side.) The buyer can still edit this.
+      if (result.kind === 'pay' || result.kind === 'disburse') {
+        const payees = [...new Set(result.lines.map((l) => l.payee).filter(Boolean))];
+        if (payees.length) d.allowlist = payees;
+      }
       setCustomDraft(d);
       setLimitChoice('custom');
       bind = { draft: d };
