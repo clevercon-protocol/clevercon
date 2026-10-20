@@ -90,7 +90,16 @@ export const SERVICES: ServiceDef[] = [
     category: 'Data & Oracles',
     pricePerCall: 0.02,
     tier: 'T1',
-    inputSchema: { type: 'object', required: ['address'], properties: { address: { type: 'string' } } },
+    inputSchema: {
+      type: 'object',
+      required: ['address'],
+      properties: {
+        address: {
+          type: 'string',
+          description: 'A Stellar account (G…) to report its balances and trustlines for',
+        },
+      },
+    },
     outputSchema: { type: 'object', required: ['balances'], properties: { balances: { type: 'array' } } },
     verification: {
       method: 'onchain',
@@ -105,7 +114,13 @@ export const SERVICES: ServiceDef[] = [
     category: 'Compute & Proofs',
     pricePerCall: 0.01,
     tier: 'T1',
-    inputSchema: { type: 'object', required: ['data'], properties: { data: { type: 'string' } } },
+    inputSchema: {
+      type: 'object',
+      required: ['data'],
+      properties: {
+        data: { type: 'string', description: 'Any text to hash and notarize (sha256)' },
+      },
+    },
     outputSchema: { type: 'object', required: ['sha256'], properties: { sha256: { type: 'string' } } },
     verification: { method: 'witness', spec: { predicate: 'sha256' } },
     handler: dataHash,

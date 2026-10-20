@@ -25,6 +25,39 @@ import { createTask } from '../lib/tasks';
 import { getDelegate } from '../lib/vault';
 import { uploadFile } from '../lib/uploads';
 
+/** Turn an input-schema key into a readable label: "walletAddress" -> "Wallet address". */
+function humanizeField(k: string): string {
+  const s = k
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Fallback hint when the schema has no description, keyed off the field name. */
+function fieldHint(k: string): string {
+  const key = k.toLowerCase();
+  if (key.includes('address') || key === 'account' || key.includes('wallet'))
+    return 'The Stellar account this job is about (what to look up) — not a payment; the fee comes from your vault.';
+  if (key.includes('data') || key.includes('text') || key.includes('message') || key.includes('content'))
+    return 'The text/content for the service to process.';
+  if (key.includes('url') || key.includes('endpoint') || key.includes('link'))
+    return 'A URL for the service to fetch.';
+  return 'Input this service needs to run the job.';
+}
+
+/** A concrete example placeholder, keyed off the field name. */
+function placeholderFor(k: string): string {
+  const key = k.toLowerCase();
+  if (key.includes('address') || key === 'account' || key.includes('wallet'))
+    return 'G… (a Stellar account address)';
+  if (key.includes('url') || key.includes('endpoint') || key.includes('link')) return 'https://…';
+  if (key.includes('amount') || key.includes('price')) return 'e.g. 10';
+  if (key.includes('data') || key.includes('text') || key.includes('message') || key.includes('content'))
+    return 'Text to process…';
+  return `Enter ${humanizeField(k).toLowerCase()}`;
+}
+
 function HireBox({
   serviceId,
   serviceName,
@@ -106,16 +139,26 @@ function HireBox({
         className="mt-4 w-full rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
       />
       {propKeys.length > 0 && (
-        <div className="mt-3 space-y-2">
-          <div className="text-[11px] uppercase tracking-wider text-slate-500">Job input</div>
+        <div className="mt-4 space-y-3">
+          <div className="text-[11px] uppercase tracking-wider text-slate-500">
+            What this service needs from you
+          </div>
           {propKeys.map((k) => (
-            <input
-              key={k}
-              value={fields[k] ?? ''}
-              onChange={(e) => setFields((f) => ({ ...f, [k]: e.target.value }))}
-              placeholder={`${k}${required.includes(k) ? ' (required)' : ''}${props[k]?.description ? ` — ${props[k].description}` : ''}`}
-              className="w-full rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
-            />
+            <label key={k} className="block">
+              <span className="text-xs font-medium text-slate-300">
+                {humanizeField(k)}
+                {required.includes(k) && <span className="text-amber-300"> *</span>}
+              </span>
+              <span className="mt-0.5 block text-[11px] text-slate-500">
+                {props[k]?.description ?? fieldHint(k)}
+              </span>
+              <input
+                value={fields[k] ?? ''}
+                onChange={(e) => setFields((f) => ({ ...f, [k]: e.target.value }))}
+                placeholder={placeholderFor(k)}
+                className="mt-1 w-full rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
+              />
+            </label>
           ))}
         </div>
       )}
