@@ -4,7 +4,8 @@
   "type": "module",
   "main": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./rule-model": "./src/rule-model.ts"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^12.3.0"

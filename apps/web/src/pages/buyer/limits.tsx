@@ -25,6 +25,8 @@ import {
   setDefaultLimitId,
   LIMIT_CACHE_PREFIX,
   TEMPLATES,
+  draftClauseBadges,
+  enforcementText,
   type Draft,
 } from './limits-model';
 
@@ -236,6 +238,28 @@ export function LimitsBuilder({ value, onChange }: { value: Draft; onChange: (d:
           </span>
         </span>
       </label>
+
+      {draftClauseBadges(value).length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span className="text-slate-500">On-chain enforcement:</span>
+          {draftClauseBadges(value).map((b, i) => (
+            <span
+              key={i}
+              title={`${b.label}: ${enforcementText(b.status)}`}
+              className={
+                'rounded-md px-1.5 py-0.5 ' +
+                (b.status === 'enforced-now'
+                  ? 'bg-emerald-500/15 text-emerald-300'
+                  : b.status === 'committed-pending'
+                    ? 'bg-amber-500/15 text-amber-300'
+                    : 'bg-slate-500/15 text-slate-300')
+              }
+            >
+              {b.label} · {enforcementText(b.status)}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

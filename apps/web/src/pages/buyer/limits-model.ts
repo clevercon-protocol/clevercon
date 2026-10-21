@@ -1,5 +1,6 @@
 import type { PolicyRules } from '../../lib/policies';
 import type { PolicyBundleRules } from '@clevercon/agent-sdk/prover';
+import { type Rule, type ClauseType, CLAUSE_ENFORCEMENT } from '@clevercon/common/rule-model';
 
 // Non-component helpers for the limits UI, kept out of the component module so
 // React Fast Refresh can hot-update the components cleanly.
@@ -120,6 +121,56 @@ export function draftToRules(d: Draft): { rules: PolicyRules; isPrivate: boolean
       allowlist: d.allowlist.length ? d.allowlist : undefined,
     },
   };
+}
+
+/**
+ * Map the device-local {@link Draft} onto the shared, clause-based {@link Rule}
+ * model from `@clevercon/common`. This is the canonical representation the API
+ * and SDK also consume; here it drives the honest per-clause enforcement badges
+ * so the builder never implies a pending rule is enforced on-chain today.
+ */
+export function draftToRule(d: Draft, name = ''): Rule {
+  const clauses: Rule['clauses'] = [];
+  if (d.perPaymentCeiling) {
+    clauses.push({ type: 'perPaymentMax', usdc: Number(d.perPaymentCeiling) });
+  }
+  const rollSecs = WINDOWS[d.rollingWindow].secs;
+  if (d.rollingCap && rollSecs) {
+    clauses.push({ type: 'rollingCap', usdc: Number(d.rollingCap), windowSecs: rollSecs });
+  }
+  const velSecs = WINDOWS[d.velocityWindow].secs;
+  if (d.velocityCount && velSecs) {
+    clauses.push({ type: 'velocity', maxCount: Number(d.velocityCount), windowSecs: velSecs });
+  }
+  if (d.allowlist.length) {
+    clauses.push({
+      type: 'allowlist',
+      payees: d.allowlist.map((a) => {
+        const cap = d.allowlistCaps[a];
+        return cap ? { address: a, perPayeeCapUsdc: Number(cap) } : { address: a };
+      }),
+    });
+  }
+  return { name, form: d.isPrivate ? 'private' : 'public', status: 'active', version: 1, clauses };
+}
+
+/** A short human label for a clause's enforcement status, for the builder badge. */
+export function enforcementText(status: string): string {
+  if (status === 'enforced-now') return 'on-chain now';
+  if (status === 'committed-pending') return 'pending';
+  return 'app-enforced';
+}
+
+/**
+ * The per-active-clause enforcement badges for the builder, read from the shared
+ * `CLAUSE_ENFORCEMENT` map so the dapp, API, and SDK agree on what is actually
+ * enforced on-chain versus committed-but-pending versus app-enforced.
+ */
+export function draftClauseBadges(d: Draft): { label: string; status: string }[] {
+  return draftToRule(d).clauses.map((c) => {
+    const e = CLAUSE_ENFORCEMENT[c.type as ClauseType];
+    return { label: e.label, status: e.status };
+  });
 }
 
 export function describeDraft(d: Draft): string {
