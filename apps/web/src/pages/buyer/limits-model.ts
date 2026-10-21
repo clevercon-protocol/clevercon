@@ -15,6 +15,10 @@ export const WINDOWS: Record<string, { label: string; secs?: number }> = {
 export type Draft = {
   isPrivate: boolean;
   perPaymentCeiling: string;
+  // R1 floor (optional): a minimum per payment, enabling exact (floor == ceiling)
+  // and range [floor, ceiling]. On-chain enforcement is pending (badged as such),
+  // so for now it lives only in the device-local draft.
+  perPaymentFloor?: string;
   rollingCap: string;
   rollingWindow: keyof typeof WINDOWS;
   allowlist: string[];
@@ -134,6 +138,9 @@ export function draftToRule(d: Draft, name = ''): Rule {
   if (d.perPaymentCeiling) {
     clauses.push({ type: 'perPaymentMax', usdc: Number(d.perPaymentCeiling) });
   }
+  if (d.perPaymentFloor) {
+    clauses.push({ type: 'perPaymentMin', usdc: Number(d.perPaymentFloor) });
+  }
   const rollSecs = WINDOWS[d.rollingWindow].secs;
   if (d.rollingCap && rollSecs) {
     clauses.push({ type: 'rollingCap', usdc: Number(d.rollingCap), windowSecs: rollSecs });
@@ -175,7 +182,10 @@ export function draftClauseBadges(d: Draft): { label: string; status: string }[]
 
 export function describeDraft(d: Draft): string {
   const parts: string[] = [];
-  if (d.perPaymentCeiling) parts.push(`max $${d.perPaymentCeiling}/payment`);
+  if (d.perPaymentCeiling && d.perPaymentFloor)
+    parts.push(`$${d.perPaymentFloor}-$${d.perPaymentCeiling}/payment`);
+  else if (d.perPaymentCeiling) parts.push(`max $${d.perPaymentCeiling}/payment`);
+  else if (d.perPaymentFloor) parts.push(`min $${d.perPaymentFloor}/payment`);
   if (d.rollingCap) parts.push(`max $${d.rollingCap} ${WINDOWS[d.rollingWindow].label}`);
   if (d.velocityCount)
     parts.push(`max ${d.velocityCount} payment(s) ${WINDOWS[d.velocityWindow].label}`);

@@ -82,6 +82,18 @@ export function LimitsBuilder({ value, onChange }: { value: Draft; onChange: (d:
         </label>
         <label className="block">
           <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
+            <Gauge size={13} className="text-violet-300" /> Min per payment (USDC)
+          </span>
+          <input
+            value={value.perPaymentFloor ?? ''}
+            onChange={(e) => set({ perPaymentFloor: e.target.value.replace(/[^0-9.]/g, '') })}
+            inputMode="decimal"
+            placeholder="blank = no floor; equal to max = exact amount"
+            className={inputCls}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
             <CalendarClock size={13} className="text-violet-300" /> Rolling cap
           </span>
           <div className="flex gap-2">
