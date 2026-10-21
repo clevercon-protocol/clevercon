@@ -274,6 +274,7 @@ export function LimitsManager() {
   const [draft, setDraft] = useState<Draft>(emptyDraft());
   const [name, setName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [formFilter, setFormFilter] = useState<'all' | 'private' | 'public'>('all');
   const [defaultId, setDefaultId] = useState<string>(() => getDefaultLimitId());
   const {
     data: policies = [],
@@ -339,6 +340,9 @@ export function LimitsManager() {
   };
 
   const activePolicies = policies.filter((p) => p.status !== 'archived');
+  const lane = (p: Policy): 'private' | 'public' => p.form ?? (p.isPrivate ? 'private' : 'public');
+  const shown =
+    formFilter === 'all' ? activePolicies : activePolicies.filter((p) => lane(p) === formFilter);
 
   const hasAnyRule =
     !!draft.perPaymentCeiling ||
@@ -389,13 +393,32 @@ export function LimitsManager() {
 
         <div className="mt-5 border-t border-white/[0.06] pt-4">
           <p className="mb-2 text-xs uppercase tracking-wider text-slate-500">Your saved limits</p>
+          <div className="mb-2 flex gap-1.5">
+            {(['all', 'private', 'public'] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFormFilter(f)}
+                className={
+                  'rounded-md px-2 py-0.5 text-[11px] capitalize ' +
+                  (formFilter === f
+                    ? 'bg-violet-500/20 text-violet-200'
+                    : 'text-slate-500 hover:text-slate-300')
+                }
+              >
+                {f}
+              </button>
+            ))}
+          </div>
           {isLoading && <Loading rows={2} />}
           {error && <ErrorState>Could not load your limits.</ErrorState>}
-          {!isLoading && !error && activePolicies.length === 0 && (
-            <EmptyState>No limits yet.</EmptyState>
+          {!isLoading && !error && shown.length === 0 && (
+            <EmptyState>
+              {activePolicies.length === 0 ? 'No limits yet.' : `No ${formFilter} limits.`}
+            </EmptyState>
           )}
           <div className="space-y-2">
-            {activePolicies.map((p) => {
+            {shown.map((p) => {
               const isDefault = defaultId === p.id;
               return (
                 <div
@@ -416,6 +439,11 @@ export function LimitsManager() {
                       {p.name || (p.isPrivate ? 'Private limit' : 'Transparent limit')}
                       {typeof p.version === 'number' && p.version > 1 && (
                         <span className="text-[10px] text-slate-500">v{p.version}</span>
+                      )}
+                      {p.global && (
+                        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300">
+                          Global
+                        </span>
                       )}
                       {isDefault && (
                         <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-200">
