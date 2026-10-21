@@ -8,6 +8,10 @@ import type { AuthUser } from '../auth/types.js';
 
 const createSchema = z.object({
   isPrivate: z.boolean().default(false),
+  name: z.string().min(1).max(100).optional(),
+  form: z.enum(['private', 'public']).optional(),
+  global: z.boolean().optional(),
+  supersedes: z.string().min(1).optional(),
   rules: z.object({
     perPaymentCeilingUsdc: z.number().positive().optional(),
     rollingCapUsdc: z.number().positive().optional(),
@@ -37,6 +41,12 @@ export class PoliciesController {
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() body: unknown) {
     return this.policies.create(user.userId, parseBody(createSchema, body));
+  }
+
+  /** Archive a policy (hidden from pickers, kept for audit). */
+  @Post(':id/archive')
+  archive(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.policies.archive(user.userId, id);
   }
 
   /** Request a binding proof for a release (payee + amount) under this policy. */

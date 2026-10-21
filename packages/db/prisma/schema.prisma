@@ -21,14 +21,14 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  wallets   Wallet[]
-  roles     UserRole[]
-  sessions  Session[]
-  apiKeys   ApiKey[]
-  tasks     Task[]     @relation("BuyerTasks")
-  services  Service[]  @relation("ProviderServices")
-  policies  Policy[]
-  webhooks  Webhook[]
+  wallets     Wallet[]
+  roles       UserRole[]
+  sessions    Session[]
+  apiKeys     ApiKey[]
+  tasks       Task[]         @relation("BuyerTasks")
+  services    Service[]      @relation("ProviderServices")
+  policies    Policy[]
+  webhooks    Webhook[]
   auditLogs   AuditLog[]
   delegate    AgentDelegate?
   agentWallet AgentWallet?
@@ -132,10 +132,10 @@ model Session {
 
 // Programmatic access for developers (SDK/MCP). Hashed at rest, scoped.
 model ApiKey {
-  id         String    @id @default(cuid())
-  userId     String
-  name       String
-  prefix     String    @unique // shown to the user; the rest is secret
+  id           String    @id @default(cuid())
+  userId       String
+  name         String
+  prefix       String    @unique // shown to the user; the rest is secret
   keyHash      String
   scopes       String[]  @default([])
   lastUsedAt   DateTime?
@@ -144,8 +144,8 @@ model ApiKey {
   usageDay     String? // current quota window, YYYY-MM-DD (UTC)
   usageToday   Int       @default(0) // calls in the current window
   expiresAt    DateTime?
-  revokedAt  DateTime?
-  createdAt  DateTime  @default(now())
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -184,31 +184,31 @@ enum PricingModel {
 }
 
 model Service {
-  id             String        @id @default(cuid())
-  providerId     String? // the User (provider) who owns it, if registered here
-  agentId        String        @unique // registry agent_id
-  name           String
-  description    String
-  category       String?
-  capabilities   String[]      @default([])
-  pricingModel   PricingModel
-  pricePerCall   Decimal       @db.Decimal(20, 7)
-  currency       String        @default("USDC")
-  endpoint       String
-  stellarAddress String
-  healthCheck    String?
-  manifestHash   String? // hash mirrored from the on-chain registry
-  status         ServiceStatus @default(NEW)
+  id              String        @id @default(cuid())
+  providerId      String? // the User (provider) who owns it, if registered here
+  agentId         String        @unique // registry agent_id
+  name            String
+  description     String
+  category        String?
+  capabilities    String[]      @default([])
+  pricingModel    PricingModel
+  pricePerCall    Decimal       @db.Decimal(20, 7)
+  currency        String        @default("USDC")
+  endpoint        String
+  stellarAddress  String
+  healthCheck     String?
+  manifestHash    String? // hash mirrored from the on-chain registry
+  status          ServiceStatus @default(NEW)
   // Acceptance contract (marketplace economy). See .local/MARKETPLACE-ECONOMY-SPEC.md.
-  tier            String   @default("T2") // T1 verifiable | T2 attestable | T3 subjective
+  tier            String        @default("T2") // T1 verifiable | T2 attestable | T3 subjective
   inputSchema     Json? // JSON Schema for the request input
   outputSchema    Json? // JSON Schema for the result
   verification    Json? // { method, spec } for how delivery is judged
-  bondAmount      Decimal  @default(0) @db.Decimal(20, 7) // optional slashable stake (phased)
-  manifestVersion Int      @default(1) // bumped on edits; anti bait-and-switch
-  registeredAt   DateTime      @default(now())
-  lastSeen       DateTime?
-  updatedAt      DateTime      @updatedAt
+  bondAmount      Decimal       @default(0) @db.Decimal(20, 7) // optional slashable stake (phased)
+  manifestVersion Int           @default(1) // bumped on edits; anti bait-and-switch
+  registeredAt    DateTime      @default(now())
+  lastSeen        DateTime?
+  updatedAt       DateTime      @updatedAt
 
   provider   User?              @relation("ProviderServices", fields: [providerId], references: [id])
   reputation ServiceReputation?
@@ -221,20 +221,20 @@ model Service {
 }
 
 model ServiceReputation {
-  serviceId      String   @id
-  score          Float    @default(0)
-  totalJobs      Int      @default(0)
-  successfulJobs Int      @default(0)
-  failedJobs     Int      @default(0)
-  avgQuality     Float    @default(0)
-  avgLatencyMs   Int      @default(0)
+  serviceId      String    @id
+  score          Float     @default(0)
+  totalJobs      Int       @default(0)
+  successfulJobs Int       @default(0)
+  failedJobs     Int       @default(0)
+  avgQuality     Float     @default(0)
+  avgLatencyMs   Int       @default(0)
   // Marketplace trust signals: distinct paying counterparties (anti-self-dealing),
   // recency, and dispute history. See MARKETPLACE-ECONOMY-SPEC.md sections 6-7.
-  uniquePayers   Int      @default(0)
+  uniquePayers   Int       @default(0)
   lastSettled    DateTime?
-  disputes       Int      @default(0)
-  disputesUpheld Int      @default(0)
-  lastUpdated    DateTime @updatedAt
+  disputes       Int       @default(0)
+  disputesUpheld Int       @default(0)
+  lastUpdated    DateTime  @updatedAt
 
   service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
@@ -288,23 +288,23 @@ enum StepStatus {
 }
 
 model Task {
-  id          String     @id @default(cuid())
-  buyerId     String
-  title       String
-  description String?
-  mode        TaskMode
-  budget      Decimal    @db.Decimal(20, 7)
-  asset       String
-  status      TaskStatus @default(DRAFT)
-  vaultTaskId BigInt? // on-chain task id once locked
+  id               String     @id @default(cuid())
+  buyerId          String
+  title            String
+  description      String?
+  mode             TaskMode
+  budget           Decimal    @db.Decimal(20, 7)
+  asset            String
+  status           TaskStatus @default(DRAFT)
+  vaultTaskId      BigInt? // on-chain task id once locked
   vaultFinalizedAt DateTime? // set once complete_task finalized the on-chain task (unlocks remainder)
-  policyId    String?
+  policyId         String?
   // Client-supplied Idempotency-Key: a retried spend request with the same key
   // returns the original task instead of creating a duplicate. NULLs are distinct
   // in Postgres, so keyless requests never collide.
-  idempotencyKey String?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  idempotencyKey   String?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
   buyer    User       @relation("BuyerTasks", fields: [buyerId], references: [id])
   policy   Policy?    @relation(fields: [policyId], references: [id])
@@ -410,6 +410,14 @@ model Policy {
   isPrivate   Boolean  @default(true)
   // Plaintext rule is NOT stored server-side unless the user explicitly opts in.
   ruleSummary Json?
+  // Lifecycle + shared rule-model fields (Phase A5). All additive/defaulted so
+  // Railway's db:deploy syncs them with no data loss.
+  name        String?
+  form        String   @default("private") // "private" | "public" (the lane)
+  status      String   @default("active") //  "active" | "archived"
+  version     Int      @default(1)
+  supersedes  String? //  id of the policy this version replaces (edit lineage)
+  global      Boolean  @default(false) //    flagged as the account global for its lane
   createdAt   DateTime @default(now())
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)

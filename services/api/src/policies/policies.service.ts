@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { Prisma, ProofStatus } from '@clevercon/db';
+import type { RuleForm } from '@clevercon/common';
 import { StrKey } from '@stellar/stellar-sdk';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueueService } from '../queue/queue.service.js';
@@ -22,6 +23,14 @@ export interface PolicyRules {
 export interface CreatePolicyParams {
   rules: PolicyRules;
   isPrivate?: boolean;
+  /** User-facing rule name. */
+  name?: string;
+  /** The lane this rule belongs to; wins over `isPrivate` when both are given. */
+  form?: RuleForm;
+  /** Flag this rule as the account's global for its lane. */
+  global?: boolean;
+  /** When editing: the id of the policy this new version replaces. */
+  supersedes?: string;
 }
 
 const STROOPS_PER_USDC = 10_000_000;
@@ -63,6 +72,12 @@ function serialize(p: {
   commitment: string;
   isPrivate: boolean;
   ruleSummary: Prisma.JsonValue | null;
+  name: string | null;
+  form: string;
+  status: string;
+  version: number;
+  supersedes: string | null;
+  global: boolean;
   createdAt: Date;
 }) {
   return {
@@ -71,6 +86,12 @@ function serialize(p: {
     isPrivate: p.isPrivate,
     // ruleSummary is present only for transparent (or explicitly opted-in) policies.
     rules: p.ruleSummary,
+    name: p.name,
+    form: p.form,
+    status: p.status,
+    version: p.version,
+    supersedes: p.supersedes,
+    global: p.global,
     createdAt: p.createdAt,
   };
 }
@@ -95,26 +116,64 @@ export class PoliciesService {
       throw new BadRequestException('A policy must enable at least one rule');
     }
 
-    // The commitment binds the rule in both modes: a SHA-256 of the canonical
-    // encoding. The difference is what is persisted. Transparent mode stores the
-    // plaintext rule (ruleSummary) so it is publicly auditable; private mode
-    // stores ONLY the commitment and discards the plaintext, so the server never
-    // holds the rule. (v1 uses SHA-256, matching the on-chain binding check; a
-    // client-side commitment with the circuit hash is the migration target, see
-    // docs/private-policies.md.)
+    // The form (lane) is the source of truth for privacy; the legacy isPrivate
+    // flag is honoured only when no form is given, so old callers keep working.
+    const form: RuleForm = params.form ?? (params.isPrivate === false ? 'public' : 'private');
+    const isPrivate = form === 'private';
+
+    // The commitment binds the rule: a SHA-256 of the canonical encoding. A
+    // transparent/public policy also persists the plaintext rule (ruleSummary)
+    // so it is auditable; a private policy stores ONLY the commitment, so the
+    // server never holds the rule. (v1 uses SHA-256, matching the on-chain
+    // binding check; the client Poseidon commitment is the migration target.)
     const commitment = createHash('sha256').update(canonicalEncoding(params.rules)).digest('hex');
+
+    // Editing a rule is versioning: the new row supersedes the old under the
+    // same lineage, and the superseded rule is archived. Ownership is checked
+    // before either write.
+    let version = 1;
+    if (params.supersedes) {
+      const prior = await this.prisma.policy.findFirst({
+        where: { id: params.supersedes, userId },
+      });
+      if (!prior) throw new NotFoundException('Superseded policy not found');
+      version = prior.version + 1;
+    }
 
     const created = await this.prisma.policy.create({
       data: {
         userId,
         commitment,
-        isPrivate: params.isPrivate ?? false,
-        ruleSummary: params.isPrivate
-          ? undefined
-          : (params.rules as unknown as Prisma.InputJsonValue),
+        isPrivate,
+        form,
+        status: 'active',
+        version,
+        supersedes: params.supersedes,
+        global: params.global ?? false,
+        name: params.name,
+        ruleSummary: isPrivate ? undefined : (params.rules as unknown as Prisma.InputJsonValue),
       },
     });
+
+    if (params.supersedes) {
+      await this.prisma.policy.update({
+        where: { id: params.supersedes },
+        data: { status: 'archived' },
+      });
+    }
+
     return serialize(created);
+  }
+
+  /** Archive a policy the caller owns: hidden from pickers, kept for audit. */
+  async archive(userId: string, id: string) {
+    const policy = await this.prisma.policy.findFirst({ where: { id, userId } });
+    if (!policy) throw new NotFoundException('Policy not found');
+    const updated = await this.prisma.policy.update({
+      where: { id },
+      data: { status: 'archived' },
+    });
+    return serialize(updated);
   }
 
   /**
