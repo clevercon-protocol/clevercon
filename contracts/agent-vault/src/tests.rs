@@ -1,7 +1,7 @@
 mod malicious_token;
 mod mock_verifier;
 
-use crate::{AgentVault, AgentVaultClient, DataKey, TaskStatus, VaultError};
+use crate::{AgentVault, AgentVaultClient, DataKey, Lane, TaskStatus, VaultError};
 use malicious_token::{MaliciousToken, MaliciousTokenClient, ReentryAction, ReentryConfig};
 use mock_verifier::{MockVerifier, MockVerifierClient, VerifyMode};
 use soroban_sdk::testutils::storage::Persistent as _;
@@ -4530,6 +4530,42 @@ fn test_policy_commitment_set_cap() {
     let overflow = BytesN::from_array(&t.env, &[100u8; 32]);
     let res = t.client.try_set_policy_commitment(&user, &overflow);
     assert!(res == Err(Ok(VaultError::CommitmentSetFull)));
+}
+
+#[test]
+fn test_global_rule_set_clear() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let gp = BytesN::from_array(&t.env, &[7u8; 32]);
+    let gpub = BytesN::from_array(&t.env, &[8u8; 32]);
+
+    assert_eq!(t.client.get_global(&user, &Lane::Private), None);
+    t.client.set_global(&user, &Lane::Private, &gp);
+    t.client.set_global(&user, &Lane::Public, &gpub);
+    assert_eq!(t.client.get_global(&user, &Lane::Private), Some(gp));
+    assert_eq!(t.client.get_global(&user, &Lane::Public), Some(gpub.clone()));
+
+    // Replacing the private global keeps the public one untouched.
+    let gp2 = BytesN::from_array(&t.env, &[9u8; 32]);
+    t.client.set_global(&user, &Lane::Private, &gp2);
+    assert_eq!(t.client.get_global(&user, &Lane::Private), Some(gp2));
+
+    // Clear is idempotent and lane-scoped.
+    t.client.clear_global(&user, &Lane::Private);
+    assert_eq!(t.client.get_global(&user, &Lane::Private), None);
+    t.client.clear_global(&user, &Lane::Private); // no-op, no panic
+    assert_eq!(t.client.get_global(&user, &Lane::Public), Some(gpub));
+}
+
+#[test]
+fn test_global_rule_rejects_zero() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let zero = BytesN::from_array(&t.env, &[0u8; 32]);
+    let res = t.client.try_set_global(&user, &Lane::Private, &zero);
+    assert!(res == Err(Ok(VaultError::InvalidCommitment)));
 }
 
 #[test]

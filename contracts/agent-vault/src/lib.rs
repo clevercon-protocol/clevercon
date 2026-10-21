@@ -241,6 +241,21 @@ pub struct PolicyCommitmentUnpinnedEvent {
     pub commitment: BytesN<32>,
 }
 
+#[contractevent]
+pub struct GlobalRuleSetEvent {
+    #[topic]
+    pub user: Address,
+    pub lane: Lane,
+    pub commitment: BytesN<32>,
+}
+
+#[contractevent]
+pub struct GlobalRuleClearedEvent {
+    #[topic]
+    pub user: Address,
+    pub lane: Lane,
+}
+
 /// Emitted by `release_payment_proved` on a successful proof-gated release.
 /// Mirrors [`ReleaseEvent`] plus the spent `nullifier`, so indexers can track
 /// replay protection. The zero-knowledge proof bytes are deliberately **never**
@@ -323,6 +338,15 @@ pub enum VaultError {
     CommitmentNotPinned = 38,
 }
 
+/// A spend lane: `Private` (proof-enforced, hidden rule) or `Public` (session
+/// key, cleartext scope). Selects which per-account global rule applies.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Lane {
+    Private,
+    Public,
+}
+
 // Storage keys
 
 /// Storage keys for all persistent and instance data in this contract.
@@ -386,6 +410,10 @@ pub enum DataKey {
     /// member. Capped at `MAX_POLICY_COMMITMENTS`; only the user's own signature
     /// may add or remove entries (`set_policy_commitment` / `unpin_policy_commitment`).
     PolicyCommitments(Address),
+    /// The user's optional per-lane global rule commitment, applied to every
+    /// spend in that lane as an AND prescreen on the release path. Zero or one
+    /// per lane; set and cleared only by the user's own signature.
+    GlobalCommitment(Address, Lane),
 }
 
 // Data structs
@@ -2180,6 +2208,50 @@ impl AgentVault {
             .get(&DataKey::PolicyCommitments(user))
             .unwrap_or_else(|| Vec::new(&env));
         set.iter().any(|c| c == commitment)
+    }
+
+    /// Pin (or replace) the user's global rule for a lane. The global applies to
+    /// every spend in that lane as an AND prescreen on the release path, so it
+    /// can only tighten, never loosen. Zero or one per lane; only the user's own
+    /// signature may set it. The all-zero commitment is rejected.
+    pub fn set_global(
+        env: Env,
+        user: Address,
+        lane: Lane,
+        commitment: BytesN<32>,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        if commitment == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(VaultError::InvalidCommitment);
+        }
+        let key = DataKey::GlobalCommitment(user.clone(), lane);
+        env.storage().persistent().set(&key, &commitment);
+        Self::extend_persistent_ttl(&env, &key);
+        GlobalRuleSetEvent {
+            user,
+            lane,
+            commitment,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Clear the user's global rule for a lane. Idempotent: a no-op if none set.
+    pub fn clear_global(env: Env, user: Address, lane: Lane) -> Result<(), VaultError> {
+        user.require_auth();
+        let key = DataKey::GlobalCommitment(user.clone(), lane);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+            GlobalRuleClearedEvent { user, lane }.publish(&env);
+        }
+        Ok(())
+    }
+
+    /// Returns the user's global rule commitment for a lane, if one is set.
+    pub fn get_global(env: Env, user: Address, lane: Lane) -> Option<BytesN<32>> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::GlobalCommitment(user, lane))
     }
 
     /// Returns the configured policy-verifier contract, or `None` if the
