@@ -4473,6 +4473,66 @@ fn test_upgrade_requires_admin() {
 }
 
 #[test]
+fn test_policy_commitment_set_pin_unpin() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let c1 = BytesN::from_array(&t.env, &[1u8; 32]);
+    let c2 = BytesN::from_array(&t.env, &[2u8; 32]);
+
+    assert_eq!(t.client.get_policy_commitments(&user).len(), 0);
+
+    t.client.set_policy_commitment(&user, &c1);
+    t.client.set_policy_commitment(&user, &c2);
+    t.client.set_policy_commitment(&user, &c1); // idempotent re-pin
+    assert_eq!(t.client.get_policy_commitments(&user).len(), 2);
+    assert!(t.client.is_policy_commitment_pinned(&user, &c1));
+    assert!(t.client.is_policy_commitment_pinned(&user, &c2));
+
+    t.client.unpin_policy_commitment(&user, &c1);
+    assert!(!t.client.is_policy_commitment_pinned(&user, &c1));
+    assert!(t.client.is_policy_commitment_pinned(&user, &c2));
+    assert_eq!(t.client.get_policy_commitments(&user).len(), 1);
+}
+
+#[test]
+fn test_policy_commitment_rejects_zero() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let zero = BytesN::from_array(&t.env, &[0u8; 32]);
+    let res = t.client.try_set_policy_commitment(&user, &zero);
+    assert!(res == Err(Ok(VaultError::InvalidCommitment)));
+}
+
+#[test]
+fn test_policy_commitment_unpin_missing_errors() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let c1 = BytesN::from_array(&t.env, &[9u8; 32]);
+    let res = t.client.try_unpin_policy_commitment(&user, &c1);
+    assert!(res == Err(Ok(VaultError::CommitmentNotPinned)));
+}
+
+#[test]
+fn test_policy_commitment_set_cap() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    // Fill to the cap (16 distinct, non-zero commitments).
+    for i in 0..16u8 {
+        let c = BytesN::from_array(&t.env, &[i + 1; 32]);
+        t.client.set_policy_commitment(&user, &c);
+    }
+    assert_eq!(t.client.get_policy_commitments(&user).len(), 16);
+    // The 17th distinct commitment is rejected.
+    let overflow = BytesN::from_array(&t.env, &[100u8; 32]);
+    let res = t.client.try_set_policy_commitment(&user, &overflow);
+    assert!(res == Err(Ok(VaultError::CommitmentSetFull)));
+}
+
+#[test]
 fn test_set_policy_verifier_is_admin_mutable() {
     let s = setup_policy();
     s.client.set_policy_verifier(&s.admin, &s.verifier_id);

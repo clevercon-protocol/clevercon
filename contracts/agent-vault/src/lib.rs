@@ -227,6 +227,20 @@ pub struct PolicyCommittedEvent {
     pub commitment: BytesN<32>,
 }
 
+#[contractevent]
+pub struct PolicyCommitmentPinnedEvent {
+    #[topic]
+    pub user: Address,
+    pub commitment: BytesN<32>,
+}
+
+#[contractevent]
+pub struct PolicyCommitmentUnpinnedEvent {
+    #[topic]
+    pub user: Address,
+    pub commitment: BytesN<32>,
+}
+
 /// Emitted by `release_payment_proved` on a successful proof-gated release.
 /// Mirrors [`ReleaseEvent`] plus the spent `nullifier`, so indexers can track
 /// replay protection. The zero-knowledge proof bytes are deliberately **never**
@@ -301,6 +315,12 @@ pub enum VaultError {
     /// The current ledger time is outside the proof's validity window
     /// `[valid_after, valid_before]` (the R6 calendar check).
     OutsideValidityWindow = 36,
+    /// A user tried to pin more than `MAX_POLICY_COMMITMENTS` commitments to
+    /// their account's bounded set.
+    CommitmentSetFull = 37,
+    /// `unpin_policy_commitment` named a commitment that is not currently in the
+    /// user's pinned set.
+    CommitmentNotPinned = 38,
 }
 
 // Storage keys
@@ -361,6 +381,11 @@ pub enum DataKey {
     /// `prior_count` the pp/2 batch circuit's velocity rule (R7) is proven
     /// against. `task.spent` serves the same role as `running_spend` for R2.
     TaskReleaseCount(u64),
+    /// The user's bounded set of pinned policy commitments (the selectable
+    /// private/public rules). A proof-gated release's commitment must be a
+    /// member. Capped at `MAX_POLICY_COMMITMENTS`; only the user's own signature
+    /// may add or remove entries (`set_policy_commitment` / `unpin_policy_commitment`).
+    PolicyCommitments(Address),
 }
 
 // Data structs
@@ -514,6 +539,11 @@ const PERSISTENT_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
 
 const INSTANCE_TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const INSTANCE_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
+
+/// Maximum number of policy commitments a user may pin at once (the bounded
+/// set). Keeps account storage and the "which rule authorized this" lookup
+/// small and auditable; separate accounts give more isolation if ever needed.
+const MAX_POLICY_COMMITMENTS: u32 = 16;
 
 /// Compile-time contract version, exposed on-chain via `version()`.
 ///
@@ -2066,6 +2096,90 @@ impl AgentVault {
         .publish(&env);
         log!(&env, "Policy verifier set to: {}", verifier);
         Ok(())
+    }
+
+    /// Pin a policy commitment to the caller's account. Only the user's own
+    /// signature can add one, and a proof-gated release's commitment must be a
+    /// member of this set (enforced on the release path). The set is bounded to
+    /// `MAX_POLICY_COMMITMENTS`; pinning one already present is a no-op. The
+    /// all-zero commitment is rejected (no proof could ever satisfy it).
+    pub fn set_policy_commitment(
+        env: Env,
+        user: Address,
+        commitment: BytesN<32>,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        if commitment == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(VaultError::InvalidCommitment);
+        }
+        let key = DataKey::PolicyCommitments(user.clone());
+        let mut set: Vec<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
+        if set.iter().any(|c| c == commitment) {
+            return Ok(()); // idempotent: already pinned
+        }
+        if set.len() >= MAX_POLICY_COMMITMENTS {
+            return Err(VaultError::CommitmentSetFull);
+        }
+        set.push_back(commitment.clone());
+        env.storage().persistent().set(&key, &set);
+        Self::extend_persistent_ttl(&env, &key);
+        PolicyCommitmentPinnedEvent { user, commitment }.publish(&env);
+        Ok(())
+    }
+
+    /// Remove a previously pinned policy commitment from the caller's account.
+    /// Only the user's own signature may unpin. Errors if it is not pinned.
+    pub fn unpin_policy_commitment(
+        env: Env,
+        user: Address,
+        commitment: BytesN<32>,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        let key = DataKey::PolicyCommitments(user.clone());
+        let set: Vec<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut next: Vec<BytesN<32>> = Vec::new(&env);
+        let mut found = false;
+        for c in set.iter() {
+            if c == commitment {
+                found = true;
+            } else {
+                next.push_back(c);
+            }
+        }
+        if !found {
+            return Err(VaultError::CommitmentNotPinned);
+        }
+        env.storage().persistent().set(&key, &next);
+        Self::extend_persistent_ttl(&env, &key);
+        PolicyCommitmentUnpinnedEvent { user, commitment }.publish(&env);
+        Ok(())
+    }
+
+    /// Returns the user's bounded set of pinned policy commitments.
+    pub fn get_policy_commitments(env: Env, user: Address) -> Vec<BytesN<32>> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PolicyCommitments(user))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// True if `commitment` is pinned to `user`'s account. The proof-gated
+    /// release path uses this to enforce set membership.
+    pub fn is_policy_commitment_pinned(env: Env, user: Address, commitment: BytesN<32>) -> bool {
+        let set: Vec<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PolicyCommitments(user))
+            .unwrap_or_else(|| Vec::new(&env));
+        set.iter().any(|c| c == commitment)
     }
 
     /// Returns the configured policy-verifier contract, or `None` if the
