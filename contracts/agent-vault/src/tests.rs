@@ -4544,7 +4544,10 @@ fn test_global_rule_set_clear() {
     t.client.set_global(&user, &Lane::Private, &gp);
     t.client.set_global(&user, &Lane::Public, &gpub);
     assert_eq!(t.client.get_global(&user, &Lane::Private), Some(gp));
-    assert_eq!(t.client.get_global(&user, &Lane::Public), Some(gpub.clone()));
+    assert_eq!(
+        t.client.get_global(&user, &Lane::Public),
+        Some(gpub.clone())
+    );
 
     // Replacing the private global keeps the public one untouched.
     let gp2 = BytesN::from_array(&t.env, &[9u8; 32]);
