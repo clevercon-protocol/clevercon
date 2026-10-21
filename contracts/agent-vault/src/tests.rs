@@ -4459,6 +4459,20 @@ fn test_set_policy_verifier_requires_admin() {
 }
 
 #[test]
+fn test_upgrade_requires_admin() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    let not_admin = Address::generate(&t.env);
+    let fake_hash = BytesN::from_array(&t.env, &[0u8; 32]);
+
+    // A non-admin caller is rejected before any wasm swap is attempted, so the
+    // bogus hash is never used. This guards the in-place upgrade capability.
+    let res = t.client.try_upgrade(&not_admin, &fake_hash);
+    assert!(res == Err(Ok(VaultError::Unauthorized)));
+}
+
+#[test]
 fn test_set_policy_verifier_is_admin_mutable() {
     let s = setup_policy();
     s.client.set_policy_verifier(&s.admin, &s.verifier_id);

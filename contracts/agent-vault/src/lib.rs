@@ -2854,6 +2854,27 @@ impl AgentVault {
         Ok(())
     }
 
+    /// Admin upgrades this contract's wasm in place, preserving the contract id
+    /// and all stored state (balances, tasks, commitments). This is what lets
+    /// later phases (pinned commitments, keyless auth, bonds) ship as same-id
+    /// upgrades rather than a fresh deploy that would strand user funds. The
+    /// caller must be the stored admin, and `new_wasm_hash` must already be
+    /// installed on-chain.
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), VaultError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(VaultError::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Self::extend_instance_ttl(&env);
+        Ok(())
+    }
+
     /// Returns the current admin address.
     pub fn get_admin(env: Env) -> Address {
         Self::extend_instance_ttl(&env);
