@@ -4267,6 +4267,47 @@ fn dummy_groth16_proof(env: &Env) -> crate::Groth16Proof {
     }
 }
 
+/// Pin `c` to the policy user's account and create a committed task of `cost`,
+/// returning the task id. The proof-gated release path now requires the task's
+/// commitment to be in the owner's pinned set, so the standard setup pins first.
+fn committed_task(s: &PolicySetup, cost: i128, c: &BytesN<32>) -> u64 {
+    s.client.set_policy_commitment(&s.user, c);
+    s.client
+        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &cost, c)
+}
+
+#[test]
+fn test_release_payment_proved_rejects_unpinned_commitment() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    // A task whose commitment the owner never pinned: the release is rejected
+    // before the verifier is contacted and no funds move, even though the mock
+    // verifier would accept any proof.
+    let c = commitment_of(&s.env, 42);
+    let task_id = s
+        .client
+        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_234, &c);
+    let payee = Address::generate(&s.env);
+    let nf = nullifier_of(&s.env, 42);
+    let proof = dummy_proof(&s.env);
+
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &400,
+        &payee,
+        &nf,
+        &proof,
+    );
+    assert!(res == Err(Ok(VaultError::CommitmentNotAuthorized)));
+    assert_eq!(s.token_client.balance(&payee), 0);
+    assert_eq!(s.verifier.calls(), 0);
+}
+
 #[test]
 fn test_release_payment_proved_batch_happy_path() {
     let s = setup_policy();
@@ -4274,9 +4315,7 @@ fn test_release_payment_proved_batch_happy_path() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 7);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &5_000, &c);
+    let task_id = committed_task(&s, 5_000, &c);
 
     let p1 = Address::generate(&s.env);
     let p2 = Address::generate(&s.env);
@@ -4338,9 +4377,7 @@ fn test_release_payment_proved_batch_rejects_and_moves_no_funds() {
     s.verifier.configure(&VerifyMode::RejectAll);
 
     let c = commitment_of(&s.env, 8);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &5_000, &c);
+    let task_id = committed_task(&s, 5_000, &c);
     let payee = Address::generate(&s.env);
     let payees = soroban_sdk::vec![&s.env, payee.clone()];
     let amounts = soroban_sdk::vec![&s.env, 400i128];
@@ -4373,9 +4410,7 @@ fn test_release_payment_proved_batch_rejects_outside_validity_window() {
     s.env.ledger().set_timestamp(5000);
 
     let c = commitment_of(&s.env, 9);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &5_000, &c);
+    let task_id = committed_task(&s, 5_000, &c);
     let payee = Address::generate(&s.env);
     let payees = soroban_sdk::vec![&s.env, payee.clone()];
     let amounts = soroban_sdk::vec![&s.env, 400i128];
@@ -4416,9 +4451,7 @@ fn test_plain_create_task_records_no_commitment() {
 fn test_create_task_with_policy_records_commitment() {
     let s = setup_policy();
     let c = commitment_of(&s.env, 1);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
 
     assert_eq!(s.client.get_task_policy(&task_id), Some(c.clone()));
     assert_eq!(
@@ -4590,9 +4623,7 @@ fn test_committed_task_rejects_plain_release_payment() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 2);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
 
     // The plain path must refuse a committed task even though the verifier
     // would accept anything — mutual exclusion is structural.
@@ -4638,9 +4669,7 @@ fn test_release_payment_proved_happy_path() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 3);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     let payee = Address::generate(&s.env);
     let nf = nullifier_of(&s.env, 10);
     let proof = dummy_proof(&s.env);
@@ -4722,9 +4751,7 @@ fn test_release_payment_proved_rejects_mismatched_binding() {
     s.verifier.set_expected(&bound_payee, &400);
 
     let c = commitment_of(&s.env, 4);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     let nf = nullifier_of(&s.env, 20);
     let proof = dummy_proof(&s.env);
 
@@ -4783,9 +4810,7 @@ fn test_release_payment_proved_nullifier_replay_rejected() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 5);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     let payee = Address::generate(&s.env);
     let nf = nullifier_of(&s.env, 30);
     let proof = dummy_proof(&s.env);
@@ -4829,9 +4854,7 @@ fn test_release_payment_proved_fails_closed_when_verifier_unset() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 6);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     let payee = Address::generate(&s.env);
 
     let res = s.client.try_release_payment_proved(
@@ -4859,9 +4882,7 @@ fn test_release_payment_proved_verifier_failure_does_not_burn_nullifier() {
     s.verifier.configure(&VerifyMode::RejectAll);
 
     let c = commitment_of(&s.env, 7);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     let payee = Address::generate(&s.env);
     let nf = nullifier_of(&s.env, 50);
     let proof = dummy_proof(&s.env);
@@ -4906,9 +4927,7 @@ fn test_release_payment_proved_budget_check_precedes_verifier() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 8);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     let payee = Address::generate(&s.env);
 
     // amount exceeds the remaining budget → rejected BEFORE the verifier call.
@@ -4936,9 +4955,7 @@ fn test_release_payment_proved_blocked_on_disputed_task() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 9);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     s.client.raise_dispute(&s.user, &task_id);
 
     let res = s.client.try_release_payment_proved(
@@ -4965,9 +4982,7 @@ fn test_release_payment_proved_blocked_on_stale_forced_task() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 11);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
 
     // Advance past the 1800s stale threshold and force-complete the task.
     s.env.ledger().set_timestamp(1_000 + 1_801);
@@ -4994,9 +5009,7 @@ fn test_release_payment_proved_blocked_when_paused() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 12);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     s.client.pause(&s.admin);
 
     let res = s.client.try_release_payment_proved(
@@ -5020,9 +5033,7 @@ fn test_release_payment_proved_wrong_orchestrator_rejected() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 13);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     let stranger = Address::generate(&s.env);
 
     let res = s.client.try_release_payment_proved(
@@ -5051,9 +5062,7 @@ fn test_release_payment_proved_asset_mismatch_rejected() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 14);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
 
     let res = s.client.try_release_payment_proved(
         &s.orchestrator,
@@ -5076,9 +5085,7 @@ fn test_release_payment_proved_reverts_on_verifier_trap() {
     s.verifier.configure(&VerifyMode::Trap);
 
     let c = commitment_of(&s.env, 15);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     let payee = Address::generate(&s.env);
     let nf = nullifier_of(&s.env, 120);
     let proof = dummy_proof(&s.env);
@@ -5127,9 +5134,7 @@ fn test_release_payment_proved_fee_split() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 18);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &10_000, &c);
+    let task_id = committed_task(&s, 10_000, &c);
     let payee = Address::generate(&s.env);
 
     s.client.release_payment_proved(
@@ -5158,9 +5163,7 @@ fn test_release_payment_proved_total_never_exceeds_budget() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 16);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     let payee = Address::generate(&s.env);
     let proof = dummy_proof(&s.env);
 
@@ -5211,9 +5214,7 @@ fn test_release_payment_proved_idempotent_replay_same_step() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 17);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     let payee = Address::generate(&s.env);
     let nf = nullifier_of(&s.env, 210);
     let proof = dummy_proof(&s.env);
@@ -5269,9 +5270,7 @@ fn test_release_payment_proved_nullifiers_pruned_on_finalize() {
     s.verifier.configure(&VerifyMode::AcceptAll);
 
     let c = commitment_of(&s.env, 19);
-    let task_id = s
-        .client
-        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &c);
+    let task_id = committed_task(&s, 1_000, &c);
     let payee = Address::generate(&s.env);
     let nf = nullifier_of(&s.env, 220);
 

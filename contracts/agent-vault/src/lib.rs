@@ -336,6 +336,10 @@ pub enum VaultError {
     /// `unpin_policy_commitment` named a commitment that is not currently in the
     /// user's pinned set.
     CommitmentNotPinned = 38,
+    /// A proof-gated release named a commitment that is not pinned to the task
+    /// owner's account. The operator cannot lock a task under a rule the user
+    /// never authorized: a release proceeds only against a user-pinned commitment.
+    CommitmentNotAuthorized = 39,
 }
 
 /// A spend lane: `Private` (proof-enforced, hidden rule) or `Public` (session
@@ -1387,6 +1391,16 @@ impl AgentVault {
             return Err(VaultError::NullifierAlreadyUsed);
         }
 
+        // (3.5) The task's commitment must be pinned to the owner's account.
+        // This is the trust anchor of the proof-gated path: a release proceeds
+        // only against a rule the user authorized, so the operator cannot lock a
+        // task under a commitment the owner never pinned. Checked before the
+        // verifier is contacted, so an unauthorized commitment never pays for a
+        // verification.
+        if !Self::is_commitment_pinned(&env, &task.user, &commitment) {
+            return Err(VaultError::CommitmentNotAuthorized);
+        }
+
         // (4) Verifier must be configured — fail closed, no call, no funds.
         let verifier: Address = env
             .storage()
@@ -1596,6 +1610,12 @@ impl AgentVault {
                     return Err(VaultError::BatchDuplicateNullifier);
                 }
             }
+        }
+
+        // The task's commitment must be pinned to the owner's account (the same
+        // trust anchor as the single-release path), checked before the verifier.
+        if !Self::is_commitment_pinned(&env, &task.user, &commitment) {
+            return Err(VaultError::CommitmentNotAuthorized);
         }
 
         // Verifier must be configured — fail closed.
@@ -2202,12 +2222,19 @@ impl AgentVault {
     /// True if `commitment` is pinned to `user`'s account. The proof-gated
     /// release path uses this to enforce set membership.
     pub fn is_policy_commitment_pinned(env: Env, user: Address, commitment: BytesN<32>) -> bool {
+        Self::is_commitment_pinned(&env, &user, &commitment)
+    }
+
+    /// Internal, reference-taking twin of [`Self::is_policy_commitment_pinned`],
+    /// used on the proof-gated release path to enforce set membership without
+    /// cloning the owned arguments the public getter takes.
+    fn is_commitment_pinned(env: &Env, user: &Address, commitment: &BytesN<32>) -> bool {
         let set: Vec<BytesN<32>> = env
             .storage()
             .persistent()
-            .get(&DataKey::PolicyCommitments(user))
-            .unwrap_or_else(|| Vec::new(&env));
-        set.iter().any(|c| c == commitment)
+            .get(&DataKey::PolicyCommitments(user.clone()))
+            .unwrap_or_else(|| Vec::new(env));
+        set.iter().any(|c| c == *commitment)
     }
 
     /// Pin (or replace) the user's global rule for a lane. The global applies to
