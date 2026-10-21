@@ -83,6 +83,17 @@ export class VaultService {
     return { xdr, networkPassphrase: this.contract.passphrase };
   }
 
+  /**
+   * Build the `set_policy_commitment` XDR pinning a rule's commitment to the
+   * caller's account. User-custodied: the wallet signs, the API submits via
+   * `submit`. Required before the proof-gated path will accept the rule.
+   */
+  async buildPinCommitment(userId: string, commitmentHex: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildPinCommitmentXdr(address, commitmentHex);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
   /** Mark the caller's delegate as authorized (called after the register tx submits). */
   /**
    * The user's registered agent key (for the agent-key payment mode). Returns

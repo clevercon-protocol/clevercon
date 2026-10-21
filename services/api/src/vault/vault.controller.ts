@@ -19,6 +19,7 @@ import type { AuthUser } from '../auth/types.js';
 
 const amountSchema = z.object({ amountUsdc: z.number().positive() });
 const submitSchema = z.object({ signedXdr: z.string().min(1) });
+const pinSchema = z.object({ commitment: z.string().regex(/^[0-9a-fA-F]{64}$/) });
 const agentWalletSchema = z.object({ publicKey: z.string().min(1) });
 
 const hex = z.string().regex(/^[0-9a-fA-F]+$/);
@@ -77,6 +78,17 @@ export class VaultController {
   @Post('delegate/confirm')
   confirmDelegate(@CurrentUser() user: AuthUser) {
     return this.vault.confirmDelegateRegistered(user.userId);
+  }
+
+  /**
+   * Build the set_policy_commitment XDR pinning a rule's 32-byte commitment to
+   * the caller's account; signed in the wallet and submitted via /vault/submit.
+   * The wallet signature is the authorization (no step-up: it moves no funds).
+   */
+  @Post('pin-commitment')
+  pinCommitment(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { commitment } = parseBody(pinSchema, body);
+    return this.vault.buildPinCommitment(user.userId, commitment);
   }
 
   /** The caller's registered agent key (public key only), for agent-key mode. */

@@ -13,8 +13,10 @@ import {
   Sparkles,
   Archive,
   Pencil,
+  Anchor,
 } from 'lucide-react';
 import { getPolicies, createPolicy, archivePolicy, type Policy } from '../../lib/policies';
+import { pinCommitment } from '../../lib/vault';
 import { Card, CardHeader, EmptyState, ErrorState, Loading, controls } from '../../components/ui';
 import {
   WINDOWS,
@@ -338,6 +340,14 @@ export function LimitsManager() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['policies'] }),
   });
 
+  // Pin a rule's commitment on-chain (set_policy_commitment): the wallet signs,
+  // and the proof-gated release path then accepts the rule. One signed act per
+  // rule the operator cannot forge or bypass.
+  const pin = useMutation({
+    mutationFn: (commitment: string) => pinCommitment(commitment),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['policies'] }),
+  });
+
   // Load a saved limit's device-cached rule back into the builder to edit it;
   // saving then mints a new version that supersedes the original.
   const loadForEdit = (p: Policy) => {
@@ -477,6 +487,15 @@ export function LimitsManager() {
                       }
                     >
                       <Star size={15} fill={isDefault ? 'currentColor' : 'none'} />
+                    </button>
+                    <button
+                      onClick={() => pin.mutate(p.commitment)}
+                      disabled={pin.isPending}
+                      title="Pin on-chain (wallet signs set_policy_commitment)"
+                      aria-label="Pin on-chain"
+                      className="text-slate-600 hover:text-violet-300 disabled:opacity-40"
+                    >
+                      <Anchor size={14} />
                     </button>
                     <button
                       onClick={() => loadForEdit(p)}

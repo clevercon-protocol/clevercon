@@ -163,6 +163,22 @@ export class VaultContractService {
     ]);
   }
 
+  /**
+   * Unsigned `set_policy_commitment(user, commitment)` XDR for the user to sign,
+   * pinning a rule's 32-byte commitment to their account. The proof-gated
+   * release path then accepts only releases whose commitment is in the user's
+   * pinned set, so the operator cannot lock a task under a rule the user never
+   * authorized. `commitmentHex` is 64 hex chars (validated at the controller).
+   */
+  async buildPinCommitmentXdr(userAddress: string, commitmentHex: string): Promise<string> {
+    this.ensureActive();
+    const bytes = Buffer.from(commitmentHex.replace(/^0x/, ''), 'hex');
+    return this.buildUnsignedXdr(userAddress, 'set_policy_commitment', [
+      new Address(userAddress).toScVal(),
+      xdr.ScVal.scvBytes(bytes),
+    ]);
+  }
+
   /** Submit a wallet-signed XDR and poll for confirmation; returns the tx hash. */
   async submitSignedXdr(signedXdr: string): Promise<string> {
     this.ensureActive();

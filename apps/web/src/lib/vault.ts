@@ -109,6 +109,18 @@ export async function authorizeDelegate(): Promise<{ txHash: string }> {
 }
 
 /**
+ * Pin a rule's commitment to the user's vault account (set_policy_commitment):
+ * the API builds the XDR, the wallet signs it, the API submits. Required before
+ * a proof-gated release will accept the rule, the vault enforces pinned-set
+ * membership, so the operator cannot lock a task under an unpinned rule.
+ */
+export async function pinCommitment(commitment: string): Promise<{ txHash: string }> {
+  const built = await apiPost<BuildResp>('/vault/pin-commitment', { commitment });
+  const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
+  return apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
+}
+
+/**
  * The user's own agent key (for the agent-key payment mode: paying external
  * x402/MPP services). The platform stores only the public key; the user's agent
  * holds the secret, so it stays non-custodial.
