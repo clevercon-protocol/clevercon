@@ -15,6 +15,13 @@ export interface Policy {
   commitment: string;
   isPrivate: boolean;
   rules: PolicyRules | null;
+  /** Lifecycle + shared-model fields (present from the live API; optional in demo). */
+  name?: string | null;
+  form?: 'private' | 'public';
+  status?: 'active' | 'archived';
+  version?: number;
+  supersedes?: string | null;
+  global?: boolean;
   createdAt: string;
 }
 
@@ -35,11 +42,25 @@ export async function getPolicies(): Promise<Policy[]> {
   return res.items;
 }
 
+/** Optional lifecycle fields when creating/editing a policy (Phase A5). */
+export interface CreatePolicyOpts {
+  name?: string;
+  form?: 'private' | 'public';
+  global?: boolean;
+  /** When editing: the id of the policy this new version supersedes. */
+  supersedes?: string;
+}
+
 /**
  * Create a policy. Private mode stores only the commitment (the plaintext rule
- * is not persisted server-side); transparent mode stores the rule too.
+ * is not persisted server-side); transparent/public mode stores the rule too.
+ * Passing `supersedes` records an edit as a new version that replaces the old.
  */
-export async function createPolicy(rules: PolicyRules, isPrivate: boolean): Promise<Policy> {
+export async function createPolicy(
+  rules: PolicyRules,
+  isPrivate: boolean,
+  opts: CreatePolicyOpts = {},
+): Promise<Policy> {
   if (isDemo()) {
     return {
       id: 'pol-' + Date.now(),
@@ -49,10 +70,21 @@ export async function createPolicy(rules: PolicyRules, isPrivate: boolean): Prom
       isPrivate,
       // Private policies do not keep the plaintext rule, mirroring the API.
       rules: isPrivate ? null : rules,
+      name: opts.name ?? null,
+      form: opts.form ?? (isPrivate ? 'private' : 'public'),
+      status: 'active',
+      version: 1,
+      global: opts.global ?? false,
       createdAt: new Date().toISOString(),
     };
   }
-  return apiPost<Policy>('/policies', { rules, isPrivate });
+  return apiPost<Policy>('/policies', { rules, isPrivate, ...opts });
+}
+
+/** Archive a saved limit: hidden from pickers, kept for audit. */
+export async function archivePolicy(id: string): Promise<Policy> {
+  if (isDemo()) return { ...demoPolicies[0], id, status: 'archived' };
+  return apiPost<Policy>(`/policies/${encodeURIComponent(id)}/archive`, {});
 }
 
 export interface ProofStatus {

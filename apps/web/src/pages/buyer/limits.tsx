@@ -11,8 +11,10 @@ import {
   CalendarClock,
   Star,
   Sparkles,
+  Archive,
+  Pencil,
 } from 'lucide-react';
-import { getPolicies, createPolicy } from '../../lib/policies';
+import { getPolicies, createPolicy, archivePolicy, type Policy } from '../../lib/policies';
 import { Card, CardHeader, EmptyState, ErrorState, Loading, controls } from '../../components/ui';
 import {
   WINDOWS,
@@ -270,6 +272,8 @@ const localKey = (commitment: string) => `${LIMIT_CACHE_PREFIX}${commitment}`;
 export function LimitsManager() {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<Draft>(emptyDraft());
+  const [name, setName] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [defaultId, setDefaultId] = useState<string>(() => getDefaultLimitId());
   const {
     data: policies = [],
@@ -284,10 +288,20 @@ export function LimitsManager() {
     setDefaultLimitId(next);
   };
 
+  const resetForm = () => {
+    setDraft(emptyDraft());
+    setName('');
+    setEditingId(null);
+  };
+
   const save = useMutation({
     mutationFn: () => {
       const { rules, isPrivate } = draftToRules(draft);
-      return createPolicy(rules, isPrivate);
+      return createPolicy(rules, isPrivate, {
+        name: name.trim() || undefined,
+        form: draft.isPrivate ? 'private' : 'public',
+        supersedes: editingId ?? undefined,
+      });
     },
     onSuccess: (p) => {
       // Cache the plaintext draft on this device for every limit: private limits
@@ -299,10 +313,32 @@ export function LimitsManager() {
       } catch {
         // ignore
       }
-      setDraft(emptyDraft());
+      resetForm();
       qc.invalidateQueries({ queryKey: ['policies'] });
     },
   });
+
+  // Editing a committed rule never mutates it in place: archive the old, create a
+  // new version that supersedes it.
+  const archive = useMutation({
+    mutationFn: (id: string) => archivePolicy(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['policies'] }),
+  });
+
+  // Load a saved limit's device-cached rule back into the builder to edit it;
+  // saving then mints a new version that supersedes the original.
+  const loadForEdit = (p: Policy) => {
+    try {
+      const cached = localStorage.getItem(localKey(p.commitment));
+      if (cached) setDraft(JSON.parse(cached) as Draft);
+    } catch {
+      // ignore; keep whatever is in the builder
+    }
+    setName(p.name ?? '');
+    setEditingId(p.id);
+  };
+
+  const activePolicies = policies.filter((p) => p.status !== 'archived');
 
   const hasAnyRule =
     !!draft.perPaymentCeiling ||
@@ -318,6 +354,15 @@ export function LimitsManager() {
         hint="Build a rule once, then apply it per instruction on Home. Star one to make it your default."
       />
       <div className="p-5 pt-4">
+        <label className="mb-3 block">
+          <span className="mb-1 block text-xs text-slate-400">Name (optional)</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Payroll, Agent allowance, API budget"
+            className={inputCls}
+          />
+        </label>
         <LimitsBuilder value={draft} onChange={setDraft} />
         <div className="mt-3 flex items-center gap-3">
           <button
@@ -325,8 +370,17 @@ export function LimitsManager() {
             disabled={!hasAnyRule || save.isPending}
             className={primaryBtn}
           >
-            {save.isPending ? 'Saving…' : 'Save limit'}
+            {save.isPending ? 'Saving…' : editingId ? 'Save new version' : 'Save limit'}
           </button>
+          {editingId && (
+            <button
+              type="button"
+              onClick={resetForm}
+              className="text-xs text-slate-400 hover:text-slate-200"
+            >
+              Cancel edit
+            </button>
+          )}
           <span className="text-xs text-slate-500">{describeDraft(draft)}</span>
         </div>
         {save.error && (
@@ -337,9 +391,11 @@ export function LimitsManager() {
           <p className="mb-2 text-xs uppercase tracking-wider text-slate-500">Your saved limits</p>
           {isLoading && <Loading rows={2} />}
           {error && <ErrorState>Could not load your limits.</ErrorState>}
-          {!isLoading && !error && policies.length === 0 && <EmptyState>No limits yet.</EmptyState>}
+          {!isLoading && !error && activePolicies.length === 0 && (
+            <EmptyState>No limits yet.</EmptyState>
+          )}
           <div className="space-y-2">
-            {policies.map((p) => {
+            {activePolicies.map((p) => {
               const isDefault = defaultId === p.id;
               return (
                 <div
@@ -357,7 +413,10 @@ export function LimitsManager() {
                       ) : (
                         <Eye size={13} className="text-slate-400" />
                       )}
-                      {p.isPrivate ? 'Private limit' : 'Transparent limit'}
+                      {p.name || (p.isPrivate ? 'Private limit' : 'Transparent limit')}
+                      {typeof p.version === 'number' && p.version > 1 && (
+                        <span className="text-[10px] text-slate-500">v{p.version}</span>
+                      )}
                       {isDefault && (
                         <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-200">
                           Default
@@ -378,6 +437,23 @@ export function LimitsManager() {
                       }
                     >
                       <Star size={15} fill={isDefault ? 'currentColor' : 'none'} />
+                    </button>
+                    <button
+                      onClick={() => loadForEdit(p)}
+                      title="Edit (saves a new version)"
+                      aria-label="Edit limit"
+                      className="text-slate-600 hover:text-slate-300"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      onClick={() => archive.mutate(p.id)}
+                      disabled={archive.isPending}
+                      title="Archive"
+                      aria-label="Archive limit"
+                      className="text-slate-600 hover:text-red-300 disabled:opacity-40"
+                    >
+                      <Archive size={14} />
                     </button>
                     <span className="font-mono text-[11px] text-slate-500">
                       {p.commitment.slice(0, 10)}…
