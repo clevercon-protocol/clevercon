@@ -12,6 +12,13 @@ const createSchema = z.object({
   form: z.enum(['private', 'public']).optional(),
   global: z.boolean().optional(),
   supersedes: z.string().min(1).optional(),
+  // Private rules: the client's canonical pp/2 commitment (32-byte hex) and an
+  // opaque wallet-encrypted {clauses, salt} backup the server stores but cannot read.
+  commitment: z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/)
+    .optional(),
+  encryptedBackup: z.string().min(1).max(8192).optional(),
   rules: z.object({
     perPaymentCeilingUsdc: z.number().positive().optional(),
     rollingCapUsdc: z.number().positive().optional(),

@@ -75,6 +75,39 @@ describe.skipIf(!DB)('Policies (integration, real Postgres)', () => {
     expect(row.ruleSummary).toBeNull();
   });
 
+  it('private policy stores the CLIENT commitment + encrypted backup verbatim', async () => {
+    const user = await prisma.user.create({ data: {} });
+    const clientCommitment = 'ab'.repeat(32); // the canonical pp/2 value the client computed
+    const backup = 'base64-ciphertext-of-{clauses,salt}';
+    const p = await policies.create(user.id, {
+      form: 'private',
+      rules: { perPaymentCeilingUsdc: 1 },
+      commitment: clientCommitment,
+      encryptedBackup: backup,
+    });
+    // The server stores the client's commitment, NOT a server-derived one, so the
+    // owner's on-chain pin and every disburse proof reproduce the same value.
+    expect(p.commitment).toBe(clientCommitment);
+    expect(p.encryptedBackup).toBe(backup);
+    const row = await prisma.policy.findUnique({ where: { id: p.id } });
+    expect(row.encryptedBackup).toBe(backup);
+    expect(row.ruleSummary).toBeNull();
+  });
+
+  it('ignores a client commitment on a PUBLIC policy (server derives it)', async () => {
+    const user = await prisma.user.create({ data: {} });
+    const p = await policies.create(user.id, {
+      form: 'public',
+      rules: { perPaymentCeilingUsdc: 1 },
+      commitment: 'cd'.repeat(32),
+      encryptedBackup: 'should-not-be-stored',
+    });
+    expect(p.commitment).not.toBe('cd'.repeat(32));
+    expect(p.commitment).toMatch(/^[0-9a-f]{64}$/);
+    const row = await prisma.policy.findUnique({ where: { id: p.id } });
+    expect(row.encryptedBackup).toBeNull();
+  });
+
   it('requestProof reserves a nullifier + REQUESTED proof; getProof is owner-scoped', async () => {
     const PAYEE = 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ';
     const me = await prisma.user.create({ data: {} });

@@ -404,21 +404,25 @@ model Settlement {
 // ── Privacy (policies & proofs) ──────────────────────────────────────────────
 
 model Policy {
-  id          String   @id @default(cuid())
-  userId      String
-  commitment  String // 32-byte commitment hash (hex)
-  isPrivate   Boolean  @default(true)
+  id              String   @id @default(cuid())
+  userId          String
+  commitment      String // 32-byte commitment hash (hex)
+  isPrivate       Boolean  @default(true)
   // Plaintext rule is NOT stored server-side unless the user explicitly opts in.
-  ruleSummary Json?
+  ruleSummary     Json?
+  // Private rules: a wallet-encrypted backup of {clauses, salt} (ciphertext only;
+  // key derived from a wallet signature) so the owner can re-prove across devices
+  // and re-view the salt. The server cannot read it. Null for public rules.
+  encryptedBackup String?
   // Lifecycle + shared rule-model fields (Phase A5). All additive/defaulted so
   // Railway's db:deploy syncs them with no data loss.
-  name        String?
-  form        String   @default("private") // "private" | "public" (the lane)
-  status      String   @default("active") //  "active" | "archived"
-  version     Int      @default(1)
-  supersedes  String? //  id of the policy this version replaces (edit lineage)
-  global      Boolean  @default(false) //    flagged as the account global for its lane
-  createdAt   DateTime @default(now())
+  name            String?
+  form            String   @default("private") // "private" | "public" (the lane)
+  status          String   @default("active") //  "active" | "archived"
+  version         Int      @default(1)
+  supersedes      String? //  id of the policy this version replaces (edit lineage)
+  global          Boolean  @default(false) //    flagged as the account global for its lane
+  createdAt       DateTime @default(now())
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   tasks  Task[]

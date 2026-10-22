@@ -31,6 +31,18 @@ export interface CreatePolicyParams {
   global?: boolean;
   /** When editing: the id of the policy this new version replaces. */
   supersedes?: string;
+  /**
+   * Private rules only: the canonical pp/2 commitment (32-byte hex) the client
+   * computed from the rule + its device salt. The owner pins this and every
+   * disburse proof reproduces it, so the server MUST store the client value, not
+   * a server-derived one. Ignored for public rules (server derives theirs).
+   */
+  commitment?: string;
+  /**
+   * Private rules only: a wallet-encrypted backup of {clauses, salt} (opaque
+   * ciphertext). The server stores it verbatim and can never read it.
+   */
+  encryptedBackup?: string;
 }
 
 const STROOPS_PER_USDC = 10_000_000;
@@ -72,6 +84,7 @@ function serialize(p: {
   commitment: string;
   isPrivate: boolean;
   ruleSummary: Prisma.JsonValue | null;
+  encryptedBackup: string | null;
   name: string | null;
   form: string;
   status: string;
@@ -86,6 +99,8 @@ function serialize(p: {
     isPrivate: p.isPrivate,
     // ruleSummary is present only for transparent (or explicitly opted-in) policies.
     rules: p.ruleSummary,
+    // The owner's device decrypts this to re-prove a private rule across devices.
+    encryptedBackup: p.encryptedBackup,
     name: p.name,
     form: p.form,
     status: p.status,
@@ -121,12 +136,24 @@ export class PoliciesService {
     const form: RuleForm = params.form ?? (params.isPrivate === false ? 'public' : 'private');
     const isPrivate = form === 'private';
 
-    // The commitment binds the rule: a SHA-256 of the canonical encoding. A
-    // transparent/public policy also persists the plaintext rule (ruleSummary)
-    // so it is auditable; a private policy stores ONLY the commitment, so the
-    // server never holds the rule. (v1 uses SHA-256, matching the on-chain
-    // binding check; the client Poseidon commitment is the migration target.)
-    const commitment = createHash('sha256').update(canonicalEncoding(params.rules)).digest('hex');
+    // The commitment binds the rule. A private rule's commitment is the canonical
+    // pp/2 Poseidon value the CLIENT computed from the rule + its device salt
+    // (docs/private-policies-v2.md section 3): the owner pins it and every
+    // browser disburse proof must reproduce it, so the server stores the client
+    // value verbatim and never holds the rule. A public rule is auditable and
+    // stored cleartext (ruleSummary), so the server derives its commitment as a
+    // SHA-256 of the canonical encoding (the pp/1 binding check). If a private
+    // caller omits the client commitment (legacy), fall back to SHA-256 so
+    // creation still works, though that rule will not be pp/2-pinnable.
+    let commitment: string;
+    if (isPrivate && params.commitment) {
+      if (!/^[0-9a-fA-F]{64}$/.test(params.commitment)) {
+        throw new BadRequestException('commitment must be 32-byte hex (64 chars)');
+      }
+      commitment = params.commitment.toLowerCase();
+    } else {
+      commitment = createHash('sha256').update(canonicalEncoding(params.rules)).digest('hex');
+    }
 
     // Editing a rule is versioning: the new row supersedes the old under the
     // same lineage, and the superseded rule is archived. Ownership is checked
@@ -152,6 +179,9 @@ export class PoliciesService {
         global: params.global ?? false,
         name: params.name,
         ruleSummary: isPrivate ? undefined : (params.rules as unknown as Prisma.InputJsonValue),
+        // Private rules keep a wallet-encrypted backup (ciphertext); public rules
+        // are already cleartext, so there is nothing to back up privately.
+        encryptedBackup: isPrivate ? params.encryptedBackup : undefined,
       },
     });
 
