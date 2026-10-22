@@ -184,9 +184,32 @@ async function main() {
   const buyer = Keypair.random();
   console.log(`buyer: ${buyer.publicKey()}  (throwaway secret ${buyer.secret()})\n`);
 
-  // 0. onboard: fund, trustline, faucet USDC, sign-in, deposit, delegate.
-  const fb = await fetch(`${FRIENDBOT}?addr=${buyer.publicKey()}`);
-  record('friendbot XLM', fb.ok, `${fb.status}`);
+  // 0. onboard: fund the throwaway buyer. Prefer friendbot, but it is often down
+  // on testnet, so fall back to creating + funding the account from the
+  // orchestrator faucet (which holds ample XLM) so the run is not blocked by the
+  // faucet being unavailable.
+  let fundedVia = '';
+  try {
+    const fb = await fetch(`${FRIENDBOT}?addr=${buyer.publicKey()}`, {
+      signal: AbortSignal.timeout(15000),
+    });
+    if (fb.ok) fundedVia = 'friendbot';
+  } catch {
+    // friendbot unreachable; fall through to the faucet
+  }
+  if (!fundedVia) {
+    const acct = await horizon.loadAccount(faucet.publicKey());
+    const tx = new TransactionBuilder(acct, { fee: BASE_FEE, networkPassphrase: PASSPHRASE })
+      .addOperation(
+        Operation.createAccount({ destination: buyer.publicKey(), startingBalance: '5' }),
+      )
+      .setTimeout(60)
+      .build();
+    tx.sign(faucet);
+    await submitClassic(tx);
+    fundedVia = 'faucet';
+  }
+  record('buyer funded (XLM)', !!fundedVia, `via ${fundedVia}`);
   await sleep(2500);
   {
     const acct = await horizon.loadAccount(buyer.publicKey());
