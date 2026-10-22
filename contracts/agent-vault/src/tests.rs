@@ -4331,7 +4331,7 @@ fn test_release_payment_proved_batch_happy_path() {
     let proof = dummy_groth16_proof(&s.env);
 
     // One proof authorizes all three transfers. The default test ledger time is
-    // 0, which lies inside the [0, u64::MAX] validity window.
+    // 0, which lies inside the [0, 86_400] validity window (within MAX_VALIDITY_SECS).
     let ok = s.client.release_payment_proved_batch(
         &s.orchestrator,
         &task_id,
@@ -4341,7 +4341,7 @@ fn test_release_payment_proved_batch_happy_path() {
         &amounts,
         &nullifiers,
         &0u64,
-        &u64::MAX,
+        &86_400u64,
         &proof,
     );
     assert!(ok);
@@ -4364,7 +4364,7 @@ fn test_release_payment_proved_batch_happy_path() {
         &one,
         &replay,
         &0u64,
-        &u64::MAX,
+        &86_400u64,
         &proof,
     );
     assert!(res.is_err());
@@ -4393,7 +4393,7 @@ fn test_release_payment_proved_batch_rejects_and_moves_no_funds() {
         &amounts,
         &nullifiers,
         &0u64,
-        &u64::MAX,
+        &86_400u64,
         &proof,
     );
     assert!(res.is_err());
@@ -4432,6 +4432,95 @@ fn test_release_payment_proved_batch_rejects_outside_validity_window() {
         &proof,
     );
     assert!(res.is_err());
+    assert_eq!(s.token_client.balance(&payee), 0);
+    assert_eq!(s.verifier.calls(), 0);
+}
+
+#[test]
+fn test_release_payment_proved_batch_nullifier_cannot_replay_across_tasks() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    // Two separate tasks under the SAME pinned commitment (as a replayed proof
+    // would target; committed_task re-pins c, which is a no-op the second time).
+    let c = commitment_of(&s.env, 11);
+    let task1 = committed_task(&s, 5_000, &c);
+    let task2 = committed_task(&s, 5_000, &c);
+
+    let payee = Address::generate(&s.env);
+    let payees = soroban_sdk::vec![&s.env, payee.clone()];
+    let amounts = soroban_sdk::vec![&s.env, 400i128];
+    let nf = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 50)];
+    let proof = dummy_groth16_proof(&s.env);
+
+    // Spend the nullifier under task1.
+    let ok = s.client.release_payment_proved_batch(
+        &s.orchestrator,
+        &task1,
+        &1,
+        &s.usdc_sac,
+        &payees,
+        &amounts,
+        &nf,
+        &0u64,
+        &86_400u64,
+        &proof,
+    );
+    assert!(ok);
+    assert_eq!(s.token_client.balance(&payee), 400);
+
+    // Replaying the SAME nullifier under task2 is rejected — the fix: batch
+    // nullifier markers are global, not per task — and no second payment moves.
+    let res = s.client.try_release_payment_proved_batch(
+        &s.orchestrator,
+        &task2,
+        &1,
+        &s.usdc_sac,
+        &payees,
+        &amounts,
+        &nf,
+        &0u64,
+        &86_400u64,
+        &proof,
+    );
+    assert!(res == Err(Ok(VaultError::NullifierAlreadyUsed)));
+    assert_eq!(s.token_client.balance(&payee), 400);
+    assert_eq!(s.client.get_task(&task2).unwrap().spent, 0);
+}
+
+#[test]
+fn test_release_payment_proved_batch_rejects_overlong_validity_window() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+    s.env.ledger().set_timestamp(1_000_000);
+
+    let c = commitment_of(&s.env, 12);
+    let task_id = committed_task(&s, 5_000, &c);
+    let payee = Address::generate(&s.env);
+    let payees = soroban_sdk::vec![&s.env, payee.clone()];
+    let amounts = soroban_sdk::vec![&s.env, 400i128];
+    let nf = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 51)];
+    let proof = dummy_groth16_proof(&s.env);
+
+    // valid_before reaches 1s past MAX_VALIDITY_SECS (7 days) ahead of ledger time:
+    // rejected before the verifier, so a far-future window can never outlive the
+    // globally-scoped nullifier marker and reopen a replay.
+    let far = 1_000_000u64 + 604_800u64 + 1;
+    let res = s.client.try_release_payment_proved_batch(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &payees,
+        &amounts,
+        &nf,
+        &0u64,
+        &far,
+        &proof,
+    );
+    assert!(res == Err(Ok(VaultError::ValidityWindowTooLong)));
     assert_eq!(s.token_client.balance(&payee), 0);
     assert_eq!(s.verifier.calls(), 0);
 }

@@ -340,6 +340,10 @@ pub enum VaultError {
     /// owner's account. The operator cannot lock a task under a rule the user
     /// never authorized: a release proceeds only against a user-pinned commitment.
     CommitmentNotAuthorized = 39,
+    /// A pp/2 batch release's validity window reaches further ahead than
+    /// `MAX_VALIDITY_SECS`. Bounded so the globally-scoped nullifier marker's
+    /// ~30-day TTL always outlives the window (no replay once the marker archives).
+    ValidityWindowTooLong = 40,
 }
 
 /// A spend lane: `Private` (proof-enforced, hidden rule) or `Public` (session
@@ -396,15 +400,24 @@ pub enum DataKey {
     /// time (mirrors [`DataKey::DisputeResolver`]). Absent means the proof-gated
     /// release path is disabled and fails closed.
     PolicyVerifier,
-    /// Per-task consumed-nullifier marker: `(task_id, nullifier) → ()`. Presence
-    /// means this nullifier has already produced a proof-gated release for this
-    /// task and may not be reused. Scoped per task (not global) so the entries
-    /// share the task's TTL lifecycle and are pruned on finalization; the
-    /// per-task commitment already prevents cross-task proof reuse.
+    /// Per-task consumed-nullifier marker for the SINGLE binding release path
+    /// (`release_payment_proved`): `(task_id, nullifier) → ()`. Scoped per task so
+    /// the entries share the task's TTL lifecycle and are pruned on finalization.
+    /// The pp/2 BATCH path instead uses the globally-scoped [`DataKey::Nullifier`]
+    /// so a batch release cannot be replayed under a DIFFERENT task.
     TaskNullifier(u64, BytesN<32>),
-    /// Enumerable index of a task's consumed nullifiers, for unit TTL refresh
-    /// and cleanup on finalization. Mirrors [`DataKey::TaskStepIds`].
+    /// Enumerable index of a task's consumed nullifiers (single-release path only),
+    /// for unit TTL refresh and cleanup on finalization. Mirrors [`DataKey::TaskStepIds`].
     TaskNullifierIds(u64),
+    /// Globally-scoped consumed-nullifier marker for the pp/2 BATCH path:
+    /// `nullifier → ()`. The circuit binds the nullifier to the policy commitment,
+    /// so a global marker blocks replay of the SAME release under any task (the gap
+    /// a per-task marker left open). Not indexed or reclaimed on finalization: a
+    /// standard ~30-day persistent TTL outlives the capped validity window
+    /// ([`MAX_VALIDITY_SECS`]), and past `valid_before` the stale-proof check
+    /// rejects replays, so the marker is free to archive — bounded storage, no
+    /// replay window.
+    Nullifier(BytesN<32>),
     /// Per-task count of proof-gated releases so far, the authenticated
     /// `prior_count` the pp/2 batch circuit's velocity rule (R7) is proven
     /// against. `task.spent` serves the same role as `running_spend` for R2.
@@ -568,6 +581,12 @@ const BATCH_N: u32 = 4;
 
 const PERSISTENT_TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const PERSISTENT_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
+/// Upper bound on how far ahead a pp/2 batch release's validity window may reach
+/// (`valid_before - ledger_time`). Keeps a globally-scoped consumed-nullifier
+/// marker's required lifetime well under its ~30-day persistent TTL, so the marker
+/// never archives while a replay is still inside the window. Generous vs the
+/// clients' ~1-day windows.
+const MAX_VALIDITY_SECS: u64 = 604_800; // 7 days
 
 const INSTANCE_TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const INSTANCE_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
@@ -1539,6 +1558,14 @@ impl AgentVault {
         if ledger_time < valid_after || ledger_time > valid_before {
             return Err(VaultError::OutsideValidityWindow);
         }
+        // Bound the forward reach of the window so the globally-scoped nullifier
+        // markers recorded below only need to outlive it: a ~30-day persistent TTL
+        // always covers a <= MAX_VALIDITY_SECS window, and past valid_before the
+        // check above rejects any replay. Without this a far-future valid_before
+        // could outlive the marker and reopen a cross-task replay.
+        if valid_before.saturating_sub(ledger_time) > MAX_VALIDITY_SECS {
+            return Err(VaultError::ValidityWindowTooLong);
+        }
 
         let task_key = DataKey::Task(task_id);
         let mut task: TaskInfo = env
@@ -1583,7 +1610,6 @@ impl AgentVault {
         if let Some(record) = env.storage().persistent().get::<_, StepRelease>(&step_key) {
             Self::extend_persistent_ttl(&env, &step_key);
             Self::extend_task_step_ids_ttl(&env, task_id);
-            Self::extend_task_nullifier_ids_ttl(&env, task_id);
             if record.amount == batch_total {
                 return Ok(true);
             }
@@ -1601,7 +1627,7 @@ impl AgentVault {
             if env
                 .storage()
                 .persistent()
-                .has(&DataKey::TaskNullifier(task_id, n.clone()))
+                .has(&DataKey::Nullifier(n.clone()))
             {
                 return Err(VaultError::NullifierAlreadyUsed);
             }
@@ -1677,7 +1703,7 @@ impl AgentVault {
         // All state that bounds fund movement is committed before any transfer.
         Self::record_step_release(&env, task_id, step_id, batch_total)?;
         for n in nullifiers.iter() {
-            Self::record_task_nullifier(&env, task_id, &n)?;
+            Self::record_nullifier(&env, &n);
         }
         task.spent += batch_total;
         env.storage().persistent().set(&task_key, &task);
@@ -2618,6 +2644,20 @@ impl AgentVault {
         if env.storage().persistent().has(&ids_key) {
             env.storage().persistent().remove(&ids_key);
         }
+    }
+
+    /// Record a globally-scoped consumed nullifier for the pp/2 BATCH path. Unlike
+    /// the per-task markers of `release_payment_proved`, a batch nullifier is keyed
+    /// by its own hash, so the SAME release can never be replayed under a different
+    /// task. It is deliberately NOT indexed or reclaimed on finalization: a standard
+    /// ~30-day persistent TTL outlives the capped validity window
+    /// ([`MAX_VALIDITY_SECS`]), and past `valid_before` the stale-proof check
+    /// rejects any replay — so the marker may archive afterwards, keeping storage
+    /// bounded with no replay window. The caller has already verified it is absent.
+    fn record_nullifier(env: &Env, nullifier: &BytesN<32>) {
+        let key = DataKey::Nullifier(nullifier.clone());
+        env.storage().persistent().set(&key, &());
+        Self::extend_persistent_ttl(env, &key);
     }
 
     /// Loads the user's asset account balance, or returns a zeroed struct if not found.
