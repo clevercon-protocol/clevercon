@@ -4554,7 +4554,7 @@ fn test_commitment_accumulator_spans_tasks_and_resets() {
     let c = commitment_of(&s.env, 13);
     let task1 = committed_task(&s, 5_000, &c);
     let task2 = committed_task(&s, 5_000, &c);
-    let one = |amt: i128, nf: u64| {
+    let one = |amt: i128, nf: u8| {
         (
             soroban_sdk::vec![&s.env, payee.clone()],
             soroban_sdk::vec![&s.env, amt],
