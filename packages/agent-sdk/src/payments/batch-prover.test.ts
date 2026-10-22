@@ -12,11 +12,14 @@ import {
   BATCH_N,
   buildBatchReleaseRequest,
   buildBatchWitness,
+  createBatchProof,
+  policyCommitment,
   type BatchContext,
   type BatchProof,
   type BatchRelease,
   type PolicyWitness,
 } from './batch-prover.js';
+import { policyWitnessFromBundle } from './policy-bundle.js';
 
 const PAYEE = 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ';
 
@@ -189,4 +192,35 @@ describe('buildBatchReleaseRequest', () => {
       }),
     ).toThrow();
   });
+});
+
+// The commitment twin must produce the EXACT bytes the circuit outputs, since the
+// vault stores and the owner pins that value and every disburse proof must
+// reproduce it. Cross-checked against a real Groth16 proof. Needs the circuit
+// artifacts, so it is gated on PP2_WASM + PP2_ZKEY (set them to the built
+// policy_batch.wasm / policy_batch_final.zkey); skipped in CI without them.
+const PP2_WASM = process.env.PP2_WASM;
+const PP2_ZKEY = process.env.PP2_ZKEY;
+describe.skipIf(!PP2_WASM || !PP2_ZKEY)('policyCommitment matches the circuit', () => {
+  it('equals createBatchProof().commitment for the same policy + salt', async () => {
+    const policy = policyWitnessFromBundle({
+      rules: { perPaymentCeilingUsdc: 100 },
+      salt: '123456789',
+    });
+    const releases: BatchRelease[] = [
+      { payeeAddress: PAYEE, amountStroops: '500000000', spendCounter: '7' }, // 50 USDC < ceiling
+    ];
+    const ctx: BatchContext = {
+      validAfter: '0',
+      validBefore: '4294967295',
+      runningSpend: '0',
+      priorCount: '0',
+    };
+    const proof = await createBatchProof(policy, releases, ctx, {
+      wasmPath: PP2_WASM as string,
+      zkeyPath: PP2_ZKEY as string,
+    });
+    const commit = await policyCommitment(policy, { wasmPath: PP2_WASM as string });
+    expect(commit.toString('hex')).toBe(proof.commitment.toString('hex'));
+  }, 120_000);
 });

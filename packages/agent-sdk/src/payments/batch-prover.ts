@@ -11,6 +11,7 @@
  * The circuit shape (N=4 releases, depth-16 allowlist, 4 categories, 2 calendar
  * windows) is pinned here to match the deployed verifying key.
  */
+import { StrKey } from '@stellar/stellar-sdk';
 import {
   amountScalar,
   extractBatchOutputs,
@@ -205,6 +206,60 @@ export async function createBatchProof(
   artifacts: { wasmPath: string; zkeyPath: string },
 ): Promise<BatchProof> {
   return proveBatch(buildBatchWitness(policy, releases, ctx), artifacts);
+}
+
+/** Read circuit wasm from a URL (browser) or a file path (Node), lazily. */
+async function loadCircuitWasm(src: string): Promise<Uint8Array> {
+  if (/^https?:\/\//.test(src)) {
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(`circuit wasm fetch failed ${res.status}: ${src}`);
+    return new Uint8Array(await res.arrayBuffer());
+  }
+  const fs = await import('node:fs/promises');
+  return new Uint8Array(await fs.readFile(src));
+}
+
+// An obviously-null probe payee (all-zero ed25519 account). The commitment is a
+// function of the policy fields + salt only, independent of the releases, so this
+// probe never affects the result; it just gives the witness calculator a
+// well-formed active slot to run over.
+const PROBE_PAYEE = StrKey.encodeEd25519PublicKey(Buffer.alloc(32));
+
+/**
+ * Compute the canonical 32-byte policy commitment (public input PI0) WITHOUT a
+ * full Groth16 proof: run the circuit's OWN witness calculator over its wasm and
+ * read the commitment output signal (witness index 1, the first main output). The
+ * commitment is the Poseidon encoding of the policy fields + salt
+ * (`docs/private-policies-v2.md` section 3), deterministic in (policy, salt) and
+ * independent of the releases, so the result is identical to
+ * `createBatchProof(policy, ...).commitment` for the same policy at a fraction of
+ * the cost (no proving, no zkey). This is the value the vault stores
+ * (`policies.commitment`) and the owner pins with `set_policy_commitment`.
+ *
+ * Only the circuit `wasm` is needed, the same artifact the prover already fetches,
+ * so rule creation and later disbursing share one download.
+ */
+export async function policyCommitment(
+  policy: PolicyWitness,
+  artifacts: { wasmPath: string },
+): Promise<Buffer> {
+  const input = buildBatchWitness(
+    policy,
+    [{ payeeAddress: PROBE_PAYEE, amountStroops: '1', spendCounter: '0' }],
+    { validAfter: '0', validBefore: '0', runningSpend: '0', priorCount: '0' },
+  );
+  const { WitnessCalculatorBuilder } = await import('circom_runtime');
+  const wasm = await loadCircuitWasm(artifacts.wasmPath);
+  const wc = (await WitnessCalculatorBuilder(wasm)) as {
+    calculateWitness(i: Record<string, unknown>, s: number): Promise<Array<string | bigint>>;
+  };
+  // sanityCheck = 0: we only read output signals, we do not enforce constraints,
+  // so a probe release that would not satisfy the rules is still fine here.
+  const w = await wc.calculateWitness(input, 0);
+  // Witness layout is [1, commitment, nullifier[0..N-1], ...]; reuse the tested
+  // output splitter on that leading output slice.
+  const signals = w.slice(1, 2 + BATCH_N).map((x) => x.toString());
+  return extractBatchOutputs(signals, BATCH_N).commitment;
 }
 
 /** On-chain task context the relayer needs to lazily lock + settle the batch. */

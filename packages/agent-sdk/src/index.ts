@@ -5,6 +5,7 @@ export {
   buildBatchWitness,
   proveBatch,
   createBatchProof,
+  policyCommitment,
   buildBatchReleaseRequest,
   submitBatchRelease,
   BATCH_RELEASE_PATH,
