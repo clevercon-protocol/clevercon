@@ -15,6 +15,8 @@ export interface Policy {
   commitment: string;
   isPrivate: boolean;
   rules: PolicyRules | null;
+  /** Private rules: wallet-encrypted {clauses, salt} backup (ciphertext) for cross-device re-proving. */
+  encryptedBackup?: string | null;
   /** Lifecycle + shared-model fields (present from the live API; optional in demo). */
   name?: string | null;
   form?: 'private' | 'public';
@@ -49,6 +51,10 @@ export interface CreatePolicyOpts {
   global?: boolean;
   /** When editing: the id of the policy this new version supersedes. */
   supersedes?: string;
+  /** Private rules: the client's canonical pp/2 commitment (32-byte hex) the owner pins. */
+  commitment?: string;
+  /** Private rules: opaque wallet-encrypted {clauses, salt} backup the server stores but cannot read. */
+  encryptedBackup?: string;
 }
 
 /**

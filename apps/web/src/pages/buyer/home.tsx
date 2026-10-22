@@ -32,6 +32,7 @@ import {
   draftToRules,
   draftToBundleRules,
   savedLimitBundleRules,
+  resolvePinnedBundle,
   emptyDraft,
   getDefaultLimitId,
   LIMIT_CACHE_PREFIX,
@@ -259,8 +260,7 @@ export function CommandChat() {
     //     ceiling from the plan's own amounts — so the boundary is always a real
     //     number the buyer can see and edit, never a vague "within budget only".
     // An explicitly chosen saved limit is left untouched.
-    const amounts =
-      result.kind === 'hire' ? [result.budget] : result.lines.map((l) => l.amount);
+    const amounts = result.kind === 'hire' ? [result.budget] : result.lines.map((l) => l.amount);
     const derivedCeiling = amounts.length ? Math.max(...amounts) : 0;
     const adopt =
       extracted && (extracted.perPaymentCeilingUsdc || extracted.rollingCapUsdc)
@@ -495,7 +495,25 @@ export function CommandChat() {
     }
 
     try {
-      const bundleRules = bindToBundleRules(plan.bind);
+      // A bound saved limit is proven as its EXACT committed bundle (rules + stable
+      // salt), so the proof reproduces the on-chain pinned commitment the vault
+      // requires. An ad-hoc custom draft (or no binding) is not pinnable and proves
+      // under a fresh salt (fails closed on the pinned-set vault).
+      let pinned: Awaited<ReturnType<typeof resolvePinnedBundle>> = null;
+      if (plan.bind.policyId) {
+        const p = policies.find((x) => x.id === plan.bind.policyId);
+        pinned = p ? await resolvePinnedBundle(p) : null;
+        if (p && !pinned) {
+          push({
+            id: nextId(),
+            role: 'agent',
+            ok: false,
+            text: 'That limit was created on another device and has no backup, so it cannot be proven here. Re-create it on this device, or pick another.',
+          });
+          return;
+        }
+      }
+      const bundleRules = pinned ? null : bindToBundleRules(plan.bind);
       // R1 is always proven. Use the limit's ceiling if it set one; otherwise the
       // largest line, so "within budget only" plans still satisfy the per-payment
       // check without an artificial cap.
@@ -510,8 +528,9 @@ export function CommandChat() {
         text: 'Proving your plan in the browser with zero-knowledge (a few seconds)…',
       });
       const result = await proveAndReleaseBatch({
-        ceilingUsdc: ceiling,
-        bundleRules,
+        bundle: pinned ?? undefined,
+        ceilingUsdc: pinned ? undefined : ceiling,
+        bundleRules: pinned ? undefined : bundleRules,
         recipients: plan.lines.map((l) => ({ payee: l.payee, amount: l.amount })),
       });
       qc.invalidateQueries({ queryKey: ['tasks'] });

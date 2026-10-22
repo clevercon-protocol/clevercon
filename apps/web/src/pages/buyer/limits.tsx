@@ -17,12 +17,17 @@ import {
 } from 'lucide-react';
 import { getPolicies, createPolicy, archivePolicy, type Policy } from '../../lib/policies';
 import { pinCommitment } from '../../lib/vault';
+import { computePolicyCommitment } from '../../lib/prove';
+import { encryptRuleBundle } from '../../lib/rule-backup';
+import { newSalt } from '@clevercon/agent-sdk/prover';
 import { Card, CardHeader, EmptyState, ErrorState, Loading, controls } from '../../components/ui';
 import {
   WINDOWS,
   emptyDraft,
   isStellarAddr,
   draftToRules,
+  draftToBundleRules,
+  cacheLocalSalt,
   describeDraft,
   describeSavedLimit,
   getDefaultLimitId,
@@ -310,24 +315,38 @@ export function LimitsManager() {
   };
 
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const { rules, isPrivate } = draftToRules(draft);
-      return createPolicy(rules, isPrivate, {
+      const base = {
         name: name.trim() || undefined,
-        form: draft.isPrivate ? 'private' : 'public',
+        form: (draft.isPrivate ? 'private' : 'public') as 'private' | 'public',
         supersedes: editingId ?? undefined,
-      });
+      };
+      if (!isPrivate) return { policy: await createPolicy(rules, false, base), salt: null };
+      // Private rule: the commitment the owner pins must be the canonical pp/2
+      // value computed from the FULL prover bundle + a stable device salt, so a
+      // later disburse proving the same bundle reproduces it. Compute it here,
+      // encrypt {rules, salt} under a wallet-derived key for cross-device backup,
+      // and hand both to the server (which stores them but cannot read the backup).
+      const bundleRules = draftToBundleRules(draft);
+      const salt = newSalt();
+      const commitment = await computePolicyCommitment(bundleRules, salt);
+      const encryptedBackup = await encryptRuleBundle({ rules: bundleRules, salt });
+      const policy = await createPolicy(rules, true, { ...base, commitment, encryptedBackup });
+      return { policy, salt };
     },
-    onSuccess: (p) => {
+    onSuccess: ({ policy: p, salt }) => {
       // Cache the plaintext draft on this device for every limit: private limits
       // need it (the server keeps only a commitment), and even transparent ones
       // carry device-local rules (velocity today, per-payee caps next) the server
-      // shape does not. It never leaves the browser.
+      // shape does not. It never leaves the browser. Private limits also cache the
+      // salt so this device can re-prove with no wallet prompt.
       try {
         localStorage.setItem(localKey(p.commitment), JSON.stringify(draft));
       } catch {
         // ignore
       }
+      if (salt) cacheLocalSalt(p.commitment, salt);
       resetForm();
       qc.invalidateQueries({ queryKey: ['policies'] });
     },

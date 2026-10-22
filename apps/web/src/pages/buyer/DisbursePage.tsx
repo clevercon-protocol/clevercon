@@ -12,9 +12,9 @@ import {
   ShieldCheck,
   Layers,
 } from 'lucide-react';
-import { getPolicies } from '../../lib/policies';
+import { getPolicies, type Policy } from '../../lib/policies';
 import { getVault, getDelegate } from '../../lib/vault';
-import { describeSavedLimit, savedLimitBundleRules } from './limits-model';
+import { describeSavedLimit, savedLimitBundleRules, resolvePinnedBundle } from './limits-model';
 import {
   proveAndReleaseBatch,
   pollBatchJobs,
@@ -50,8 +50,12 @@ export function DisbursePage() {
   const draft = loadDraft();
   const [ceiling, setCeiling] = useState(draft?.ceiling ?? '10');
   // The picked saved limit's full prover rules (allowlist, rolling cap, velocity,
-  // deny-list). The ceiling stays its own editable field and overrides the bundle's.
+  // deny-list), for the pre-flight checks and pills. A pinned private rule is
+  // proven as its EXACT committed bundle, so once a limit is picked its ceiling is
+  // authoritative (the field locks to it) and the proof reproduces the pinned
+  // commitment the vault requires.
   const [savedBundle, setSavedBundle] = useState<PolicyBundleRules | null>(null);
+  const [selectedPolicy, setSelectedPolicy] = useState<Policy | null>(null);
   const [lines, setLines] = useState<Line[]>(draft?.lines ?? [{ payee: '', amount: '' }]);
   const [phase, setPhase] = useState<Phase>('idle');
   const [progress, setProgress] = useState<{ i: number; n: number } | null>(null);
@@ -107,11 +111,24 @@ export function DisbursePage() {
     Number(ceiling) > 0 && active.length > 0 && offAllowlist.length === 0 && blocker === null;
 
   const disburse = useMutation<Result>({
-    mutationFn: () =>
-      proveAndReleaseBatch({
-        ceilingUsdc: Number(ceiling),
-        bundleRules: savedBundle,
-        recipients: active.map((l) => ({ payee: l.payee, amount: Number(l.amount) })),
+    mutationFn: async () => {
+      const recipients = active.map((l) => ({ payee: l.payee, amount: Number(l.amount) }));
+      // A picked private limit is proven as its EXACT committed bundle (rules +
+      // stable salt), so the proof reproduces the on-chain pinned commitment and
+      // the vault accepts it. Resolve it from this device, or the wallet-encrypted
+      // backup. With no limit picked, fall back to the ad-hoc ceiling-only path
+      // (not pinnable; fails closed on the pinned-set vault).
+      const pinned = selectedPolicy ? await resolvePinnedBundle(selectedPolicy) : null;
+      if (selectedPolicy && !pinned) {
+        throw new Error(
+          'This limit was created on another device and has no backup, so it cannot be proven here. Re-create it on this device, or pick another.',
+        );
+      }
+      return proveAndReleaseBatch({
+        bundle: pinned ?? undefined,
+        ceilingUsdc: pinned ? undefined : Number(ceiling),
+        bundleRules: pinned ? undefined : savedBundle,
+        recipients,
         onPhase: (p, batch) => {
           if (p === 'done') {
             setPhase('done');
@@ -121,7 +138,8 @@ export function DisbursePage() {
             if (batch) setProgress(batch);
           }
         },
-      }),
+      });
+    },
     onMutate: () => {
       setSettle(null);
       setConfirming(false);
@@ -226,8 +244,9 @@ export function DisbursePage() {
                 <select
                   defaultValue=""
                   onChange={(e) => {
-                    const p = policies.find((x) => x.id === e.target.value);
+                    const p = policies.find((x) => x.id === e.target.value) ?? null;
                     const b = p ? savedLimitBundleRules(p) : null;
+                    setSelectedPolicy(p);
                     setSavedBundle(b);
                     if (b?.perPaymentCeilingUsdc) setCeiling(String(b.perPaymentCeilingUsdc));
                   }}
@@ -263,11 +282,14 @@ export function DisbursePage() {
                 step="0.01"
                 value={ceiling}
                 onChange={(e) => setCeiling(e.target.value)}
-                className="cc-input cc-num mt-1.5 w-44"
+                disabled={!!selectedPolicy}
+                className="cc-input cc-num mt-1.5 w-44 disabled:opacity-60"
                 aria-label="Per-payment ceiling in USDC"
               />
               <p className="mt-1.5 text-xs text-slate-500">
-                Every payout is checked at or under this, inside the proof.
+                {selectedPolicy
+                  ? 'Fixed by the pinned limit: the proof must match its committed rule exactly.'
+                  : 'Every payout is checked at or under this, inside the proof.'}
               </p>
             </div>
 
@@ -277,7 +299,8 @@ export function DisbursePage() {
               </label>
               {lines.map((l, i) => {
                 const overLimit = Number(l.amount) > Number(ceiling) && Number(l.amount) > 0;
-                const offList = !!allowSet && l.payee.trim() !== '' && !allowSet.has(l.payee.trim());
+                const offList =
+                  !!allowSet && l.payee.trim() !== '' && !allowSet.has(l.payee.trim());
                 return (
                   <div key={i} className="flex items-center gap-2">
                     <input

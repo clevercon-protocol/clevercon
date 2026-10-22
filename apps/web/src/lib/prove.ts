@@ -1,6 +1,7 @@
 import { apiGet, apiPost } from './api';
 import {
   createBatchProof,
+  policyCommitment,
   policyWitnessFromBundle,
   buildPolicyWitness,
   makePoseidon,
@@ -48,30 +49,92 @@ export interface ProveResult {
  * carries (allowlist R3 + per-payee cap R5, rolling cap R2, velocity R7, deny R4,
  * ...). Only the allowlist/calendar/category rules need the Poseidon oracle.
  */
-export async function proveAndReleaseBatch(opts: {
-  ceilingUsdc: number;
-  bundleRules: PolicyBundleRules | null;
-  recipients: ProveRecipient[];
-  onPhase?: (phase: ProvePhase, batch?: { i: number; n: number }) => void;
-}): Promise<ProveResult> {
-  const { ceilingUsdc, bundleRules, recipients, onPhase } = opts;
-  const active = recipients.filter((r) => r.payee.trim() && r.amount > 0).slice(0, MAX_RECIPIENTS);
-  if (!active.length) throw new Error('no recipients to pay');
-  if (!(ceilingUsdc > 0)) throw new Error('a per-payment ceiling is required');
-  const over = active.find((r) => r.amount > ceilingUsdc);
-  if (over) throw new Error(`each payout must be at or under the ceiling (${ceilingUsdc} USDC)`);
-
-  // The ceiling is Disburse/Agent's own field, so it overrides the bundle's.
-  const rules: PolicyBundleRules = bundleRules
-    ? { ...bundleRules, perPaymentCeilingUsdc: ceilingUsdc }
-    : { perPaymentCeilingUsdc: ceilingUsdc };
-  const needsFull = !!(
+/** A rule needs the Poseidon oracle only for allowlist/deny/calendar/category roots. */
+function needsPoseidon(rules: PolicyBundleRules): boolean {
+  return !!(
     rules.allowlist?.length ||
     rules.denylist?.length ||
     rules.calendarWindows?.length ||
     rules.categoryCeilingsUsdc?.length
   );
-  const poseidon = needsFull ? await makePoseidon(DEFAULT_POSEIDON_ARTIFACTS) : null;
+}
+
+/**
+ * Build the circuit witness (and allowlist) for a rule + salt. The witness is a
+ * pure function of (rules, salt), so it is built ONCE per policy and shared across
+ * the release groups; the same inputs here, at creation time, and in the vault's
+ * verification all yield the same commitment.
+ */
+async function buildWitness(
+  rules: PolicyBundleRules,
+  salt: string,
+): Promise<{ policy: PolicyWitness; allowlist?: Allowlist }> {
+  const b = { rules, salt };
+  if (needsPoseidon(rules)) {
+    const poseidon = await makePoseidon(DEFAULT_POSEIDON_ARTIFACTS);
+    return buildPolicyWitness(b, poseidon);
+  }
+  return { policy: policyWitnessFromBundle(b) };
+}
+
+/**
+ * The canonical 32-byte commitment (hex) for a rule + salt, computed with the SDK
+ * twin (no proof). This is the value the owner pins and the server stores for a
+ * private rule; a later disburse proving the same (rules, salt) reproduces it, so
+ * the vault's pinned-set membership check passes. Fetches only the circuit wasm.
+ */
+export async function computePolicyCommitment(
+  rules: PolicyBundleRules,
+  salt: string,
+): Promise<string> {
+  const { policy } = await buildWitness(rules, salt);
+  return (await policyCommitment(policy, { wasmPath: WASM })).toString('hex');
+}
+
+export async function proveAndReleaseBatch(opts: {
+  recipients: ProveRecipient[];
+  onPhase?: (phase: ProvePhase, batch?: { i: number; n: number }) => void;
+  /**
+   * Pinned path: prove this exact committed bundle (rules + the policy's stable
+   * salt) so the proof reproduces the on-chain pinned commitment and passes the
+   * vault's membership check. The bundle's OWN ceiling is authoritative.
+   */
+  bundle?: { rules: PolicyBundleRules; salt: string };
+  /**
+   * Ad-hoc path (no pinned rule): a per-payment ceiling, optionally extending
+   * `bundleRules`, proven under a FRESH salt. Not pinnable, so on the pinned-set
+   * vault this fails closed; kept for the legacy ceiling-only flow.
+   */
+  ceilingUsdc?: number;
+  bundleRules?: PolicyBundleRules | null;
+}): Promise<ProveResult> {
+  const { recipients, onPhase, bundle, ceilingUsdc, bundleRules } = opts;
+
+  // Resolve the exact rules + salt the proof binds to. The pinned bundle is used
+  // verbatim (its ceiling is the committed one); the ad-hoc path layers the
+  // caller's ceiling over the optional bundle and mints a fresh, unpinnable salt.
+  let rules: PolicyBundleRules;
+  let salt: string;
+  if (bundle) {
+    rules = bundle.rules;
+    salt = bundle.salt;
+  } else {
+    if (!(ceilingUsdc && ceilingUsdc > 0)) throw new Error('a per-payment ceiling is required');
+    rules = bundleRules
+      ? { ...bundleRules, perPaymentCeilingUsdc: ceilingUsdc }
+      : { perPaymentCeilingUsdc: ceilingUsdc };
+    salt = newSalt();
+  }
+  const ceiling = rules.perPaymentCeilingUsdc;
+  if (!(ceiling > 0)) throw new Error('a per-payment ceiling is required');
+
+  const active = recipients.filter((r) => r.payee.trim() && r.amount > 0).slice(0, MAX_RECIPIENTS);
+  if (!active.length) throw new Error('no recipients to pay');
+  const over = active.find((r) => r.amount > ceiling);
+  if (over) throw new Error(`each payout must be at or under the ceiling (${ceiling} USDC)`);
+
+  // Build the policy witness once; it is identical across every release group.
+  const { policy, allowlist } = await buildWitness(rules, salt);
 
   const groups: ProveRecipient[][] = [];
   for (let i = 0; i < active.length; i += PROOF_WIDTH)
@@ -81,14 +144,6 @@ export async function proveAndReleaseBatch(opts: {
   let sum = 0;
   for (let g = 0; g < groups.length; g++) {
     onPhase?.('proving', { i: g + 1, n: groups.length });
-    const bundle = { rules, salt: newSalt() };
-    let policy: PolicyWitness;
-    let allowlist: Allowlist | undefined;
-    if (poseidon) {
-      ({ policy, allowlist } = await buildPolicyWitness(bundle, poseidon));
-    } else {
-      policy = policyWitnessFromBundle(bundle);
-    }
     const base = Date.now();
     const releases: BatchRelease[] = groups[g].map((l, i) => {
       const payee = l.payee.trim();

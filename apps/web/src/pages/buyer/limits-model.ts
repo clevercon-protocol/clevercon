@@ -1,6 +1,7 @@
 import type { PolicyRules } from '../../lib/policies';
 import type { PolicyBundleRules } from '@clevercon/agent-sdk/prover';
 import { type Rule, type ClauseType, CLAUSE_ENFORCEMENT } from '@clevercon/common/rule-model';
+import { decryptRuleBundle, type RuleBundle } from '../../lib/rule-backup';
 
 // Non-component helpers for the limits UI, kept out of the component module so
 // React Fast Refresh can hot-update the components cleanly.
@@ -209,6 +210,48 @@ export function describeRules(r: PolicyRules): string {
 // so we cache the plaintext locally on the device that created the limit. This is
 // the key both the builder and the picker read/write.
 export const LIMIT_CACHE_PREFIX = 'cc:limit:';
+
+// The device salt that pins a private rule's commitment, cached alongside the
+// draft (keyed by commitment) so the CREATING device can re-prove with no wallet
+// prompt. The cross-device source of truth is the server's wallet-encrypted
+// backup; this is only the fast local path.
+export const SALT_CACHE_PREFIX = 'cc:limit-salt:';
+
+export function cacheLocalSalt(commitment: string, salt: string): void {
+  try {
+    localStorage.setItem(SALT_CACHE_PREFIX + commitment, salt);
+  } catch {
+    // ignore
+  }
+}
+
+export function getLocalSalt(commitment: string): string | null {
+  try {
+    return localStorage.getItem(SALT_CACHE_PREFIX + commitment);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the exact {rules, salt} a private limit's pinned commitment was built
+ * from, so a disburse proves the SAME bundle and the proof reproduces the pinned
+ * commitment. Prefers the fast local path (this device's cached draft + salt);
+ * otherwise decrypts the server's wallet-encrypted backup (one wallet prompt,
+ * cached for the session). Null when neither is available (a private rule created
+ * on another device with no backup) — such a rule cannot be proven here.
+ */
+export async function resolvePinnedBundle(p: {
+  commitment: string;
+  rules?: PolicyRules | null;
+  encryptedBackup?: string | null;
+}): Promise<RuleBundle | null> {
+  const salt = getLocalSalt(p.commitment);
+  const rules = savedLimitBundleRules(p);
+  if (salt && rules) return { rules, salt };
+  if (p.encryptedBackup) return decryptRuleBundle(p.encryptedBackup);
+  return null;
+}
 
 /**
  * A readable summary of a saved limit for lists and pickers. Transparent limits
