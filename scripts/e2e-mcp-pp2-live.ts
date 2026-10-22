@@ -23,6 +23,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { disbursePrivateHandler } from '../packages/mcp/src/tools/disburse-private.js';
+import { policyCommitment, policyWitnessFromBundle } from '@clevercon/agent-sdk/prover';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const API_URL = process.env.API_URL ?? 'https://cleverconapi-production.up.railway.app';
@@ -170,6 +171,24 @@ async function main() {
     process.env.CLEVERCON_PP2_WASM ?? '/mnt/c/Users/joshu/Downloads/policy_batch.wasm';
   process.env.CLEVERCON_PP2_ZKEY =
     process.env.CLEVERCON_PP2_ZKEY ?? '/mnt/c/Users/joshu/Downloads/policy_batch_final.zkey';
+
+  // The OWNER pins the provisioned rule's canonical commitment once (A2.3
+  // membership): the agent only proves, it never pins. Compute the commitment from
+  // the same bundle the agent holds (R1-only here, so no Poseidon oracle needed)
+  // and pin it with the owner's wallet, exactly as the dapp "pin" flow does.
+  {
+    const bundle = JSON.parse(process.env.CLEVERCON_POLICY_JSON as string);
+    const witness = policyWitnessFromBundle(bundle);
+    const commitmentHex = (
+      await policyCommitment(witness, { wasmPath: process.env.CLEVERCON_PP2_WASM as string })
+    ).toString('hex');
+    const pinBuilt = await api<{ xdr: string }>('/vault/pin-commitment', {
+      body: { commitment: commitmentHex },
+      token,
+    });
+    await api('/vault/submit', { body: { signedXdr: signXdr(pinBuilt.xdr, buyer) }, token });
+    console.log('owner pinned commitment', commitmentHex.slice(0, 12) + '...');
+  }
 
   const before = await usdc(faucet.publicKey());
   console.log('proving + submitting via MCP disburse_private (snarkjs ~60s)...');
