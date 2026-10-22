@@ -32,7 +32,6 @@ import type { PolicyWitness, BatchRelease, BatchContext } from '@clevercon/agent
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const API_URL = process.env.API_URL ?? 'https://cleverconapi-production.up.railway.app';
 const HORIZON_URL = 'https://horizon-testnet.stellar.org';
-const FRIENDBOT = 'https://friendbot.stellar.org';
 const USDC_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 const USDC = new Asset('USDC', USDC_ISSUER);
 const PASSPHRASE = Networks.TESTNET;
@@ -184,20 +183,11 @@ async function main() {
   const buyer = Keypair.random();
   console.log(`buyer: ${buyer.publicKey()}  (throwaway secret ${buyer.secret()})\n`);
 
-  // 0. onboard: fund the throwaway buyer. Prefer friendbot, but it is often down
-  // on testnet, so fall back to creating + funding the account from the
-  // orchestrator faucet (which holds ample XLM) so the run is not blocked by the
-  // faucet being unavailable.
-  let fundedVia = '';
-  try {
-    const fb = await fetch(`${FRIENDBOT}?addr=${buyer.publicKey()}`, {
-      signal: AbortSignal.timeout(15000),
-    });
-    if (fb.ok) fundedVia = 'friendbot';
-  } catch {
-    // friendbot unreachable; fall through to the faucet
-  }
-  if (!fundedVia) {
+  // 0. onboard: fund the throwaway buyer from the orchestrator faucet (an existing
+  // account with ample XLM + USDC). We deliberately do NOT use friendbot, which is
+  // frequently down/slow on testnet; the faucet funds the account's XLM here and
+  // its USDC below.
+  {
     const acct = await horizon.loadAccount(faucet.publicKey());
     const tx = new TransactionBuilder(acct, { fee: BASE_FEE, networkPassphrase: PASSPHRASE })
       .addOperation(
@@ -206,10 +196,8 @@ async function main() {
       .setTimeout(60)
       .build();
     tx.sign(faucet);
-    await submitClassic(tx);
-    fundedVia = 'faucet';
+    record('buyer funded (XLM from faucet)', true, (await submitClassic(tx)).slice(0, 10));
   }
-  record('buyer funded (XLM)', !!fundedVia, `via ${fundedVia}`);
   await sleep(2500);
   {
     const acct = await horizon.loadAccount(buyer.publicKey());
