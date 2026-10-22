@@ -13,6 +13,11 @@
  * never holds funds.
  */
 
+// Type-only imports: erased at compile, so importing createSpender never pulls in
+// the prover (snarkjs/stellar) chain. The prover is loaded lazily in disbursePrivate.
+import type { PolicyBundle } from './payments/policy-bundle.js';
+import type { PoseidonArtifacts } from './payments/poseidon.js';
+
 export interface SpenderOptions {
   /** Scoped API key (cc_...). */
   apiKey: string;
@@ -22,6 +27,19 @@ export interface SpenderOptions {
   fetchImpl?: typeof fetch;
   /** Request timeout in ms (default 15000). */
   timeoutMs?: number;
+  /**
+   * Self-custody PRIVATE disbursement (custody:self + mode:private): the owner's
+   * policy bundle `{ rules, salt }`. Required to call {@link CleverConClient.disbursePrivate}
+   * unless `CLEVERCON_POLICY_JSON` is set. It never leaves this process; only the
+   * proof is relayed, so the server can neither read nor forge the rule.
+   */
+  policyBundle?: PolicyBundle;
+  /**
+   * Circuit artifacts for local proving (paths or URLs). Falls back to
+   * `CLEVERCON_PP2_WASM` / `CLEVERCON_PP2_ZKEY`; the poseidon set defaults to the
+   * hosted artifacts when the policy needs it (allowlist/deny/calendar/category).
+   */
+  proverArtifacts?: { wasmPath: string; zkeyPath: string; poseidon?: PoseidonArtifacts };
 }
 
 export interface PaymentLine {
@@ -88,6 +106,16 @@ export interface CleverConClient {
     lines: PaymentLine[],
     opts?: { policyId?: string; idempotencyKey?: string },
   ): Promise<Spend>;
+  /**
+   * Self-custody PRIVATE disburse (custody:self + mode:private): prove the owner's
+   * policy bundle LOCALLY (Groth16, up to 4 payees) and relay ONLY the proof, so
+   * the server never sees the rule and cannot forge it. The chain verifies the
+   * proof against the owner's on-chain pinned commitment before the vault releases.
+   * Requires `policyBundle` + artifacts (options or env); fail-closed otherwise.
+   */
+  disbursePrivate(
+    lines: PaymentLine[],
+  ): Promise<{ jobId: string; totalUsdc: number; legs: number; commitment: string }>;
   /** Hire a registered service (DIRECT pays a chosen serviceId). `idempotencyKey`
    *  makes a retry return the original hire rather than hiring twice. */
   hire(opts: {
@@ -146,6 +174,40 @@ export function createSpender(options: SpenderOptions): CleverConClient {
     return (await res.json()) as T;
   }
 
+  const env = (k: string): string | undefined =>
+    typeof process !== 'undefined' ? process.env?.[k] : undefined;
+
+  // Resolve the owner's private policy bundle (fail-closed): the option wins, else
+  // inline CLEVERCON_POLICY_JSON. Never a silent fallback to a server path.
+  function resolveBundle(): PolicyBundle {
+    if (options.policyBundle) return options.policyBundle;
+    const raw = env('CLEVERCON_POLICY_JSON');
+    if (!raw) {
+      throw new Error(
+        'disbursePrivate: no private policy bundle (set options.policyBundle or CLEVERCON_POLICY_JSON to {"rules":{...},"salt":"..."})',
+      );
+    }
+    const b = JSON.parse(raw) as PolicyBundle;
+    if (!b?.rules || !b?.salt) throw new Error('policy bundle needs { rules, salt }');
+    return b;
+  }
+
+  function resolvePrivateArtifacts(): {
+    wasmPath: string;
+    zkeyPath: string;
+    poseidon?: PoseidonArtifacts;
+  } {
+    if (options.proverArtifacts) return options.proverArtifacts;
+    const wasmPath = env('CLEVERCON_PP2_WASM');
+    const zkeyPath = env('CLEVERCON_PP2_ZKEY');
+    if (!wasmPath || !zkeyPath) {
+      throw new Error(
+        'disbursePrivate: set options.proverArtifacts or CLEVERCON_PP2_WASM + CLEVERCON_PP2_ZKEY',
+      );
+    }
+    return { wasmPath, zkeyPath };
+  }
+
   return {
     pay: (payee, amount, opts) =>
       request<Spend>('POST', '/payments', {
@@ -161,6 +223,28 @@ export function createSpender(options: SpenderOptions): CleverConClient {
         ...(opts?.policyId ? { policyId: opts.policyId } : {}),
         ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
       }),
+    disbursePrivate: async (lines) => {
+      const bundle = resolveBundle();
+      const artifacts = resolvePrivateArtifacts();
+      // Lazily pull in the prover (snarkjs/stellar) only when actually proving, so
+      // importing createSpender stays dependency-free.
+      const { buildPrivateDisbursement } = await import('./payments/private-disburse.js');
+      const {
+        request: batchRequest,
+        totalUsdc,
+        commitmentHex,
+      } = await buildPrivateDisbursement(
+        bundle,
+        lines.map((l) => ({ payee: l.payee, amount: l.amount })),
+        artifacts,
+      );
+      const resp = await request<{ jobId: string; status: string }>(
+        'POST',
+        '/vault/batch-release-proved',
+        batchRequest,
+      );
+      return { jobId: resp.jobId, totalUsdc, legs: lines.length, commitment: commitmentHex };
+    },
     hire: (opts) =>
       request<Spend>('POST', '/tasks', {
         title: opts.title,

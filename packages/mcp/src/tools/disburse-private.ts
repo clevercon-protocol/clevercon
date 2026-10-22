@@ -16,17 +16,9 @@ import { readFileSync } from 'node:fs';
 // agent/provider/express/x402/mpp chain (~11s cold load) and would make the MCP
 // server appear to hang on boot. /prover + /artifacts carry only what we need.
 import {
-  createBatchProof,
-  buildBatchReleaseRequest,
-  policyWitnessFromBundle,
-  buildPolicyWitness,
-  makePoseidon,
+  buildPrivateDisbursement,
   DEFAULT_POSEIDON_ARTIFACTS,
   type PolicyBundle,
-  type PolicyWitness,
-  type BatchRelease,
-  type BatchContext,
-  type Allowlist,
 } from '@clevercon/agent-sdk/prover';
 import { resolveArtifacts } from '@clevercon/agent-sdk/artifacts';
 import {
@@ -36,8 +28,6 @@ import {
   type ApiConfig,
   type ToolResult,
 } from '../api-client.js';
-
-const STROOPS_PER_USDC = 10_000_000;
 
 export const disbursePrivateSchema = {
   name: 'disburse_private',
@@ -103,81 +93,24 @@ export async function disbursePrivateHandler(
     }
 
     const bundle = loadPolicyBundle();
+    const { wasmPath, zkeyPath } = await resolveArtifacts();
 
-    // A bare per-payment ceiling (+ rolling/velocity) is field-only and needs no
-    // Poseidon. The moment the policy carries an allowlist, deny-list, calendar, or
-    // category rule we build the FULL witness through the Poseidon oracle so the
-    // JS-built roots match the circuit, and keep the allowlist to attach a
-    // membership proof to each leg.
-    const r = bundle.rules;
-    const needsFull = !!(
-      r.allowlist?.length ||
-      r.denylist?.length ||
-      r.calendarWindows?.length ||
-      r.categoryCeilingsUsdc?.length
-    );
-    let policy: PolicyWitness;
-    let allowlist: Allowlist | undefined;
-    if (needsFull) {
-      const poseidon = await makePoseidon(resolvePoseidonArtifacts());
-      ({ policy, allowlist } = await buildPolicyWitness(bundle, poseidon));
-    } else {
-      policy = policyWitnessFromBundle(bundle);
-    }
-    const artifacts = await resolveArtifacts();
-
-    // Fresh task context: a new task locks budget and starts its accumulators at
-    // zero, and the vault checks its ledger time falls inside [validAfter, before].
-    const now = Math.floor(Date.now() / 1000);
-    const ctx: BatchContext = {
-      validAfter: String(now - 3600),
-      validBefore: String(now + 86400),
-      runningSpend: '0',
-      priorCount: '0',
-    };
-
-    // Distinct spend_counter per leg (ms base + index) so repeated identical
-    // releases across calls still derive unique nullifiers.
-    const base = Date.now();
-    const releases: BatchRelease[] = lines.map((l, i) => {
-      const line = l as { payee?: unknown; amount?: unknown };
-      if (typeof line.payee !== 'string' || line.payee.trim() === '')
-        throw new Error('each line needs a payee address');
-      if (typeof line.amount !== 'number' || line.amount <= 0)
-        throw new Error('each line needs amount > 0');
-      const payee = line.payee.trim();
-      // When the policy has an allowlist (R3), every leg must carry its membership
-      // proof, or the proof cannot be built; fail early with a clear message.
-      const membership = allowlist?.membership(payee);
-      if (allowlist && !membership)
-        throw new Error(`payee ${payee} is not on the policy allowlist (R3)`);
-      return {
-        payeeAddress: payee,
-        amountStroops: String(BigInt(Math.round(line.amount * STROOPS_PER_USDC))),
-        spendCounter: String(base + i),
-        membership,
-      };
-    });
-
-    const totalUsdc = releases.reduce(
-      (s, r) => s + Number(BigInt(r.amountStroops)) / STROOPS_PER_USDC,
-      0,
-    );
-
-    const proof = await createBatchProof(policy, releases, ctx, artifacts);
-    const request = buildBatchReleaseRequest(proof, releases, ctx, {
-      vaultTaskId: null,
-      planCostUsdc: totalUsdc,
-      stepId: base % 1_000_000,
+    // Prove the owner's private policy locally (shared with the SDK spender's
+    // disbursePrivate) and relay only the proof. The plaintext policy never leaves
+    // this process; the server cannot read or forge it.
+    const { request, totalUsdc, commitmentHex } = await buildPrivateDisbursement(bundle, lines, {
+      wasmPath,
+      zkeyPath,
+      poseidon: resolvePoseidonArtifacts(),
     });
 
     const client = createApiClient(config);
     const resp = await client.post('/vault/batch-release-proved', request);
     return toolJson({
       submitted: resp,
-      legs: releases.length,
+      legs: lines.length,
       totalUsdc,
-      commitment: proof.commitment.toString('hex'),
+      commitment: commitmentHex,
       note: 'Trustless pp/2 release: proof verified on-chain by the vault; funds move once the worker submits it.',
     });
   } catch (error) {
