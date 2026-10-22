@@ -136,6 +136,24 @@ export async function proveAndReleaseBatch(opts: {
   // Build the policy witness once; it is identical across every release group.
   const { policy, allowlist } = await buildWitness(rules, salt);
 
+  // Read the vault's per-commitment R2/R7 accumulator so each proof binds to the
+  // window state the vault re-derives at settlement (the rolling cap + velocity
+  // hold ACROSS tasks). A fresh/ad-hoc commitment reads back zeros. Across groups
+  // in THIS disburse we advance it locally with the PROVEN reset flags, so a later
+  // group doesn't wait for an earlier one to settle.
+  const commitmentHex = await computePolicyCommitment(rules, salt);
+  const accum = await apiGet<{
+    runningSpend: string;
+    priorCount: string;
+    anchorR2: string;
+    anchorR7: string;
+  }>(`/vault/accumulator/${commitmentHex}`).catch(() => ({
+    runningSpend: '0',
+    priorCount: '0',
+    anchorR2: '0',
+    anchorR7: '0',
+  }));
+
   const groups: ProveRecipient[][] = [];
   for (let i = 0; i < active.length; i += PROOF_WIDTH)
     groups.push(active.slice(i, i + PROOF_WIDTH));
@@ -158,23 +176,32 @@ export async function proveAndReleaseBatch(opts: {
       };
     });
     const now = Math.floor(Date.now() / 1000);
+    const validAfter = String(now - 3600);
     const ctx: BatchContext = {
-      validAfter: String(now - 3600),
+      validAfter,
       validBefore: String(now + 86400),
-      runningSpend: '0',
-      priorCount: '0',
+      runningSpend: accum.runningSpend,
+      priorCount: accum.priorCount,
+      anchorR2: accum.anchorR2,
+      anchorR7: accum.anchorR7,
     };
     const proof = await createBatchProof(policy, releases, ctx, { wasmPath: WASM, zkeyPath: ZKEY });
-    const gsum = releases.reduce((s, r) => s + Number(BigInt(r.amountStroops)) / STROOPS, 0);
-    sum += gsum;
+    const groupStroops = releases.reduce((s, r) => s + BigInt(r.amountStroops), 0n);
+    sum += Number(groupStroops) / STROOPS;
     const request = buildBatchReleaseRequest(proof, releases, ctx, {
       vaultTaskId: null,
-      planCostUsdc: gsum,
+      planCostUsdc: Number(groupStroops) / STROOPS,
       stepId: (base + g) % 1_000_000,
     });
     onPhase?.('relaying', { i: g + 1, n: groups.length });
     const resp = await apiPost<{ jobId: string }>('/vault/batch-release-proved', request);
     jobIds.push(resp.jobId);
+    // Advance the local accumulator for the next group using the PROVEN reset flags
+    // (exactly how the vault rolls it on each settled batch).
+    accum.runningSpend = String((proof.resetR2 ? 0n : BigInt(accum.runningSpend)) + groupStroops);
+    accum.priorCount = String((proof.resetR7 ? 0 : Number(accum.priorCount)) + releases.length);
+    if (proof.resetR2) accum.anchorR2 = validAfter;
+    if (proof.resetR7) accum.anchorR7 = validAfter;
   }
   onPhase?.('done');
   return { jobIds, total: sum, legs: active.length, batches: groups.length };

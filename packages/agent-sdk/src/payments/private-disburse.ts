@@ -10,6 +10,7 @@
 import {
   createBatchProof,
   buildBatchReleaseRequest,
+  policyCommitment,
   type BatchRelease,
   type BatchContext,
   type BatchReleaseRequest,
@@ -36,12 +37,53 @@ export interface PrivateDisburseArtifacts {
   poseidon?: PoseidonArtifacts;
 }
 
+/**
+ * The vault's PER-COMMITMENT accumulator state the caller fetched (GET
+ * /vault/accumulator/:commitment) before proving. The proof binds to exactly
+ * these, and the vault re-derives them at settlement, so a concurrent spend that
+ * moved them makes the proof stale (rejected -> refetch + retry). Omit for the
+ * first spend under a commitment (defaults to a fresh window).
+ */
+export interface AccumulatorState {
+  runningSpend: string;
+  priorCount: string;
+  anchorR2: string;
+  anchorR7: string;
+}
+
+const FRESH_ACCUMULATOR: AccumulatorState = {
+  runningSpend: '0',
+  priorCount: '0',
+  anchorR2: '0',
+  anchorR7: '0',
+};
+
 /** The proven request plus a little metadata the caller reports back. */
 export interface PrivateDisbursement {
   request: BatchReleaseRequest;
   totalUsdc: number;
   /** Canonical policy commitment (hex) the proof carries — the value the owner pins. */
   commitmentHex: string;
+}
+
+/**
+ * The canonical commitment (hex) for a bundle — the value the owner pinned and the
+ * key for the vault's accumulator. Callers compute this to fetch
+ * `GET /vault/accumulator/:commitment` BEFORE proving. Only the circuit wasm is
+ * needed (no zkey/proof); it shares the download the prover already uses.
+ */
+export async function commitmentForBundle(
+  bundle: PolicyBundle,
+  artifacts: { wasmPath: string; poseidon?: PoseidonArtifacts },
+): Promise<string> {
+  let policy: PolicyWitness;
+  if (needsPoseidon(bundle.rules)) {
+    const poseidon = await makePoseidon(artifacts.poseidon ?? DEFAULT_POSEIDON_ARTIFACTS);
+    ({ policy } = await buildPolicyWitness(bundle, poseidon));
+  } else {
+    policy = policyWitnessFromBundle(bundle);
+  }
+  return (await policyCommitment(policy, { wasmPath: artifacts.wasmPath })).toString('hex');
 }
 
 /** A bare per-payment ceiling (+ rolling/velocity) is field-only; an allowlist,
@@ -65,6 +107,7 @@ export async function buildPrivateDisbursement(
   bundle: PolicyBundle,
   lines: DisbursementLine[],
   artifacts: PrivateDisburseArtifacts,
+  accumulator: AccumulatorState = FRESH_ACCUMULATOR,
 ): Promise<PrivateDisbursement> {
   if (!bundle?.rules || !bundle?.salt) throw new Error('policy bundle needs { rules, salt }');
   if (!Array.isArray(lines) || lines.length === 0 || lines.length > 4) {
@@ -84,8 +127,10 @@ export async function buildPrivateDisbursement(
   const ctx: BatchContext = {
     validAfter: String(now - 3600),
     validBefore: String(now + 86400),
-    runningSpend: '0',
-    priorCount: '0',
+    runningSpend: accumulator.runningSpend,
+    priorCount: accumulator.priorCount,
+    anchorR2: accumulator.anchorR2,
+    anchorR7: accumulator.anchorR7,
   };
 
   // Distinct spend_counter per leg (ms base + index) so repeated identical releases

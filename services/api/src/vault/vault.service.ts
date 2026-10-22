@@ -94,6 +94,15 @@ export class VaultService {
     return { xdr, networkPassphrase: this.contract.passphrase };
   }
 
+  /**
+   * The per-commitment R2/R7 accumulator the client reads before proving a pp/2
+   * batch (so the proof binds to the window state the vault re-derives). Pure
+   * read; no auth needed beyond the API key (the commitment is already public).
+   */
+  async getCommitmentAccumulator(commitmentHex: string) {
+    return this.contract.readCommitmentAccum(commitmentHex);
+  }
+
   /** Mark the caller's delegate as authorized (called after the register tx submits). */
   /**
    * The user's registered agent key (for the agent-key payment mode). Returns

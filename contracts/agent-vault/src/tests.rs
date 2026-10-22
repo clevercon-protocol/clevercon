@@ -4342,6 +4342,8 @@ fn test_release_payment_proved_batch_happy_path() {
         &nullifiers,
         &0u64,
         &86_400u64,
+        &false,
+        &false,
         &proof,
     );
     assert!(ok);
@@ -4365,6 +4367,8 @@ fn test_release_payment_proved_batch_happy_path() {
         &replay,
         &0u64,
         &86_400u64,
+        &false,
+        &false,
         &proof,
     );
     assert!(res.is_err());
@@ -4394,6 +4398,8 @@ fn test_release_payment_proved_batch_rejects_and_moves_no_funds() {
         &nullifiers,
         &0u64,
         &86_400u64,
+        &false,
+        &false,
         &proof,
     );
     assert!(res.is_err());
@@ -4429,6 +4435,8 @@ fn test_release_payment_proved_batch_rejects_outside_validity_window() {
         &nullifiers,
         &0u64,
         &1000u64,
+        &false,
+        &false,
         &proof,
     );
     assert!(res.is_err());
@@ -4465,6 +4473,8 @@ fn test_release_payment_proved_batch_nullifier_cannot_replay_across_tasks() {
         &nf,
         &0u64,
         &86_400u64,
+        &false,
+        &false,
         &proof,
     );
     assert!(ok);
@@ -4482,6 +4492,8 @@ fn test_release_payment_proved_batch_nullifier_cannot_replay_across_tasks() {
         &nf,
         &0u64,
         &86_400u64,
+        &false,
+        &false,
         &proof,
     );
     assert!(res == Err(Ok(VaultError::NullifierAlreadyUsed)));
@@ -4518,11 +4530,98 @@ fn test_release_payment_proved_batch_rejects_overlong_validity_window() {
         &nf,
         &0u64,
         &far,
+        &false,
+        &false,
         &proof,
     );
     assert!(res == Err(Ok(VaultError::ValidityWindowTooLong)));
     assert_eq!(s.token_client.balance(&payee), 0);
     assert_eq!(s.verifier.calls(), 0);
+}
+
+#[test]
+fn test_commitment_accumulator_spans_tasks_and_resets() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+    let proof = dummy_groth16_proof(&s.env);
+    let payee = Address::generate(&s.env);
+
+    // The SAME pinned commitment, used by two different tasks — the per-commitment
+    // R2/R7 accumulator must carry ACROSS tasks (a reusable rule, not a per-task
+    // reset). The mock verifier accepts any proof, so this exercises the vault's
+    // accumulator bookkeeping (the reset flags are proven circuit outputs in prod).
+    let c = commitment_of(&s.env, 13);
+    let task1 = committed_task(&s, 5_000, &c);
+    let task2 = committed_task(&s, 5_000, &c);
+    let one = |amt: i128, nf: u64| {
+        (
+            soroban_sdk::vec![&s.env, payee.clone()],
+            soroban_sdk::vec![&s.env, amt],
+            soroban_sdk::vec![&s.env, nullifier_of(&s.env, nf)],
+        )
+    };
+
+    // task1: first spend opens window 1 (reset_r2 = true), +400.
+    let (p1, a1, n1) = one(400, 60);
+    s.client.release_payment_proved_batch(
+        &s.orchestrator,
+        &task1,
+        &1,
+        &s.usdc_sac,
+        &p1,
+        &a1,
+        &n1,
+        &0u64,
+        &86_400u64,
+        &true,
+        &false,
+        &proof,
+    );
+    let acc1 = s.client.get_commitment_accum(&c);
+    assert_eq!(acc1.window_spent, 400);
+    assert_eq!(acc1.window_count, 1);
+
+    // task2 (DIFFERENT task, same commitment), no reset: the window accumulates
+    // across tasks -> 400 + 300 = 700, count 2.
+    let (p2, a2, n2) = one(300, 61);
+    s.client.release_payment_proved_batch(
+        &s.orchestrator,
+        &task2,
+        &1,
+        &s.usdc_sac,
+        &p2,
+        &a2,
+        &n2,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+    );
+    let acc2 = s.client.get_commitment_accum(&c);
+    assert_eq!(acc2.window_spent, 700);
+    assert_eq!(acc2.window_count, 2);
+
+    // A proven reset rolls the window forward: it restarts at just this batch.
+    let (p3, a3, n3) = one(200, 62);
+    s.client.release_payment_proved_batch(
+        &s.orchestrator,
+        &task2,
+        &2,
+        &s.usdc_sac,
+        &p3,
+        &a3,
+        &n3,
+        &0u64,
+        &86_400u64,
+        &true,
+        &true,
+        &proof,
+    );
+    let acc3 = s.client.get_commitment_accum(&c);
+    assert_eq!(acc3.window_spent, 200);
+    assert_eq!(acc3.window_count, 1);
 }
 
 // ── Phase 1: policy commitment & mutual exclusion ──────────────────────

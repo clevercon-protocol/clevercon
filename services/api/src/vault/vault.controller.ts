@@ -35,6 +35,10 @@ const batchReleaseSchema = z.object({
   validAfter: z.string().min(1),
   validBefore: z.string().min(1),
   commitment: hex,
+  // Proven tumbling-window reset flags (circuit outputs); the vault needs them to
+  // reconstruct the public signals and roll the per-commitment R2/R7 accumulators.
+  resetR2: z.boolean(),
+  resetR7: z.boolean(),
   proof: z.object({ a: hex, b: hex, c: hex }),
 });
 
@@ -89,6 +93,19 @@ export class VaultController {
   pinCommitment(@CurrentUser() user: AuthUser, @Body() body: unknown) {
     const { commitment } = parseBody(pinSchema, body);
     return this.vault.buildPinCommitment(user.userId, commitment);
+  }
+
+  /**
+   * The per-commitment R2/R7 accumulator (window spend/count + anchors) a client
+   * reads BEFORE proving a pp/2 batch, so the proof binds to the window state the
+   * vault re-derives at settlement. A fresh commitment reads back zeros.
+   */
+  @Get('accumulator/:commitment')
+  accumulator(@Param('commitment') commitment: string) {
+    if (!/^[0-9a-fA-F]{64}$/.test(commitment)) {
+      throw new BadRequestException('commitment must be 32-byte hex (64 chars)');
+    }
+    return this.vault.getCommitmentAccumulator(commitment);
   }
 
   /** The caller's registered agent key (public key only), for agent-key mode. */
@@ -157,6 +174,8 @@ export class VaultController {
       nullifiers: req.nullifiers,
       validAfter: req.validAfter,
       validBefore: req.validBefore,
+      resetR2: req.resetR2,
+      resetR7: req.resetR7,
       proof: req.proof,
     });
     return { jobId, status: 'queued' };

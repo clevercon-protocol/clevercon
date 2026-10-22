@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 // server appear to hang on boot. /prover + /artifacts carry only what we need.
 import {
   buildPrivateDisbursement,
+  commitmentForBundle,
   DEFAULT_POSEIDON_ARTIFACTS,
   type PolicyBundle,
 } from '@clevercon/agent-sdk/prover';
@@ -94,17 +95,29 @@ export async function disbursePrivateHandler(
 
     const bundle = loadPolicyBundle();
     const { wasmPath, zkeyPath } = await resolveArtifacts();
+    const poseidon = resolvePoseidonArtifacts();
+    const client = createApiClient(config);
+
+    // Read the vault's per-commitment R2/R7 accumulator so the proof binds to the
+    // window state the vault re-derives at settlement (cumulative across tasks).
+    const commitment = await commitmentForBundle(bundle, { wasmPath, poseidon });
+    const accumulator = await client.get<{
+      runningSpend: string;
+      priorCount: string;
+      anchorR2: string;
+      anchorR7: string;
+    }>(`/vault/accumulator/${commitment}`);
 
     // Prove the owner's private policy locally (shared with the SDK spender's
     // disbursePrivate) and relay only the proof. The plaintext policy never leaves
-    // this process; the server cannot read or forge it.
-    const { request, totalUsdc, commitmentHex } = await buildPrivateDisbursement(bundle, lines, {
-      wasmPath,
-      zkeyPath,
-      poseidon: resolvePoseidonArtifacts(),
-    });
+    // this process; the server can neither read nor forge it.
+    const { request, totalUsdc, commitmentHex } = await buildPrivateDisbursement(
+      bundle,
+      lines,
+      { wasmPath, zkeyPath, poseidon },
+      accumulator,
+    );
 
-    const client = createApiClient(config);
     const resp = await client.post('/vault/batch-release-proved', request);
     return toolJson({
       submitted: resp,

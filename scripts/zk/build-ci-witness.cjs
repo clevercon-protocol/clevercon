@@ -103,6 +103,10 @@ async function main() {
     valid_before: VALID_BEFORE.toString(),
     running_spend: RUNNING_SPEND.toString(),
     prior_count: PRIOR_COUNT.toString(),
+    // Window anchors = valid_after => elapsed 0 => no tumbling-window reset, so the
+    // existing running_spend/prior_count R2/R7 checks apply unchanged.
+    anchor_r2: VALID_AFTER.toString(),
+    anchor_r7: VALID_AFTER.toString(),
     en: ['1', '1', '1', '1', '1', '1', '1', '1'], // all R1-R8 enabled
     r1_ceiling: CEILING.toString(),
     r2_cap: R2_CAP.toString(),

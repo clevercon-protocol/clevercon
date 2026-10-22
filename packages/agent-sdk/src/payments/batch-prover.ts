@@ -75,9 +75,18 @@ export interface BatchContext {
   /** Validity window the vault's ledger time must fall within (R6). */
   validAfter: string;
   validBefore: string;
-  /** The vault's running spend (R2) and release count (R7) BEFORE this batch. */
+  /**
+   * The vault's PER-COMMITMENT accumulator state BEFORE this batch: spend in the
+   * current R2 window, release count in the current R7 window, and each window's
+   * anchor (a prior spend's valid_after, or '0' for a fresh window). The client
+   * reads these from the vault before proving; the vault re-derives the same values
+   * at settlement, so a concurrent spend that moved them makes the proof stale
+   * (rejected -> refetch + retry).
+   */
   runningSpend: string;
   priorCount: string;
+  anchorR2: string;
+  anchorR7: string;
 }
 
 /** The ready-to-submit result of proving a batch. */
@@ -88,6 +97,10 @@ export interface BatchProof {
   commitment: Buffer;
   /** Spend-once nullifiers for the active releases, in order. */
   nullifiers: Buffer[];
+  /** Tumbling-window reset flags (circuit outputs): the vault resets that window's
+   *  accumulator to this batch when true. Proven, so the vault can trust them. */
+  resetR2: boolean;
+  resetR7: boolean;
   /** All public signals (decimal strings) as returned by snarkjs. */
   publicSignals: string[];
 }
@@ -148,6 +161,8 @@ export function buildBatchWitness(
     valid_before: ctx.validBefore,
     running_spend: ctx.runningSpend,
     prior_count: ctx.priorCount,
+    anchor_r2: ctx.anchorR2,
+    anchor_r7: ctx.anchorR7,
     en: policy.enabled.map((b) => (b ? '1' : '0')),
     r1_ceiling: policy.r1Ceiling,
     r2_cap: policy.r2Cap,
@@ -189,11 +204,16 @@ export async function proveBatch(
     artifacts.wasmPath,
     artifacts.zkeyPath,
   );
-  const { commitment, activeNullifiers } = extractBatchOutputs(publicSignals, BATCH_N);
+  const { commitment, activeNullifiers, resetR2, resetR7 } = extractBatchOutputs(
+    publicSignals,
+    BATCH_N,
+  );
   return {
     proof: proofToSoroban(proof),
     commitment,
     nullifiers: activeNullifiers,
+    resetR2,
+    resetR7,
     publicSignals,
   };
 }
@@ -246,7 +266,14 @@ export async function policyCommitment(
   const input = buildBatchWitness(
     policy,
     [{ payeeAddress: PROBE_PAYEE, amountStroops: '1', spendCounter: '0' }],
-    { validAfter: '0', validBefore: '0', runningSpend: '0', priorCount: '0' },
+    {
+      validAfter: '0',
+      validBefore: '0',
+      runningSpend: '0',
+      priorCount: '0',
+      anchorR2: '0',
+      anchorR7: '0',
+    },
   );
   const { WitnessCalculatorBuilder } = await import('circom_runtime');
   const wasm = await loadCircuitWasm(artifacts.wasmPath);
@@ -284,6 +311,10 @@ export interface BatchReleaseRequest extends BatchReleaseMeta {
   validBefore: string;
   /** Policy commitment as hex (circuit output). */
   commitment: string;
+  /** Tumbling-window reset flags (circuit outputs) the vault needs to reconstruct
+   *  the public signals and update the per-commitment accumulator after verifying. */
+  resetR2: boolean;
+  resetR7: boolean;
   /** Groth16 proof components as hex. */
   proof: { a: string; b: string; c: string };
 }
@@ -312,6 +343,8 @@ export function buildBatchReleaseRequest(
     validAfter: ctx.validAfter,
     validBefore: ctx.validBefore,
     commitment: proof.commitment.toString('hex'),
+    resetR2: proof.resetR2,
+    resetR7: proof.resetR7,
     proof: {
       a: proof.proof.a.toString('hex'),
       b: proof.proof.b.toString('hex'),

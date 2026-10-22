@@ -63,12 +63,18 @@ describe('policy-codec (SDK, mirrors @clevercon/common)', () => {
     expect(p.c.length).toBe(96);
   });
 
-  it('extractBatchOutputs splits commitment and active nullifiers', () => {
-    const signals = ['7', '11', '22', '0', '0', '99'];
-    const { commitment, nullifiers, activeNullifiers } = extractBatchOutputs(signals, 4);
+  it('extractBatchOutputs splits commitment, nullifiers, and reset flags', () => {
+    // Output order: [commitment, nullifier[0..3], reset_r2, reset_r7].
+    const signals = ['7', '11', '22', '0', '0', '1', '0'];
+    const { commitment, nullifiers, activeNullifiers, resetR2, resetR7 } = extractBatchOutputs(
+      signals,
+      4,
+    );
     expect(commitment.toString('hex').endsWith('07')).toBe(true);
     expect(nullifiers).toHaveLength(4);
     expect(activeNullifiers).toHaveLength(2);
+    expect(resetR2).toBe(true);
+    expect(resetR7).toBe(false);
   });
 });
 
@@ -102,6 +108,8 @@ describe('buildBatchWitness', () => {
     validBefore: '1800',
     runningSpend: '0',
     priorCount: '0',
+    anchorR2: '0',
+    anchorR7: '0',
   };
 
   it('pads to BATCH_N with null slots and shapes every array', () => {
@@ -146,11 +154,15 @@ describe('buildBatchReleaseRequest', () => {
     validBefore: '9999',
     runningSpend: '0',
     priorCount: '0',
+    anchorR2: '0',
+    anchorR7: '0',
   };
   const proof: BatchProof = {
     proof: { a: Buffer.alloc(96, 1), b: Buffer.alloc(192, 2), c: Buffer.alloc(96, 3) },
     commitment: Buffer.alloc(32, 0xaa),
     nullifiers: [Buffer.alloc(32, 0xbb), Buffer.alloc(32, 0xcc)],
+    resetR2: false,
+    resetR7: false,
     publicSignals: [],
   };
 
@@ -215,6 +227,8 @@ describe.skipIf(!PP2_WASM || !PP2_ZKEY)('policyCommitment matches the circuit', 
       validBefore: '4294967295',
       runningSpend: '0',
       priorCount: '0',
+      anchorR2: '0',
+      anchorR7: '0',
     };
     const proof = await createBatchProof(policy, releases, ctx, {
       wasmPath: PP2_WASM as string,

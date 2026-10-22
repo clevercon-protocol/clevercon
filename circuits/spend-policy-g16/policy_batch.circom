@@ -4,11 +4,16 @@ pragma circom 2.1.0;
 // (a bounty payout, a payroll run) under the same private policy. Over BLS12-381,
 // verified by a real pairing on-chain. See docs/private-policies-v2.md.
 //
-// Public outputs: commitment, nullifier[N].
+// Public outputs: commitment, nullifier[N], reset_r2, reset_r7.
 // Public inputs:  payee_field[N], amount[N], valid_after, valid_before,
-//                 running_spend, prior_count. valid_after/valid_before are the
-//                 prover's R6 validity window; running_spend/prior_count are the
-//                 vault's authenticated accumulator state. All bound by being public.
+//                 running_spend, prior_count, anchor_r2, anchor_r7.
+//                 valid_after/valid_before are the prover's R6 validity window;
+//                 running_spend/prior_count + anchor_r2/anchor_r7 are the vault's
+//                 authenticated per-commitment accumulator state. The circuit
+//                 resets each accumulator when valid_after - anchor reaches that
+//                 rule's PRIVATE window (reset_r2/reset_r7 tell the vault), so the
+//                 rolling cap/velocity hold across tasks without the window
+//                 cadence ever leaving the circuit. All bound by being public.
 //
 // FINAL R1-R8 commitment encoding; all eight rules enforced:
 //   R1 per-payment ceiling        (per release)
@@ -65,8 +70,15 @@ template PolicyBatch(DEPTH, N, C, W) {
     // within it, so settlement needs no exact timestamp pinned into the proof.
     signal input valid_after;
     signal input valid_before;
-    signal input running_spend;   // vault accumulator: spend in window (R2)
-    signal input prior_count;     // vault accumulator: releases in window (R7)
+    signal input running_spend;   // vault accumulator: spend in the current R2 window
+    signal input prior_count;     // vault accumulator: releases in the current R7 window
+    // Vault's stored window ANCHORS (a prior spend's valid_after, or 0 for a fresh
+    // window). The circuit derives elapsed = valid_after - anchor and resets the
+    // accumulator when elapsed reaches the PRIVATE window. Using valid_after (a
+    // vault-enforced lower bound on settlement time) avoids a proof-vs-settlement
+    // timing race and keeps the window length fully private.
+    signal input anchor_r2;
+    signal input anchor_r7;
 
     // ---- shared policy (private; the full R1-R8 commitment encoding) ----
     signal input en[8];
@@ -100,6 +112,11 @@ template PolicyBatch(DEPTH, N, C, W) {
     // ---- public outputs ----
     signal output commitment;
     signal output nullifier[N];
+    // Tumbling-window reset flags (public): 1 when elapsed reached the PRIVATE
+    // window, so the vault resets that accumulator to this batch (and moves the
+    // anchor to valid_after). The window length itself never leaves the circuit.
+    signal output reset_r2;
+    signal output reset_r7;
 
     var VERSION = 2;
 
@@ -125,6 +142,16 @@ template PolicyBatch(DEPTH, N, C, W) {
     rsBits.in <== running_spend;
     component pcBits = Num2Bits(64);
     pcBits.in <== prior_count;
+    // Range-bind the anchors and the committed windows so the tumbling-window
+    // comparisons below are sound (all operands < 2^64).
+    component anR2Bits = Num2Bits(64);
+    anR2Bits.in <== anchor_r2;
+    component anR7Bits = Num2Bits(64);
+    anR7Bits.in <== anchor_r7;
+    component r2wBits = Num2Bits(64);
+    r2wBits.in <== r2_window;
+    component r7wBits = Num2Bits(64);
+    r7wBits.in <== r7_window;
 
     // Commitment over the full policy encoding (shared across the batch).
     component h1 = Poseidon(10);
@@ -314,18 +341,53 @@ template PolicyBatch(DEPTH, N, C, W) {
     signal activeCount;
     activeCount <== activeCountExpr;
 
-    // R2 (batch-level): running_spend + batch_total <= cap.
+    // R2 (batch-level), fully-private tumbling window. elapsed = valid_after -
+    // anchor_r2 (0 if valid_after < anchor, guarded); reset when elapsed reached the
+    // PRIVATE r2_window. effective = reset ? 0 : running_spend, so the rolling cap
+    // holds across tasks while the window never leaves the circuit.
+    component r2AfterAnchor = GreaterEqThan(64);
+    r2AfterAnchor.in[0] <== valid_after;
+    r2AfterAnchor.in[1] <== anchor_r2;
+    signal r2Elapsed;
+    r2Elapsed <== r2AfterAnchor.out * (valid_after - anchor_r2);
+    component r2ResetCmp = GreaterEqThan(64);
+    r2ResetCmp.in[0] <== r2Elapsed;
+    r2ResetCmp.in[1] <== r2_window;
+    reset_r2 <== r2ResetCmp.out;
+    signal r2Effective;
+    r2Effective <== running_spend * (1 - reset_r2);
     component le2 = LessEqThan(132);
-    le2.in[0] <== running_spend + batchTotal;
+    le2.in[0] <== r2Effective + batchTotal;
     le2.in[1] <== r2_cap;
     en[1] * (1 - le2.out) === 0;
 
-    // R7 (batch-level): prior_count + active_count <= max_count.
+    // R7 (batch-level) velocity: same tumbling-window reset applied to prior_count.
+    component r7AfterAnchor = GreaterEqThan(64);
+    r7AfterAnchor.in[0] <== valid_after;
+    r7AfterAnchor.in[1] <== anchor_r7;
+    signal r7Elapsed;
+    r7Elapsed <== r7AfterAnchor.out * (valid_after - anchor_r7);
+    component r7ResetCmp = GreaterEqThan(64);
+    r7ResetCmp.in[0] <== r7Elapsed;
+    r7ResetCmp.in[1] <== r7_window;
+    reset_r7 <== r7ResetCmp.out;
+    signal r7Effective;
+    r7Effective <== prior_count * (1 - reset_r7);
     component le7 = LessEqThan(70);
-    le7.in[0] <== prior_count + activeCount;
+    le7.in[0] <== r7Effective + activeCount;
     le7.in[1] <== r7_max_count;
     en[6] * (1 - le7.out) === 0;
 }
 
-component main {public [payee_field, amount, valid_after, valid_before, running_spend, prior_count]} =
-    PolicyBatch(16, 4, 4, 2);
+component main {
+    public [
+        payee_field,
+        amount,
+        valid_after,
+        valid_before,
+        running_spend,
+        prior_count,
+        anchor_r2,
+        anchor_r7
+    ]
+} = PolicyBatch(16, 4, 4, 2);

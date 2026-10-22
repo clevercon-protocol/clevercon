@@ -418,10 +418,17 @@ pub enum DataKey {
     /// rejects replays, so the marker is free to archive — bounded storage, no
     /// replay window.
     Nullifier(BytesN<32>),
-    /// Per-task count of proof-gated releases so far, the authenticated
-    /// `prior_count` the pp/2 batch circuit's velocity rule (R7) is proven
-    /// against. `task.spent` serves the same role as `running_spend` for R2.
+    /// Per-task count of proof-gated releases so far. Superseded by the
+    /// per-commitment [`DataKey::CommitmentAccum`] for R2/R7; retained for
+    /// back-compat and any legacy task row.
     TaskReleaseCount(u64),
+    /// Per-COMMITMENT tumbling-window accumulator for R2 (rolling cap) and R7
+    /// (velocity): `commitment → CommitmentAccumulator`. Lets the rolling cap and
+    /// velocity hold ACROSS tasks under the same pinned rule (a reusable rule, not
+    /// a per-task reset). The circuit resets a window when `valid_after - anchor`
+    /// reaches that rule's PRIVATE window and tells the vault via the proven
+    /// `reset_*` flags, so the window cadence never leaves the circuit.
+    CommitmentAccum(BytesN<32>),
     /// The user's bounded set of pinned policy commitments (the selectable
     /// private/public rules). A proof-gated release's commitment must be a
     /// member. Capped at `MAX_POLICY_COMMITMENTS`; only the user's own signature
@@ -434,6 +441,20 @@ pub enum DataKey {
 }
 
 // Data structs
+
+/// Per-commitment tumbling-window accumulator for R2 (rolling cap) and R7
+/// (velocity). `window_spent`/`window_count` are the spend/release totals in the
+/// CURRENT window; `anchor_*` is the window's start (a prior spend's `valid_after`,
+/// or 0 for a fresh window). The circuit decides when a window has elapsed (using
+/// its PRIVATE length) and the vault rolls the window forward on the proven reset.
+#[contracttype]
+#[derive(Clone)]
+pub struct CommitmentAccumulator {
+    pub anchor_r2: u64,
+    pub window_spent: u128,
+    pub anchor_r7: u64,
+    pub window_count: u64,
+}
 
 /// Asset-specific balances and history for a user.
 #[contracttype]
@@ -1542,6 +1563,8 @@ impl AgentVault {
         nullifiers: Vec<BytesN<32>>,
         valid_after: u64,
         valid_before: u64,
+        reset_r2: bool,
+        reset_r7: bool,
         proof: Groth16Proof,
     ) -> Result<bool, VaultError> {
         orchestrator.require_auth();
@@ -1652,19 +1675,33 @@ impl AgentVault {
             .ok_or(VaultError::PolicyVerifierNotSet)?;
         Self::extend_instance_ttl(&env);
 
-        // Authenticated accumulator state the circuit is proven against: the prior
-        // running spend (R2) and release count (R7).
-        let running_spend = task.spent as u128;
-        let prior_count: u64 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::TaskReleaseCount(task_id))
-            .unwrap_or(0u64);
+        // Authenticated PER-COMMITMENT accumulator the circuit is proven against:
+        // the running spend (R2) + release count (R7) in the current window, and
+        // each window's anchor. Reusing the SAME pinned rule across tasks keeps
+        // accumulating here, so the rolling cap/velocity hold across tasks. A fresh
+        // commitment starts at zero (anchors 0 => the circuit resets into window 1).
+        let accum_key = DataKey::CommitmentAccum(commitment.clone());
+        let accum: CommitmentAccumulator =
+            env.storage()
+                .persistent()
+                .get(&accum_key)
+                .unwrap_or(CommitmentAccumulator {
+                    anchor_r2: 0,
+                    window_spent: 0,
+                    anchor_r7: 0,
+                    window_count: 0,
+                });
+        let running_spend = accum.window_spent;
+        let prior_count = accum.window_count;
 
-        // Reconstruct the public inputs in the circuit's EXACT order:
-        //   [commitment, nullifier[0..N], payee_field[0..N], amount[0..N],
-        //    valid_after, valid_before, running_spend, prior_count]
-        // with trailing null slots (m..N) as zero field elements.
+        // Reconstruct the public signals in the circuit's EXACT order (outputs then
+        // inputs):
+        //   outputs: [commitment, nullifier[0..N], reset_r2, reset_r7]
+        //   inputs:  [payee_field[0..N], amount[0..N], valid_after, valid_before,
+        //            running_spend, prior_count, anchor_r2, anchor_r7]
+        // with trailing null slots (m..N) as zero field elements. The reset flags
+        // and anchors are what let the circuit roll the per-commitment window; the
+        // proof BINDS them, so a wrong flag/anchor fails verification below.
         let zero32: BytesN<32> = BytesN::from_array(&env, &[0u8; 32]);
         let mut pis: Vec<BytesN<32>> = vec![&env, commitment.clone()];
         for i in 0..BATCH_N {
@@ -1674,6 +1711,8 @@ impl AgentVault {
                 zero32.clone()
             });
         }
+        pis.push_back(Self::u64_to_field(&env, if reset_r2 { 1 } else { 0 }));
+        pis.push_back(Self::u64_to_field(&env, if reset_r7 { 1 } else { 0 }));
         for i in 0..BATCH_N {
             pis.push_back(if i < m {
                 Self::address_to_field(&env, &payees.get_unchecked(i))
@@ -1692,6 +1731,8 @@ impl AgentVault {
         pis.push_back(Self::u64_to_field(&env, valid_before));
         pis.push_back(Self::u128_to_field(&env, running_spend));
         pis.push_back(Self::u64_to_field(&env, prior_count));
+        pis.push_back(Self::u64_to_field(&env, accum.anchor_r2));
+        pis.push_back(Self::u64_to_field(&env, accum.anchor_r7));
 
         let verified =
             PolicyVerifierClient::new(&env, &verifier).verify_groth16_stored(&proof, &pis);
@@ -1708,11 +1749,37 @@ impl AgentVault {
         task.spent += batch_total;
         env.storage().persistent().set(&task_key, &task);
         Self::extend_persistent_ttl(&env, &task_key);
-        let count_key = DataKey::TaskReleaseCount(task_id);
-        env.storage()
-            .persistent()
-            .set(&count_key, &(prior_count + m as u64));
-        Self::extend_persistent_ttl(&env, &count_key);
+
+        // Roll the per-commitment window forward. The reset flags are PROVEN public
+        // outputs (bound into the proof just verified), so on reset the window
+        // restarts at this batch with its anchor moved to valid_after; otherwise it
+        // accumulates. Saturating add is defensive — when R2 is enabled the proof
+        // already bounds spend <= cap, and when disabled the circuit always resets
+        // (window 0), so this never actually saturates.
+        let updated = CommitmentAccumulator {
+            window_spent: if reset_r2 {
+                batch_total as u128
+            } else {
+                running_spend.saturating_add(batch_total as u128)
+            },
+            anchor_r2: if reset_r2 {
+                valid_after
+            } else {
+                accum.anchor_r2
+            },
+            window_count: if reset_r7 {
+                m as u64
+            } else {
+                prior_count.saturating_add(m as u64)
+            },
+            anchor_r7: if reset_r7 {
+                valid_after
+            } else {
+                accum.anchor_r7
+            },
+        };
+        env.storage().persistent().set(&accum_key, &updated);
+        Self::extend_persistent_ttl(&env, &accum_key);
 
         // ── INTERACTIONS: pay each active payee (amount minus protocol fee) ──
         let token_client = token::Client::new(&env, &asset);
@@ -2321,6 +2388,22 @@ impl AgentVault {
     /// task to the proof-gated release path.
     pub fn get_task_policy(env: Env, task_id: u64) -> Option<BytesN<32>> {
         Self::get_task(env, task_id).and_then(|task| task.policy_commitment)
+    }
+
+    /// The per-commitment R2/R7 accumulator a client must read BEFORE proving a
+    /// pp/2 batch, so the proof binds to the same window state the vault will
+    /// re-derive at settlement. Returns a fresh (all-zero) accumulator for a
+    /// commitment that has never released, which the circuit treats as window 1.
+    pub fn get_commitment_accum(env: Env, commitment: BytesN<32>) -> CommitmentAccumulator {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CommitmentAccum(commitment))
+            .unwrap_or(CommitmentAccumulator {
+                anchor_r2: 0,
+                window_spent: 0,
+                anchor_r7: 0,
+                window_count: 0,
+            })
     }
 
     /// Computes the fee to deduct from `amount` based on the current fee

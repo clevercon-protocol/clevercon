@@ -155,6 +155,8 @@ export async function releasePaymentProvedBatch(
     nullifiers: Buffer[];
     validAfter: bigint;
     validBefore: bigint;
+    resetR2: boolean;
+    resetR7: boolean;
     proof: { a: Buffer; b: Buffer; c: Buffer };
   },
 ): Promise<string> {
@@ -168,6 +170,8 @@ export async function releasePaymentProvedBatch(
     xdr.ScVal.scvVec(params.nullifiers.map((n) => nativeToScVal(n, { type: 'bytes' }))),
     nativeToScVal(params.validAfter, { type: 'u64' }),
     nativeToScVal(params.validBefore, { type: 'u64' }),
+    xdr.ScVal.scvBool(params.resetR2),
+    xdr.ScVal.scvBool(params.resetR7),
     nativeToScVal(
       { a: params.proof.a, b: params.proof.b, c: params.proof.c },
       {
@@ -447,6 +451,9 @@ export interface BatchSettlePayload {
   nullifiers: string[];
   validAfter: string;
   validBefore: string;
+  /** Proven tumbling-window reset flags (circuit outputs) for the R2/R7 accumulators. */
+  resetR2: boolean;
+  resetR7: boolean;
   proof: { a: string; b: string; c: string };
 }
 
@@ -570,6 +577,8 @@ export async function settleBatch(
           nullifiers: payload.nullifiers.map((n) => Buffer.from(n, 'hex')),
           validAfter: BigInt(payload.validAfter),
           validBefore: BigInt(payload.validBefore),
+          resetR2: payload.resetR2,
+          resetR7: payload.resetR7,
           proof,
         });
         // A pp/2 batch owns its whole on-chain task and spends the full plan_cost in
@@ -789,7 +798,9 @@ export async function recoverOrphanLocks(
   const unlocked: string[] = [];
   let skipped = 0;
   for (const w of wallets) {
-    const idsVal = await simulateVaultRead(kp, 'get_user_tasks', [new Address(w.address).toScVal()]);
+    const idsVal = await simulateVaultRead(kp, 'get_user_tasks', [
+      new Address(w.address).toScVal(),
+    ]);
     const rawIds = idsVal ? (scValToNative(idsVal) as (bigint | number)[]) : [];
     for (const raw of rawIds) {
       const id = BigInt(raw);
@@ -816,7 +827,10 @@ export async function recoverOrphanLocks(
         logger.info({ userId, taskId: String(id), outcome }, 'recovered orphan locked task');
       } catch (e) {
         skipped++;
-        logger.error({ userId, taskId: String(id), err: String(e) }, 'recover complete_task failed');
+        logger.error(
+          { userId, taskId: String(id), err: String(e) },
+          'recover complete_task failed',
+        );
       }
     }
   }

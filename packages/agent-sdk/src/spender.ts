@@ -228,7 +228,17 @@ export function createSpender(options: SpenderOptions): CleverConClient {
       const artifacts = resolvePrivateArtifacts();
       // Lazily pull in the prover (snarkjs/stellar) only when actually proving, so
       // importing createSpender stays dependency-free.
-      const { buildPrivateDisbursement } = await import('./payments/private-disburse.js');
+      const { buildPrivateDisbursement, commitmentForBundle } =
+        await import('./payments/private-disburse.js');
+      // Read the vault's per-commitment R2/R7 accumulator so the proof binds to the
+      // window state the vault re-derives at settlement (cumulative across tasks).
+      const commitment = await commitmentForBundle(bundle, artifacts);
+      const accumulator = await request<{
+        runningSpend: string;
+        priorCount: string;
+        anchorR2: string;
+        anchorR7: string;
+      }>('GET', `/vault/accumulator/${commitment}`);
       const {
         request: batchRequest,
         totalUsdc,
@@ -237,6 +247,7 @@ export function createSpender(options: SpenderOptions): CleverConClient {
         bundle,
         lines.map((l) => ({ payee: l.payee, amount: l.amount })),
         artifacts,
+        accumulator,
       );
       const resp = await request<{ jobId: string; status: string }>(
         'POST',

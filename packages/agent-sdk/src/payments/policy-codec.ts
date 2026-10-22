@@ -93,18 +93,28 @@ export function proofToSoroban(proof: {
 
 /**
  * Pull the batch outputs from the public signals. snarkjs orders them outputs
- * then inputs, so `signals[0]` is the commitment and `signals[1..1+n]` the `n`
- * nullifiers (active slots first); `activeNullifiers` keeps the non-zero ones.
+ * then inputs, so `signals[0]` is the commitment, `signals[1..1+n]` the `n`
+ * nullifiers (active slots first), and `signals[1+n]` / `signals[2+n]` the
+ * tumbling-window reset flags for R2 / R7. `activeNullifiers` keeps the non-zero
+ * ones.
  */
 export function extractBatchOutputs(
   signals: string[],
   n: number,
-): { commitment: Buffer; nullifiers: Buffer[]; activeNullifiers: Buffer[] } {
-  if (signals.length < 1 + n) {
-    throw new Error(`expected at least ${1 + n} public signals, got ${signals.length}`);
+): {
+  commitment: Buffer;
+  nullifiers: Buffer[];
+  activeNullifiers: Buffer[];
+  resetR2: boolean;
+  resetR7: boolean;
+} {
+  if (signals.length < 3 + n) {
+    throw new Error(`expected at least ${3 + n} public signals, got ${signals.length}`);
   }
   const commitment = feBytes(signals[0], FR);
   const nullifiers = signals.slice(1, 1 + n).map((s) => feBytes(s, FR));
   const activeNullifiers = nullifiers.filter((nf) => !nf.every((b) => b === 0));
-  return { commitment, nullifiers, activeNullifiers };
+  const resetR2 = signals[1 + n] === '1';
+  const resetR7 = signals[2 + n] === '1';
+  return { commitment, nullifiers, activeNullifiers, resetR2, resetR7 };
 }

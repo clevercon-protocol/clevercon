@@ -301,11 +301,17 @@ async function main() {
   // ── B. trustless batch disburse via /vault/batch-release-proved (pp/2) ───────
   const payAmtStroops = '5000000'; // 0.5 USDC
   const now = Math.floor(Date.now() / 1000);
+  // R1-only policy with a fresh commitment per run => the vault's per-commitment
+  // accumulator starts at zero, so a zero context matches what the vault re-derives
+  // (R2/R7 are disabled; the circuit resets trivially). The request carries the
+  // proven reset_r2/reset_r7 flags for the vault to roll the accumulator.
   const ctx: BatchContext = {
     validAfter: String(now - 3600),
     validBefore: String(now + 86400),
     runningSpend: '0',
     priorCount: '0',
+    anchorR2: '0',
+    anchorR7: '0',
   };
   const policy = r1OnlyPolicy('100000000'); // 10 USDC ceiling
   const releases: BatchRelease[] = [

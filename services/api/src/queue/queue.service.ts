@@ -28,6 +28,9 @@ export interface BatchSettlementJob {
   nullifiers: string[];
   validAfter: string;
   validBefore: string;
+  /** Proven tumbling-window reset flags (circuit outputs) for the R2/R7 accumulators. */
+  resetR2: boolean;
+  resetR7: boolean;
   proof: { a: string; b: string; c: string };
 }
 

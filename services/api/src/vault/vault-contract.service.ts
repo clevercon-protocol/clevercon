@@ -2,6 +2,7 @@ import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
 import {
+  Account,
   Contract,
   rpc as SorobanRpc,
   TransactionBuilder,
@@ -105,6 +106,50 @@ export class VaultContractService {
       throw new ServiceUnavailableException(`Vault simulation failed: ${simulated.error}`);
     }
     return SorobanRpc.assembleTransaction(tx, simulated).build().toXDR();
+  }
+
+  /**
+   * Read the per-commitment R2/R7 accumulator (`get_commitment_accum`) that a
+   * client must bind into a pp/2 batch proof BEFORE proving, so the proof matches
+   * the window state the vault re-derives at settlement. Read-only: simulated with
+   * a throwaway source (no funds/existence needed), nothing is submitted. Returns
+   * the window spend/count + anchors as decimal strings for the prover.
+   */
+  async readCommitmentAccum(commitmentHex: string): Promise<{
+    runningSpend: string;
+    priorCount: string;
+    anchorR2: string;
+    anchorR7: string;
+  }> {
+    this.ensureActive();
+    const server = this.server();
+    const bytes = Buffer.from(commitmentHex.replace(/^0x/, ''), 'hex');
+    const source = new Account(Keypair.random().publicKey(), '0');
+    const tx = new TransactionBuilder(source, {
+      fee: BASE_FEE,
+      networkPassphrase: this.passphrase,
+    })
+      .addOperation(
+        new Contract(this.contractId).call('get_commitment_accum', xdr.ScVal.scvBytes(bytes)),
+      )
+      .setTimeout(300)
+      .build();
+    const sim = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(sim) || !sim.result?.retval) {
+      throw new ServiceUnavailableException('Vault accumulator read failed');
+    }
+    const accum = scValToNative(sim.result.retval) as {
+      anchor_r2: bigint | number;
+      window_spent: bigint | number;
+      anchor_r7: bigint | number;
+      window_count: bigint | number;
+    };
+    return {
+      runningSpend: String(accum.window_spent),
+      priorCount: String(accum.window_count),
+      anchorR2: String(accum.anchor_r2),
+      anchorR7: String(accum.anchor_r7),
+    };
   }
 
   /** Unsigned `deposit(user, usdc_sac, amount)` XDR for the user to sign. */

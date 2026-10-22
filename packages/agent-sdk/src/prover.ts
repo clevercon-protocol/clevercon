@@ -24,9 +24,10 @@ export { buildAllowlist, windowsRoot } from './payments/allowlist.js';
 export type { AllowlistEntry, Allowlist } from './payments/allowlist.js';
 export { makePoseidon } from './payments/poseidon.js';
 export type { Poseidon, PoseidonArtifacts } from './payments/poseidon.js';
-export { buildPrivateDisbursement } from './payments/private-disburse.js';
+export { buildPrivateDisbursement, commitmentForBundle } from './payments/private-disburse.js';
 export type {
   DisbursementLine,
   PrivateDisburseArtifacts,
   PrivateDisbursement,
+  AccumulatorState,
 } from './payments/private-disburse.js';
