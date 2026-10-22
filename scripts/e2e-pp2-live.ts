@@ -205,17 +205,29 @@ async function main() {
   const token = await signIn(buyer);
   record('SEP-10 sign-in', !!token, `jwt ${token.slice(0, 10)}...`);
 
-  // confirm the live API is on the new vault
+  // Report which vault the API is bound to (informational; the pinned-set path
+  // below is what proves the A2.3 membership model, on whichever vault is live).
   const status = await api<{ contractAddress?: string; depositsEnabled?: boolean }>(
     '/vault/status',
     { token },
   );
   const vaultId = status.contractAddress ?? '';
-  record(
-    'live vault is the new one',
-    vaultId.startsWith('CCLUFH2E'),
-    vaultId || JSON.stringify(status),
-  );
+  record('vault bound', !!vaultId, vaultId || JSON.stringify(status));
+
+  // Pin a rule's canonical commitment to the buyer's account (set_policy_commitment):
+  // the wallet signs, the API submits. A2.3 requires this before any proof-gated
+  // release, so both spend paths below pin first or the vault returns
+  // CommitmentNotAuthorized.
+  async function pin(commitmentHex: string) {
+    const built = await api<{ xdr: string }>('/vault/pin-commitment', {
+      body: { commitment: commitmentHex },
+      token,
+    });
+    await api<{ txHash: string }>('/vault/submit', {
+      body: { signedXdr: signXdr(built.xdr, buyer) },
+      token,
+    });
+  }
 
   {
     const su = await stepUp(buyer);
@@ -249,7 +261,7 @@ async function main() {
 
   // ── A. pay via /payments (pp/1 binding path) ────────────────────────────────
   {
-    const policy = await api<{ id: string }>('/policies', {
+    const policy = await api<{ id: string; commitment: string }>('/policies', {
       body: {
         rules: {
           perPaymentCeilingUsdc: DEPOSIT,
@@ -260,6 +272,10 @@ async function main() {
       },
       token,
     });
+    // pp/1 release_payment_proved also checks pinned-set membership, so the buyer
+    // pins this public policy's (server-derived) commitment before paying.
+    await pin(policy.commitment);
+    record('A) public commitment pinned', true, `${policy.commitment.slice(0, 12)}...`);
     const pay = await api<{ id: string }>('/payments', {
       body: {
         kind: 'pay',
@@ -292,6 +308,15 @@ async function main() {
     'B) client proof generated',
     !!proof.commitment,
     `commitment ${proof.commitment.toString('hex').slice(0, 12)}...`,
+  );
+
+  // Pin the proof's canonical commitment (the private rule the owner authorizes)
+  // before relaying, so release_payment_proved_batch finds it in the pinned set.
+  await pin(proof.commitment.toString('hex'));
+  record(
+    'B) private commitment pinned',
+    true,
+    `${proof.commitment.toString('hex').slice(0, 12)}...`,
   );
 
   const stepId = Math.floor(Date.now() / 1000) % 1_000_000;
