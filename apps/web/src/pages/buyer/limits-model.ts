@@ -30,6 +30,11 @@ export type Draft = {
   // device only (like the rest of the private rule), proven alongside the caps.
   velocityCount: string;
   velocityWindow: keyof typeof WINDOWS;
+  // ── PUBLIC form only (a Managed Session scope: budget + allowlist + expiry) ──
+  // A public rule is not a proven clause-rule; it is the scope a bounded session
+  // key spends under. These are ignored for private rules.
+  publicBudget?: string;
+  publicExpiryHours?: string;
 };
 
 export const emptyDraft = (): Draft => ({
@@ -41,6 +46,8 @@ export const emptyDraft = (): Draft => ({
   allowlistCaps: {},
   velocityCount: '',
   velocityWindow: 'week',
+  publicBudget: '',
+  publicExpiryHours: '24',
 });
 
 // Application presets: the real jobs people use CleverCon for. Each is a ready

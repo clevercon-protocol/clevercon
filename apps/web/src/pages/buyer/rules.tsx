@@ -25,6 +25,7 @@ import {
   unpinCommitment,
   getPinnedCommitments,
   getManagedSession,
+  enableManagedSession,
 } from '../../lib/vault';
 import { computePolicyCommitment } from '../../lib/prove';
 import { encryptRuleBundle } from '../../lib/rule-backup';
@@ -189,114 +190,150 @@ export function RuleBuilder({ value, onChange }: { value: Draft; onChange: (d: D
           })}
         </div>
         {!value.isPrivate && (
-          <p className="mt-1.5 text-[11px] leading-relaxed text-amber-300/80">
-            Public rules are spent by a bounded session key. Rolling cap and velocity are enforced
-            only in the private lane; a public rule&apos;s hands-off spend is bounded by its Managed
-            Session budget (set one on the Vault tab).
+          <p className="mt-1.5 text-[11px] leading-relaxed text-sky-300/80">
+            A public rule is a <span className="font-medium">Managed Session</span>: the server signs
+            within this scope hands-off, bounded on-chain by the budget, allowlist, and expiry.
+            Saving it prompts your wallet once to authorize the scope; revoke it any time on the
+            Vault tab. There is one Managed Session per account, so saving replaces the current one.
           </p>
         )}
       </div>
 
-      {/* Templates */}
-      <div>
-        <span className="mb-1.5 flex items-center gap-1.5 text-xs text-slate-400">
-          <Sparkles size={13} className="text-violet-300" /> Start from a template
-        </span>
-        <div className="flex flex-wrap gap-2">
-          {TEMPLATES.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => onChange({ ...t.make(), isPrivate: value.isPrivate })}
-              title={t.description}
-              className={controls.chip}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block">
-          <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
-            <Gauge size={13} className="text-violet-300" /> Max per payment (USDC)
+      {/* Templates (private clause-rules only) */}
+      {value.isPrivate && (
+        <div>
+          <span className="mb-1.5 flex items-center gap-1.5 text-xs text-slate-400">
+            <Sparkles size={13} className="text-violet-300" /> Start from a template
           </span>
-          <input
-            value={value.perPaymentCeiling}
-            onChange={(e) => set({ perPaymentCeiling: e.target.value.replace(/[^0-9.]/g, '') })}
-            inputMode="decimal"
-            placeholder="e.g. 100 (blank = no cap)"
-            className={inputCls}
-          />
-        </label>
-        <label className="block">
-          <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
-            <Gauge size={13} className="text-violet-300" /> Min per payment (USDC)
-          </span>
-          <input
-            value={value.perPaymentFloor ?? ''}
-            onChange={(e) => set({ perPaymentFloor: e.target.value.replace(/[^0-9.]/g, '') })}
-            inputMode="decimal"
-            placeholder="blank = none; = max → exact"
-            className={inputCls}
-          />
-        </label>
-        <label className="block">
-          <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
-            <CalendarClock size={13} className="text-violet-300" /> Rolling budget
-          </span>
-          <div className="flex gap-2">
-            <input
-              value={value.rollingCap}
-              onChange={(e) => set({ rollingCap: e.target.value.replace(/[^0-9.]/g, '') })}
-              inputMode="decimal"
-              placeholder="e.g. 500"
-              className={inputCls}
-            />
-            <select
-              value={value.rollingWindow}
-              onChange={(e) => set({ rollingWindow: e.target.value as keyof typeof WINDOWS })}
-              className="w-36 rounded-lg bg-black/30 px-2 py-2 text-sm text-slate-100 outline-none"
-              aria-label="Rolling window"
-            >
-              {Object.entries(WINDOWS).map(([k, w]) => (
-                <option key={k} value={k}>
-                  {w.label}
-                </option>
-              ))}
-            </select>
+          <div className="flex flex-wrap gap-2">
+            {TEMPLATES.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => onChange({ ...t.make(), isPrivate: true })}
+                title={t.description}
+                className={controls.chip}
+              >
+                {t.label}
+              </button>
+            ))}
           </div>
-        </label>
-        <label className="block">
-          <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
-            <Gauge size={13} className="text-violet-300" /> Max payments
-          </span>
-          <div className="flex gap-2">
+        </div>
+      )}
+
+      {/* PRIVATE: the proven clause fields. */}
+      {value.isPrivate && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
+              <Gauge size={13} className="text-violet-300" /> Max per payment (USDC)
+            </span>
             <input
-              value={value.velocityCount}
-              onChange={(e) => set({ velocityCount: e.target.value.replace(/[^0-9]/g, '') })}
-              inputMode="numeric"
-              placeholder="e.g. 5 (blank = none)"
+              value={value.perPaymentCeiling}
+              onChange={(e) => set({ perPaymentCeiling: e.target.value.replace(/[^0-9.]/g, '') })}
+              inputMode="decimal"
+              placeholder="e.g. 100 (blank = no cap)"
               className={inputCls}
             />
-            <select
-              value={value.velocityWindow}
-              onChange={(e) => set({ velocityWindow: e.target.value as keyof typeof WINDOWS })}
-              className="w-36 rounded-lg bg-black/30 px-2 py-2 text-sm text-slate-100 outline-none"
-              aria-label="Velocity window"
-            >
-              {Object.entries(WINDOWS)
-                .filter(([k]) => k !== 'none')
-                .map(([k, w]) => (
+          </label>
+          <label className="block">
+            <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
+              <Gauge size={13} className="text-violet-300" /> Min per payment (USDC)
+            </span>
+            <input
+              value={value.perPaymentFloor ?? ''}
+              onChange={(e) => set({ perPaymentFloor: e.target.value.replace(/[^0-9.]/g, '') })}
+              inputMode="decimal"
+              placeholder="blank = none; = max → exact"
+              className={inputCls}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
+              <CalendarClock size={13} className="text-violet-300" /> Rolling budget
+            </span>
+            <div className="flex gap-2">
+              <input
+                value={value.rollingCap}
+                onChange={(e) => set({ rollingCap: e.target.value.replace(/[^0-9.]/g, '') })}
+                inputMode="decimal"
+                placeholder="e.g. 500"
+                className={inputCls}
+              />
+              <select
+                value={value.rollingWindow}
+                onChange={(e) => set({ rollingWindow: e.target.value as keyof typeof WINDOWS })}
+                className="w-36 rounded-lg bg-black/30 px-2 py-2 text-sm text-slate-100 outline-none"
+                aria-label="Rolling window"
+              >
+                {Object.entries(WINDOWS).map(([k, w]) => (
                   <option key={k} value={k}>
                     {w.label}
                   </option>
                 ))}
-            </select>
-          </div>
-        </label>
-      </div>
+              </select>
+            </div>
+          </label>
+          <label className="block">
+            <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
+              <Gauge size={13} className="text-violet-300" /> Max payments
+            </span>
+            <div className="flex gap-2">
+              <input
+                value={value.velocityCount}
+                onChange={(e) => set({ velocityCount: e.target.value.replace(/[^0-9]/g, '') })}
+                inputMode="numeric"
+                placeholder="e.g. 5 (blank = none)"
+                className={inputCls}
+              />
+              <select
+                value={value.velocityWindow}
+                onChange={(e) => set({ velocityWindow: e.target.value as keyof typeof WINDOWS })}
+                className="w-36 rounded-lg bg-black/30 px-2 py-2 text-sm text-slate-100 outline-none"
+                aria-label="Velocity window"
+              >
+                {Object.entries(WINDOWS)
+                  .filter(([k]) => k !== 'none')
+                  .map(([k, w]) => (
+                    <option key={k} value={k}>
+                      {w.label}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          </label>
+        </div>
+      )}
+
+      {/* PUBLIC: the Managed Session scope (budget + expiry; allowlist is shared below). */}
+      {!value.isPrivate && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
+              <Gauge size={13} className="text-sky-300" /> Total budget (USDC)
+            </span>
+            <input
+              value={value.publicBudget ?? ''}
+              onChange={(e) => set({ publicBudget: e.target.value.replace(/[^0-9.]/g, '') })}
+              inputMode="decimal"
+              placeholder="e.g. 50 (the session's spend cap)"
+              className={inputCls}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
+              <CalendarClock size={13} className="text-sky-300" /> Expires in (hours)
+            </span>
+            <input
+              value={value.publicExpiryHours ?? ''}
+              onChange={(e) => set({ publicExpiryHours: e.target.value.replace(/[^0-9]/g, '') })}
+              inputMode="numeric"
+              placeholder="e.g. 24"
+              className={inputCls}
+            />
+          </label>
+        </div>
+      )}
 
       {/* Allowlist */}
       <div>
@@ -471,18 +508,59 @@ function CopyRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+type Reveal =
+  | { kind: 'private'; commitment: string; salt: string; bundleJson: string }
+  | { kind: 'public'; sessionPublicKey: string; budgetUsdc: number; payees: number; expiry: number };
+
 /**
- * Shown once right after a PRIVATE rule is created: the salt (the only secret) +
- * the exact bundle to paste into an agent's SDK/MCP config. The plan's copy-once
- * salt reveal: the server never holds the salt in cleartext; the agent does.
+ * Shown once right after a rule is created. Private: the salt (the only secret) +
+ * the bundle to paste into an agent's SDK/MCP config (the plan's copy-once salt
+ * reveal; the server never holds the salt). Public: the active Managed Session's
+ * scope (the server holds the key, so there is no secret to copy).
  */
-function RevealPanel({
-  reveal,
-  onDone,
-}: {
-  reveal: { commitment: string; salt: string; bundleJson: string };
-  onDone: () => void;
-}) {
+function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void }) {
+  if (reveal.kind === 'public') {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start gap-2.5 rounded-xl border border-sky-500/25 bg-sky-500/[0.06] p-3">
+          <Eye size={16} className="mt-0.5 shrink-0 text-sky-300" />
+          <p className="text-[12.5px] leading-relaxed text-slate-300">
+            Managed Session active. The server now signs within this scope hands-off, with no
+            per-payment signature, and the vault enforces it. There is no secret to copy: the key
+            is server-held and bounded on-chain. Spend via your agent or automation, and manage or
+            revoke it any time on the Vault tab.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-2 rounded-xl bg-black/30 p-3 text-[12px]">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500">Budget</div>
+            <div className="font-medium text-emerald-300">{reveal.budgetUsdc.toFixed(2)} USDC</div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500">Payees</div>
+            <div className="text-slate-300">{reveal.payees}</div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500">Expires</div>
+            <div className="text-slate-300">
+              {new Date(reveal.expiry * 1000).toLocaleString()}
+            </div>
+          </div>
+          <div className="min-w-0">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500">Session key</div>
+            <div className="truncate font-mono text-[11px] text-slate-400" title={reveal.sessionPublicKey}>
+              {reveal.sessionPublicKey.slice(0, 8)}…{reveal.sessionPublicKey.slice(-6)}
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end border-t border-white/[0.06] pt-3">
+          <button onClick={onDone} className={primaryBtn}>
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-2.5 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] p-3">
@@ -715,12 +793,9 @@ export function RulesManager() {
   const [draft, setDraft] = useState<Draft>(emptyDraft());
   const [name, setName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
-  // Set after a PRIVATE rule is created, to show the copy-once salt reveal.
-  const [reveal, setReveal] = useState<null | {
-    commitment: string;
-    salt: string;
-    bundleJson: string;
-  }>(null);
+  // Set after a rule is created, to show the post-create reveal (private: salt +
+  // bundle; public: the active Managed Session scope).
+  const [reveal, setReveal] = useState<Reveal | null>(null);
   const [formFilter, setFormFilter] = useState<'all' | 'private' | 'public'>('all');
   const [defaultId, setDefaultId] = useState<string>(() => getDefaultLimitId());
   const {
@@ -776,22 +851,32 @@ export function RulesManager() {
 
   const save = useMutation({
     mutationFn: async () => {
-      const { rules, isPrivate } = draftToRules(draft);
+      // PUBLIC = a Managed Session: authorize the scope (budget + allowlist + expiry)
+      // on-chain with one wallet signature; the server holds the key and spends
+      // within it hands-off.
+      if (!draft.isPrivate) {
+        const budget = Number(draft.publicBudget);
+        const hours = Number(draft.publicExpiryHours);
+        const res = await enableManagedSession(
+          budget,
+          draft.allowlist,
+          Math.round(hours * 3600),
+        );
+        return { kind: 'public' as const, res, budget };
+      }
+      // PRIVATE: pin the CANONICAL pp/2 commitment from the full bundle + a stable
+      // device salt, and hand the server a wallet-encrypted {rules,salt} backup it
+      // cannot read (cross-device recovery).
+      const { rules } = draftToRules(draft);
       const base = {
         name: name.trim() || undefined,
-        form: (draft.isPrivate ? 'private' : 'public') as 'private' | 'public',
+        form: 'private' as const,
         supersedes: editingId ?? undefined,
       };
-      if (!isPrivate) return { policy: await createPolicy(rules, false, base), salt: null };
-      // Private rule: pin the CANONICAL pp/2 commitment from the full bundle + a
-      // stable device salt, and hand the server a wallet-encrypted {rules,salt}
-      // backup it cannot read (cross-device recovery). Unchanged from before.
       const bundleRules = draftToBundleRules(draft);
       const salt = newSalt();
       const commitment = await computePolicyCommitment(bundleRules, salt);
-      // The wallet-encrypted cross-device backup is best-effort: if the wallet
-      // prompt is declined or errors, still create the rule (saved + re-provable on
-      // THIS device via the local salt cache) rather than block creation on it.
+      // Best-effort backup: a declined/failed wallet prompt must not block creation.
       let encryptedBackup: string | undefined;
       try {
         encryptedBackup = await encryptRuleBundle({ rules: bundleRules, salt });
@@ -803,31 +888,34 @@ export function RulesManager() {
         commitment,
         ...(encryptedBackup ? { encryptedBackup } : {}),
       });
-      return { policy, salt };
+      return { kind: 'private' as const, policy, salt };
     },
-    onSuccess: ({ policy: p, salt }) => {
+    onSuccess: (result) => {
+      if (result.kind === 'public') {
+        qc.invalidateQueries({ queryKey: ['managed-session'] });
+        setReveal({
+          kind: 'public',
+          sessionPublicKey: result.res.sessionPublicKey,
+          budgetUsdc: result.budget,
+          payees: draft.allowlist.length,
+          expiry: result.res.expiry,
+        });
+        return;
+      }
+      const { policy: p, salt } = result;
       try {
         localStorage.setItem(localKey(p.commitment), JSON.stringify(draft));
       } catch {
         // ignore
       }
+      cacheLocalSalt(p.commitment, salt);
       qc.invalidateQueries({ queryKey: ['policies'] });
-      if (salt) {
-        // Private rule: cache the salt locally, then show the copy-once reveal so
-        // the owner can provision an agent. Keep the modal open for it.
-        cacheLocalSalt(p.commitment, salt);
-        const bundle = { rules: draftToBundleRules(draft), salt };
-        setReveal({
-          commitment: p.commitment,
-          salt,
-          bundleJson: JSON.stringify(bundle, null, 2),
-        });
-        return;
-      }
-      setOpen(false);
-      setDraft(emptyDraft());
-      setName('');
-      setEditingId(null);
+      setReveal({
+        kind: 'private',
+        commitment: p.commitment,
+        salt,
+        bundleJson: JSON.stringify({ rules: draftToBundleRules(draft), salt }, null, 2),
+      });
     },
   });
 
@@ -851,11 +939,16 @@ export function RulesManager() {
   const lane = (p: Policy): 'private' | 'public' => p.form ?? (p.isPrivate ? 'private' : 'public');
   const shown =
     formFilter === 'all' ? activePolicies : activePolicies.filter((p) => lane(p) === formFilter);
-  const hasAnyRule =
-    !!draft.perPaymentCeiling ||
-    !!draft.rollingCap ||
-    !!draft.velocityCount ||
-    draft.allowlist.length > 0;
+  const hasAnyRule = draft.isPrivate
+    ? !!draft.perPaymentCeiling ||
+      !!draft.rollingCap ||
+      !!draft.velocityCount ||
+      draft.allowlist.length > 0
+    : // Public (Managed Session): needs a positive budget, a non-empty allowlist,
+      // and a future expiry.
+      Number(draft.publicBudget) > 0 &&
+      draft.allowlist.length > 0 &&
+      Number(draft.publicExpiryHours) > 0;
 
   return (
     <div>
@@ -990,7 +1083,9 @@ export function RulesManager() {
         <Modal
           title={
             reveal
-              ? 'Rule created · provision your agent'
+              ? reveal.kind === 'public'
+                ? 'Managed Session active'
+                : 'Private rule created · provision your agent'
               : editingId
                 ? 'Edit rule (saves a new version)'
                 : 'New rule'
