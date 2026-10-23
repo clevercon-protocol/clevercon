@@ -10,7 +10,6 @@ import {
   CalendarClock,
   Star,
   Sparkles,
-  Archive,
   Pencil,
   Anchor,
   Copy,
@@ -18,8 +17,8 @@ import {
   Lock,
   Check,
 } from 'lucide-react';
-import { getPolicies, createPolicy, archivePolicy, type Policy } from '../../lib/policies';
-import { pinCommitment } from '../../lib/vault';
+import { getPolicies, createPolicy, deletePolicy, type Policy } from '../../lib/policies';
+import { pinCommitment, unpinCommitment, getPinnedCommitments } from '../../lib/vault';
 import { computePolicyCommitment } from '../../lib/prove';
 import { encryptRuleBundle } from '../../lib/rule-backup';
 import { newSalt } from '@clevercon/agent-sdk/prover';
@@ -45,6 +44,29 @@ import {
 const inputCls = controls.field;
 const primaryBtn = controls.primary;
 const localKey = (commitment: string) => `${LIMIT_CACHE_PREFIX}${commitment}`;
+
+/** Surface the real reason a mutation failed (API/wallet errors aren't always Error). */
+function errMsg(e: unknown): string {
+  const raw =
+    e instanceof Error
+      ? e.message
+      : typeof e === 'string'
+        ? e
+        : e && typeof e === 'object' && 'message' in e
+          ? String((e as { message: unknown }).message)
+          : '';
+  if (!raw) return 'Something went wrong. Please try again.';
+  const j = raw.indexOf('{');
+  if (j >= 0) {
+    try {
+      const parsed = JSON.parse(raw.slice(j));
+      if (parsed?.message) return String(parsed.message);
+    } catch {
+      /* fall through */
+    }
+  }
+  return raw;
+}
 
 // ── Enforcement badge (form-aware + honest) ─────────────────────────────────
 // A clause is only "enforced now" in a form its modes include; a private-only
@@ -411,21 +433,25 @@ function Modal({
 function RuleCard({
   p,
   isDefault,
+  pinned,
   onDefault,
   onPin,
+  onUnpin,
   onEdit,
   onDuplicate,
-  onArchive,
-  pinning,
+  onDelete,
+  pinBusy,
 }: {
   p: Policy;
   isDefault: boolean;
+  pinned: boolean;
   onDefault: () => void;
   onPin: () => void;
+  onUnpin: () => void;
   onEdit: () => void;
   onDuplicate: () => void;
-  onArchive: () => void;
-  pinning: boolean;
+  onDelete: () => void;
+  pinBusy: boolean;
 }) {
   const priv = p.form ? p.form === 'private' : p.isPrivate;
   const form: RuleForm = priv ? 'private' : 'public';
@@ -434,7 +460,7 @@ function RuleCard({
   const clauses = draft ? draftToRule(draft).clauses : [];
 
   return (
-    <Card className="flex flex-col p-0">
+    <Card className={`flex flex-col p-0 ${pinned ? '' : 'opacity-[0.96]'}`}>
       <div className="flex items-start justify-between gap-3 px-4 pt-4">
         <div className="flex min-w-0 items-center gap-2.5">
           <span
@@ -455,7 +481,7 @@ function RuleCard({
                 <span className="text-[10px] text-slate-500">v{p.version}</span>
               )}
             </div>
-            <div className="mt-0.5 flex items-center gap-1.5">
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
               <span
                 className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
                   priv ? 'bg-violet-500/15 text-violet-300' : 'bg-sky-500/15 text-sky-300'
@@ -463,14 +489,27 @@ function RuleCard({
               >
                 {priv ? 'Private' : 'Public'}
               </span>
-              {isDefault && (
-                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300">
-                  Default
+              {pinned ? (
+                <span
+                  title="Pinned on-chain: this rule is live and can authorize spends."
+                  className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-300"
+                >
+                  <Anchor size={9} /> Pinned
+                </span>
+              ) : (
+                <span
+                  title="Not pinned. Pin this rule on-chain (one wallet signature) before it can authorize a spend."
+                  className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300"
+                >
+                  Pin to use
                 </span>
               )}
-              {p.global && (
-                <span className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-300">
-                  Global
+              {isDefault && (
+                <span
+                  title="Pre-selected for new instructions on the Agent and Disburse tabs. Not a lock; you can override per spend."
+                  className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-300"
+                >
+                  Default
                 </span>
               )}
             </div>
@@ -478,7 +517,11 @@ function RuleCard({
         </div>
         <button
           onClick={onDefault}
-          title={isDefault ? 'Remove as default' : 'Make default'}
+          title={
+            isDefault
+              ? 'Remove as default'
+              : 'Make default (pre-selects this rule for new instructions)'
+          }
           aria-label={isDefault ? 'Remove as default' : 'Make default'}
           className={isDefault ? 'text-amber-300' : 'text-slate-600 hover:text-slate-300'}
         >
@@ -522,19 +565,26 @@ function RuleCard({
       </div>
 
       <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] px-4 py-2.5">
-        <span className="truncate font-mono text-[10.5px] text-slate-600" title={p.commitment}>
-          {p.commitment.slice(0, 12)}…
-        </span>
-        <div className="flex shrink-0 items-center gap-1">
+        {pinned ? (
+          <button
+            onClick={onUnpin}
+            disabled={pinBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11.5px] text-slate-400 hover:bg-white/[0.06] hover:text-slate-200 disabled:opacity-40"
+            title="Unpin on-chain (wallet signs unpin_policy_commitment)"
+          >
+            <Anchor size={13} /> {pinBusy ? 'Unpinning…' : 'Unpin'}
+          </button>
+        ) : (
           <button
             onClick={onPin}
-            disabled={pinning}
-            title="Pin on-chain (wallet signs set_policy_commitment)"
-            aria-label="Pin on-chain"
-            className="rounded-md p-1.5 text-slate-500 hover:bg-white/[0.06] hover:text-violet-300 disabled:opacity-40"
+            disabled={pinBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/15 px-2.5 py-1 text-[11.5px] font-medium text-violet-200 hover:bg-violet-500/25 disabled:opacity-40"
+            title="Pin on-chain (wallet signs set_policy_commitment) so this rule can authorize spends"
           >
-            <Anchor size={14} />
+            <Anchor size={13} /> {pinBusy ? 'Pinning…' : 'Pin on-chain'}
           </button>
+        )}
+        <div className="flex shrink-0 items-center gap-1">
           <button
             onClick={onEdit}
             title="Edit (saves a new version)"
@@ -552,12 +602,12 @@ function RuleCard({
             <Copy size={14} />
           </button>
           <button
-            onClick={onArchive}
-            title="Archive"
-            aria-label="Archive rule"
+            onClick={onDelete}
+            title="Delete this saved rule"
+            aria-label="Delete rule"
             className="rounded-md p-1.5 text-slate-500 hover:bg-white/[0.06] hover:text-red-300"
           >
-            <Archive size={14} />
+            <Trash2 size={14} />
           </button>
         </div>
       </div>
@@ -579,6 +629,13 @@ export function RulesManager() {
     isLoading,
     error,
   } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
+  // Which saved rules are actually PINNED on-chain (and thus usable). Read from
+  // the vault's pinned set so a card can show live/not-live honestly.
+  const { data: pinnedList = [] } = useQuery({
+    queryKey: ['pinned-commitments'],
+    queryFn: getPinnedCommitments,
+  });
+  const pinnedSet = new Set(pinnedList.map((c) => c.toLowerCase()));
 
   const toggleDefault = (id: string) => {
     const next = defaultId === id ? '' : id;
@@ -587,12 +644,14 @@ export function RulesManager() {
   };
 
   const openNew = () => {
+    save.reset(); // clear any stale error from a prior attempt
     setDraft(emptyDraft());
     setName('');
     setEditingId(null);
     setOpen(true);
   };
   const openEdit = (p: Policy) => {
+    save.reset();
     const d = cachedDraft(p.commitment);
     setDraft(d ?? emptyDraft());
     setName(p.name ?? '');
@@ -600,6 +659,7 @@ export function RulesManager() {
     setOpen(true);
   };
   const openDuplicate = (p: Policy) => {
+    save.reset();
     const d = cachedDraft(p.commitment) ?? emptyDraft();
     const priv = p.form ? p.form === 'private' : p.isPrivate;
     setDraft({ ...d, isPrivate: !priv }); // duplicate into the OTHER form
@@ -623,8 +683,20 @@ export function RulesManager() {
       const bundleRules = draftToBundleRules(draft);
       const salt = newSalt();
       const commitment = await computePolicyCommitment(bundleRules, salt);
-      const encryptedBackup = await encryptRuleBundle({ rules: bundleRules, salt });
-      const policy = await createPolicy(rules, true, { ...base, commitment, encryptedBackup });
+      // The wallet-encrypted cross-device backup is best-effort: if the wallet
+      // prompt is declined or errors, still create the rule (saved + re-provable on
+      // THIS device via the local salt cache) rather than block creation on it.
+      let encryptedBackup: string | undefined;
+      try {
+        encryptedBackup = await encryptRuleBundle({ rules: bundleRules, salt });
+      } catch {
+        encryptedBackup = undefined;
+      }
+      const policy = await createPolicy(rules, true, {
+        ...base,
+        commitment,
+        ...(encryptedBackup ? { encryptedBackup } : {}),
+      });
       return { policy, salt };
     },
     onSuccess: ({ policy: p, salt }) => {
@@ -642,13 +714,20 @@ export function RulesManager() {
     },
   });
 
-  const archive = useMutation({
-    mutationFn: (id: string) => archivePolicy(id),
+  const del = useMutation({
+    mutationFn: (id: string) => deletePolicy(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['policies'] }),
   });
   const pin = useMutation({
     mutationFn: (commitment: string) => pinCommitment(commitment),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['policies'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['policies'] });
+      qc.invalidateQueries({ queryKey: ['pinned-commitments'] });
+    },
+  });
+  const unpin = useMutation({
+    mutationFn: (commitment: string) => unpinCommitment(commitment),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['pinned-commitments'] }),
   });
 
   const activePolicies = policies.filter((p) => p.status !== 'archived');
@@ -706,21 +785,29 @@ export function RulesManager() {
             key={p.id}
             p={p}
             isDefault={defaultId === p.id}
+            pinned={pinnedSet.has(p.commitment.toLowerCase())}
             onDefault={() => toggleDefault(p.id)}
             onPin={() => pin.mutate(p.commitment)}
+            onUnpin={() => unpin.mutate(p.commitment)}
             onEdit={() => openEdit(p)}
             onDuplicate={() => openDuplicate(p)}
-            onArchive={() => archive.mutate(p.id)}
-            pinning={pin.isPending}
+            onDelete={() => {
+              if (
+                window.confirm(
+                  `Delete "${p.name || 'this rule'}"? This removes the saved rule; the on-chain commitment stays immutable, and if pinned you should unpin it first.`,
+                )
+              )
+                del.mutate(p.id);
+            }}
+            pinBusy={pin.isPending || unpin.isPending}
           />
         ))}
       </div>
 
-      {pin.error && (
-        <p className="mt-3 text-sm text-red-400">
-          Could not pin the rule on-chain. Please try again.
-        </p>
+      {(pin.error || unpin.error) && (
+        <p className="mt-3 text-sm text-red-400">{errMsg(pin.error || unpin.error)}</p>
       )}
+      {del.error && <p className="mt-3 text-sm text-red-400">{errMsg(del.error)}</p>}
 
       {open && (
         <Modal
@@ -752,9 +839,7 @@ export function RulesManager() {
               </button>
             </div>
           </div>
-          {save.error && (
-            <p className="mt-2 text-sm text-red-400">Could not save the rule. Please try again.</p>
-          )}
+          {save.error && <p className="mt-2 text-sm text-red-400">{errMsg(save.error)}</p>}
         </Modal>
       )}
     </div>

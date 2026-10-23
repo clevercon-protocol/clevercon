@@ -207,6 +207,19 @@ export class PoliciesService {
   }
 
   /**
+   * Permanently delete a saved rule the caller owns. The on-chain commitment (if
+   * ever pinned) is immutable and lives in the vault; this only removes the dapp's
+   * saved copy. Referencing Tasks/Proofs have a nullable policyId, so the FK is set
+   * null, not blocked. The device-cached plaintext is cleared client-side.
+   */
+  async delete(userId: string, id: string) {
+    const policy = await this.prisma.policy.findFirst({ where: { id, userId } });
+    if (!policy) throw new NotFoundException('Policy not found');
+    await this.prisma.policy.delete({ where: { id } });
+    return { ok: true as const };
+  }
+
+  /**
    * Request a binding proof authorising a release (payee + amount) under a
    * policy the caller owns. Reserves a unique nullifier, creates the Proof in
    * REQUESTED, and enqueues generation; the worker fills in the proof and flips

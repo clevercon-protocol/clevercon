@@ -94,6 +94,25 @@ export class VaultService {
     return { xdr, networkPassphrase: this.contract.passphrase };
   }
 
+  /** Build the wallet-signed unpin_policy_commitment XDR (removes it from the pinned set). */
+  async buildUnpinCommitment(userId: string, commitmentHex: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildUnpinCommitmentXdr(address, commitmentHex);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** The user's on-chain pinned-commitment set (hex), so the dapp can mark which rules are live. */
+  async getPinnedCommitments(userId: string): Promise<{ commitments: string[] }> {
+    if (!this.contract.active) return { commitments: [] };
+    const address = await this.primaryAddress(userId).catch(() => null);
+    if (!address) return { commitments: [] };
+    try {
+      return { commitments: await this.contract.readPolicyCommitments(address) };
+    } catch {
+      return { commitments: [] };
+    }
+  }
+
   /**
    * The per-commitment R2/R7 accumulator the client reads before proving a pp/2
    * batch (so the proof binds to the window state the vault re-derives). Pure

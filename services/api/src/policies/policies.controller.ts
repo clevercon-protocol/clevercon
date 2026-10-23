@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { PoliciesService } from './policies.service.js';
 import { ApiAuthGuard } from '../auth/api-auth.guard.js';
@@ -54,6 +54,12 @@ export class PoliciesController {
   @Post(':id/archive')
   archive(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.policies.archive(user.userId, id);
+  }
+
+  /** Permanently delete a saved rule the caller owns. */
+  @Delete(':id')
+  remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.policies.delete(user.userId, id);
   }
 
   /** Request a binding proof for a release (payee + amount) under this policy. */

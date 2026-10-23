@@ -107,6 +107,19 @@ export class VaultController {
     return this.vault.buildPinCommitment(user.userId, commitment);
   }
 
+  /** Build the wallet-signed unpin XDR (removes a rule from the on-chain pinned set). */
+  @Post('unpin-commitment')
+  unpinCommitment(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { commitment } = parseBody(pinSchema, body);
+    return this.vault.buildUnpinCommitment(user.userId, commitment);
+  }
+
+  /** The caller's on-chain pinned-commitment set, so the dapp marks which rules are live. */
+  @Get('pinned-commitments')
+  pinnedCommitments(@CurrentUser() user: AuthUser) {
+    return this.vault.getPinnedCommitments(user.userId);
+  }
+
   /**
    * The per-commitment R2/R7 accumulator (window spend/count + anchors) a client
    * reads BEFORE proving a pp/2 batch, so the proof binds to the window state the

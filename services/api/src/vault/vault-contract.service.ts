@@ -367,6 +367,43 @@ export class VaultContractService {
     };
   }
 
+  /** Unsigned `unpin_policy_commitment(user, commitment)` XDR for the user to sign. */
+  async buildUnpinCommitmentXdr(userAddress: string, commitmentHex: string): Promise<string> {
+    this.ensureActive();
+    const bytes = Buffer.from(commitmentHex.replace(/^0x/, ''), 'hex');
+    return this.buildUnsignedXdr(userAddress, 'unpin_policy_commitment', [
+      new Address(userAddress).toScVal(),
+      xdr.ScVal.scvBytes(bytes),
+    ]);
+  }
+
+  /**
+   * Read the user's bounded set of pinned policy commitments (`get_policy_commitments`)
+   * as hex strings, so the dapp can show which saved rules are actually pinned
+   * on-chain (and thus usable). Read-only simulate.
+   */
+  async readPolicyCommitments(userAddress: string): Promise<string[]> {
+    this.ensureActive();
+    const server = this.server();
+    const source = new Account(Keypair.random().publicKey(), '0');
+    const tx = new TransactionBuilder(source, {
+      fee: BASE_FEE,
+      networkPassphrase: this.passphrase,
+    })
+      .addOperation(
+        new Contract(this.contractId).call(
+          'get_policy_commitments',
+          new Address(userAddress).toScVal(),
+        ),
+      )
+      .setTimeout(300)
+      .build();
+    const sim = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(sim) || !sim.result?.retval) return [];
+    const arr = scValToNative(sim.result.retval) as Array<Buffer | Uint8Array>;
+    return arr.map((b) => Buffer.from(b).toString('hex'));
+  }
+
   /** Submit a wallet-signed XDR and poll for confirmation; returns the tx hash. */
   async submitSignedXdr(signedXdr: string): Promise<string> {
     this.ensureActive();

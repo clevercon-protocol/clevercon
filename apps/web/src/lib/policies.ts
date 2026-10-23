@@ -93,6 +93,12 @@ export async function archivePolicy(id: string): Promise<Policy> {
   return apiPost<Policy>(`/policies/${encodeURIComponent(id)}/archive`, {});
 }
 
+/** Permanently delete a saved rule (removes the dapp's copy; the on-chain commitment is immutable). */
+export async function deletePolicy(id: string): Promise<{ ok: true }> {
+  if (isDemo()) return { ok: true };
+  return apiFetch<{ ok: true }>(`/policies/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
 export interface ProofStatus {
   id: string;
   status: 'REQUESTED' | 'GENERATING' | 'READY' | 'VERIFIED' | 'REJECTED' | 'FAILED';

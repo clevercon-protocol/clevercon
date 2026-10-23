@@ -120,6 +120,20 @@ export async function pinCommitment(commitment: string): Promise<{ txHash: strin
   return apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
 }
 
+/** The user's on-chain pinned-commitment set (hex), so the dapp marks which rules are live. */
+export async function getPinnedCommitments(): Promise<string[]> {
+  if (isDemo()) return [];
+  const res = await apiFetch<{ commitments: string[] }>('/vault/pinned-commitments');
+  return res.commitments ?? [];
+}
+
+/** Unpin a rule's commitment on-chain (wallet signs unpin_policy_commitment). */
+export async function unpinCommitment(commitment: string): Promise<{ txHash: string }> {
+  const built = await apiPost<BuildResp>('/vault/unpin-commitment', { commitment });
+  const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
+  return apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
+}
+
 export interface ManagedSessionScope {
   budgetRemainingUsdc: number;
   expiry: number;
