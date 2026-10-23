@@ -5502,3 +5502,347 @@ fn test_release_payment_proved_nullifiers_pruned_on_finalize() {
     assert_eq!(after, (false, false));
     assert_eq!(s.client.get_task_policy(&task_id), Some(c));
 }
+
+// Session keys: the Fast / public lane.
+//
+// mock_all_auths() stands in for both the user's wallet signature (register /
+// revoke) and the session key's own signature (release), so these tests exercise
+// the ON-CHAIN SCOPE ENFORCEMENT - expiry, allowlist, budget, available balance -
+// not the Ed25519 signing itself (the live harness covers real session signing).
+
+fn fund_user(test_env: &TestEnv, amount: i128) -> Address {
+    let user = Address::generate(&test_env.env);
+    test_env.token_admin_client.mint(&user, &(amount * 2));
+    test_env.client.deposit(&user, &test_env.usdc_sac, &amount);
+    user
+}
+
+#[test]
+fn test_session_register_and_release() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
+
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &500,
+        &1_000,
+        &allowlist,
+    );
+
+    // The session's scope is readable on-chain.
+    let info = test_env.client.get_session(&session);
+    assert_eq!(info.user, user);
+    assert_eq!(info.budget_remaining, 500);
+    assert_eq!(info.spent, 0);
+
+    // The session key authorizes a release to an allowlisted payee.
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &200);
+
+    assert_eq!(test_env.token_client.balance(&payee), 200); // no fee configured
+    assert_eq!(test_env.client.get_balance(&user, &test_env.usdc_sac), 800);
+    let info = test_env.client.get_session(&session);
+    assert_eq!(info.budget_remaining, 300);
+    assert_eq!(info.spent, 200);
+}
+
+#[test]
+fn test_session_budget_accumulates_and_caps() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &500,
+        &1_000,
+        &allowlist,
+    );
+
+    // Two releases draw down the SAME budget cumulatively.
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &300);
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &150);
+    assert_eq!(test_env.client.get_session(&session).budget_remaining, 50);
+
+    // A third that would exceed the remaining 50 is rejected; nothing moves.
+    let result = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &51);
+    assert!(result == Err(Ok(VaultError::SessionBudgetExceeded)));
+    assert_eq!(test_env.token_client.balance(&payee), 450);
+    assert_eq!(test_env.client.get_session(&session).budget_remaining, 50);
+}
+
+#[test]
+fn test_session_payee_not_allowed() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    let stranger = Address::generate(&test_env.env);
+    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &500,
+        &1_000,
+        &allowlist,
+    );
+
+    let result = test_env
+        .client
+        .try_release_payment_session(&session, &stranger, &10);
+    assert!(result == Err(Ok(VaultError::PayeeNotAllowed)));
+    assert_eq!(test_env.token_client.balance(&stranger), 0);
+}
+
+#[test]
+fn test_session_expired() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &500,
+        &1_000,
+        &allowlist,
+    );
+
+    // Advance the ledger past the session's hard expiry.
+    test_env.env.ledger().set_timestamp(1_001);
+    let result = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &10);
+    assert!(result == Err(Ok(VaultError::SessionExpired)));
+}
+
+#[test]
+fn test_session_revoke_blocks_release() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &500,
+        &1_000,
+        &allowlist,
+    );
+
+    test_env.client.revoke_session(&user, &session);
+
+    // The key authorizes nothing after revocation.
+    let result = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &10);
+    assert!(result == Err(Ok(VaultError::SessionNotFound)));
+    // And the scope view is gone.
+    let view = test_env.client.try_get_session(&session);
+    assert!(matches!(view, Err(Ok(VaultError::SessionNotFound))));
+}
+
+#[test]
+fn test_session_revoke_only_owner() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let other = Address::generate(&test_env.env);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &500,
+        &1_000,
+        &allowlist,
+    );
+
+    let result = test_env.client.try_revoke_session(&other, &session);
+    assert!(result == Err(Ok(VaultError::NotYourSession)));
+}
+
+#[test]
+fn test_session_register_invalid_params() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
+    let empty: soroban_sdk::Vec<Address> = soroban_sdk::vec![&test_env.env];
+
+    // Non-positive budget.
+    let r = test_env.client.try_register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &0,
+        &1_000,
+        &allowlist,
+    );
+    assert!(r == Err(Ok(VaultError::InvalidSessionParams)));
+
+    // Expiry not in the future (ledger time is 0).
+    let r = test_env.client.try_register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &500,
+        &0,
+        &allowlist,
+    );
+    assert!(r == Err(Ok(VaultError::InvalidSessionParams)));
+
+    // Empty allowlist.
+    let r = test_env.client.try_register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &500,
+        &1_000,
+        &empty,
+    );
+    assert!(r == Err(Ok(VaultError::InvalidSessionParams)));
+}
+
+#[test]
+fn test_session_register_duplicate() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &500,
+        &1_000,
+        &allowlist,
+    );
+
+    let r = test_env.client.try_register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &100,
+        &2_000,
+        &allowlist,
+    );
+    assert!(r == Err(Ok(VaultError::SessionAlreadyExists)));
+}
+
+#[test]
+fn test_session_respects_locked_balance() {
+    // A session can spend only the UNLOCKED balance: funds reserved for an active
+    // task stay off-limits, exactly as withdraw enforces.
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let orchestrator = Address::generate(&test_env.env);
+    test_env.client.register_orchestrator(
+        &user,
+        &orchestrator,
+        &soroban_sdk::String::from_str(&test_env.env, "orch"),
+    );
+    // Lock 900 in an active task → only 100 unlocked.
+    test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &900);
+
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
+    // Budget is generous (500) but the available balance is only 100.
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &500,
+        &1_000,
+        &allowlist,
+    );
+
+    let result = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &101);
+    assert!(result == Err(Ok(VaultError::InsufficientAvailable)));
+
+    // The unlocked 100 is spendable.
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &100);
+    assert_eq!(test_env.token_client.balance(&payee), 100);
+}
+
+#[test]
+fn test_session_release_applies_fee() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let recipient = Address::generate(&test_env.env);
+    // 10% fee (1000 bps).
+    test_env
+        .client
+        .set_fee(&test_env.admin, &1000, &Some(recipient.clone()));
+
+    let user = fund_user(&test_env, 2000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1000,
+        &1_000,
+        &allowlist,
+    );
+
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &1000);
+
+    // Payee gets amount - 10%; the fee accrues to the protocol.
+    assert_eq!(test_env.token_client.balance(&payee), 900);
+    assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 100);
+    // The owner's balance is debited the full amount (fee included).
+    assert_eq!(test_env.client.get_balance(&user, &test_env.usdc_sac), 1000);
+}
+
+#[test]
+fn test_get_session_not_found() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let session = Address::generate(&test_env.env);
+    let result = test_env.client.try_get_session(&session);
+    assert!(matches!(result, Err(Ok(VaultError::SessionNotFound))));
+}

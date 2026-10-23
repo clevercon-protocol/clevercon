@@ -273,6 +273,44 @@ pub struct ReleaseProvedEvent {
     pub nullifier: BytesN<32>,
 }
 
+/// Emitted when a user registers a Fast-lane session key (`register_session`).
+/// The scope (budget, expiry, allowlist) is authorized once and enforced on-chain.
+#[contractevent]
+pub struct SessionRegisteredEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub session: Address,
+    pub asset: Address,
+    pub budget: i128,
+    pub expiry: u64,
+}
+
+/// Emitted when a session key is revoked (`revoke_session`): it can authorize
+/// nothing thereafter.
+#[contractevent]
+pub struct SessionRevokedEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub session: Address,
+}
+
+/// Emitted on a successful session-authorized release (`release_payment_session`).
+/// Carries the remaining budget so indexers can track a session's drawdown.
+#[contractevent]
+pub struct ReleaseSessionEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub session: Address,
+    #[topic]
+    pub payee: Address,
+    pub asset: Address,
+    pub amount: i128,
+    pub budget_remaining: i128,
+}
+
 #[contracterror]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum VaultError {
@@ -344,6 +382,23 @@ pub enum VaultError {
     /// `MAX_VALIDITY_SECS`. Bounded so the globally-scoped nullifier marker's
     /// ~30-day TTL always outlives the window (no replay once the marker archives).
     ValidityWindowTooLong = 40,
+    /// A session key is already registered under this address. Revoke it first (or
+    /// use a fresh key) to change a session's scope.
+    SessionAlreadyExists = 41,
+    /// `release_payment_session` / `revoke_session` named a key that is not
+    /// registered, or was revoked.
+    SessionNotFound = 42,
+    /// The session's hard expiry has passed; it can authorize nothing further.
+    SessionExpired = 43,
+    /// The payee is not on the session's on-chain allowlist.
+    PayeeNotAllowed = 44,
+    /// The payment would exceed the session's remaining on-chain budget.
+    SessionBudgetExceeded = 45,
+    /// Only the registering user may revoke their own session.
+    NotYourSession = 46,
+    /// `register_session` was given a non-positive budget, a non-future expiry, or
+    /// an empty / oversized allowlist.
+    InvalidSessionParams = 47,
 }
 
 /// A spend lane: `Private` (proof-enforced, hidden rule) or `Public` (session
@@ -438,6 +493,12 @@ pub enum DataKey {
     /// spend in that lane as an AND prescreen on the release path. Zero or one
     /// per lane; set and cleared only by the user's own signature.
     GlobalCommitment(Address, Lane),
+    /// A bounded Fast-lane (public) session key and its on-chain scope:
+    /// `session_pubkey → SessionInfo`. Authorized once by the user, enforced on
+    /// every `release_payment_session`, revocable instantly. The only non-proof
+    /// spend path; its scope (budget / expiry / allowlist) bounds it regardless of
+    /// who holds the key (a local agent key, or a KMS-held Managed Sessions key).
+    Session(Address),
 }
 
 // Data structs
@@ -454,6 +515,24 @@ pub struct CommitmentAccumulator {
     pub window_spent: u128,
     pub anchor_r7: u64,
     pub window_count: u64,
+}
+
+/// A bounded Fast-lane (public mode) session key, authorized once by the user and
+/// enforced on-chain on every spend. `budget_remaining` is the spend cap left in
+/// stroops (decremented per release, never refilled); `expiry` is a hard
+/// ledger-time cutoff; `allowlist` is the exact set of payees the key may pay.
+/// `spent` is lifetime drawdown, for analytics. Revocable instantly. This is the
+/// cleartext public counterpart to a private pinned commitment: a key spends under
+/// it directly (no per-payment proof), so its scope is deliberately tight.
+#[contracttype]
+#[derive(Clone)]
+pub struct SessionInfo {
+    pub user: Address,
+    pub asset: Address,
+    pub budget_remaining: i128,
+    pub expiry: u64,
+    pub allowlist: Vec<Address>,
+    pub spent: i128,
 }
 
 /// Asset-specific balances and history for a user.
@@ -608,6 +687,12 @@ const PERSISTENT_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
 /// never archives while a replay is still inside the window. Generous vs the
 /// clients' ~1-day windows.
 const MAX_VALIDITY_SECS: u64 = 604_800; // 7 days
+
+/// Upper bound on a Fast-lane session's payee allowlist. Bounds the on-chain
+/// membership scan in `release_payment_session` (and the stored vector), so a
+/// session's scope stays cheap to enforce. A session needing more payees uses a
+/// broader rule class, not an unbounded list.
+const MAX_SESSION_ALLOWLIST: u32 = 32;
 
 const INSTANCE_TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const INSTANCE_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
@@ -894,6 +979,215 @@ impl AgentVault {
             asset_account.balance
         );
         Ok(())
+    }
+
+    // ── Session keys: the Fast / public lane ────────────────────────────────
+    //
+    // A session key spends from the user's balance WITHOUT a per-payment proof,
+    // bounded by an on-chain scope (budget + payee allowlist + hard expiry) that
+    // the user authorizes ONCE with their wallet. The scope is enforced in the
+    // contract on every release, so the bound holds no matter who holds the key:
+    // a local key in a persistent agent (custody: self + public), or a tight,
+    // short, KMS-held key the server signs with (Managed Sessions = server +
+    // public). Even a fully compromised key or a malicious server can never pay a
+    // non-allowlisted payee, exceed the budget, or spend past expiry, and the user
+    // revokes instantly. This replaces the old server-logic-enforced Autopay by
+    // moving the limits on-chain.
+
+    /// Register a bounded session key. `user` authorizes (one wallet signature) a
+    /// key that may spend up to `budget` of `asset` to any payee on `allowlist`,
+    /// until `expiry`. The budget is a CAP, not an escrow: it is not locked from the
+    /// balance, so each release also checks the live available balance. One session
+    /// per key; revoke + re-register (or use a new key) to change scope.
+    pub fn register_session(
+        env: Env,
+        user: Address,
+        session: Address,
+        asset: Address,
+        budget: i128,
+        expiry: u64,
+        allowlist: Vec<Address>,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        Self::require_not_paused(&env)?;
+        if budget <= 0 || expiry <= env.ledger().timestamp() {
+            return Err(VaultError::InvalidSessionParams);
+        }
+        if allowlist.is_empty() || allowlist.len() > MAX_SESSION_ALLOWLIST {
+            return Err(VaultError::InvalidSessionParams);
+        }
+        if !Self::is_supported_asset(env.clone(), asset.clone()) {
+            return Err(VaultError::AssetNotSupported);
+        }
+
+        let session_key = DataKey::Session(session.clone());
+        if env.storage().persistent().has(&session_key) {
+            return Err(VaultError::SessionAlreadyExists);
+        }
+
+        // Ensure the user has an account on record (so there is a balance to draw
+        // from and a config TTL to track), mirroring deposit/withdraw.
+        let config = Self::get_or_create_config(&env, &user);
+        let config_key = DataKey::UserConfig(user.clone());
+        env.storage().persistent().set(&config_key, &config);
+        Self::extend_persistent_ttl(&env, &config_key);
+        Self::extend_instance_ttl(&env);
+
+        let info = SessionInfo {
+            user: user.clone(),
+            asset: asset.clone(),
+            budget_remaining: budget,
+            expiry,
+            allowlist,
+            spent: 0,
+        };
+        env.storage().persistent().set(&session_key, &info);
+        Self::extend_persistent_ttl(&env, &session_key);
+
+        SessionRegisteredEvent {
+            user,
+            session,
+            asset,
+            budget,
+            expiry,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Instantly revoke a session key. Only the registering user may revoke, by
+    /// wallet signature; afterward the key authorizes nothing.
+    pub fn revoke_session(env: Env, user: Address, session: Address) -> Result<(), VaultError> {
+        user.require_auth();
+        let session_key = DataKey::Session(session.clone());
+        let info: SessionInfo = env
+            .storage()
+            .persistent()
+            .get(&session_key)
+            .ok_or(VaultError::SessionNotFound)?;
+        if info.user != user {
+            return Err(VaultError::NotYourSession);
+        }
+        env.storage().persistent().remove(&session_key);
+        Self::extend_instance_ttl(&env);
+        SessionRevokedEvent { user, session }.publish(&env);
+        Ok(())
+    }
+
+    /// Pay an allowlisted payee from the session owner's balance, authorized by the
+    /// SESSION KEY itself (`session.require_auth()`) - no proof, no owner signature.
+    /// This is the public/Fast release. The on-chain scope (expiry, allowlist,
+    /// budget) is enforced here and fails closed, so the spend is bounded regardless
+    /// of who holds the key. The protocol fee applies, as on the proof-gated path.
+    pub fn release_payment_session(
+        env: Env,
+        session: Address,
+        payee: Address,
+        amount: i128,
+    ) -> Result<(), VaultError> {
+        session.require_auth();
+        Self::require_not_paused(&env)?;
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+
+        let session_key = DataKey::Session(session.clone());
+        let mut info: SessionInfo = env
+            .storage()
+            .persistent()
+            .get(&session_key)
+            .ok_or(VaultError::SessionNotFound)?;
+        Self::extend_persistent_ttl(&env, &session_key);
+
+        if env.ledger().timestamp() > info.expiry {
+            return Err(VaultError::SessionExpired);
+        }
+        if !info.allowlist.iter().any(|p| p == payee) {
+            return Err(VaultError::PayeeNotAllowed);
+        }
+        if amount > info.budget_remaining {
+            return Err(VaultError::SessionBudgetExceeded);
+        }
+
+        let asset_key = DataKey::UserAsset(info.user.clone(), info.asset.clone());
+        let mut asset_account: UserAssetAccount = env
+            .storage()
+            .persistent()
+            .get(&asset_key)
+            .ok_or(VaultError::InsufficientBalance)?;
+        Self::extend_persistent_ttl(&env, &asset_key);
+        // Only the unlocked portion is spendable: funds reserved for active tasks
+        // (`locked`) stay off-limits to a session, the same guard withdraw uses.
+        let available = asset_account.balance - asset_account.locked;
+        if amount > available {
+            return Err(VaultError::InsufficientAvailable);
+        }
+
+        Self::extend_instance_ttl(&env);
+
+        // ── EFFECTS (checks-effects-interactions): commit every bound BEFORE the
+        // external transfer, so a re-entrant token observes the debited state and a
+        // second release in the same call stack cannot double-spend. ──
+        info.budget_remaining -= amount;
+        info.spent += amount;
+        env.storage().persistent().set(&session_key, &info);
+        Self::extend_persistent_ttl(&env, &session_key);
+
+        asset_account.balance -= amount;
+        asset_account.total_spent += amount;
+        env.storage().persistent().set(&asset_key, &asset_account);
+        Self::extend_persistent_ttl(&env, &asset_key);
+
+        // Accrue the protocol fee (same model as the proof-gated release; no task
+        // scope, so this inlines the accrual without the task-keyed fee event).
+        let fee = Self::compute_fee(&env, amount);
+        if fee > 0 {
+            if let Some(fee_config) = env
+                .storage()
+                .instance()
+                .get::<_, FeeConfig>(&DataKey::FeeConfig)
+            {
+                if fee_config.recipient.is_some() {
+                    let fee_key = DataKey::AccruedFees(info.asset.clone());
+                    let current: i128 = env.storage().instance().get(&fee_key).unwrap_or(0i128);
+                    let new_accrued = current.checked_add(fee).expect("fee accrual overflow");
+                    env.storage().instance().set(&fee_key, &new_accrued);
+                }
+            }
+        }
+
+        // ── INTERACTIONS ──
+        let payee_payout = amount.checked_sub(fee).expect("fee arithmetic underflow");
+        let token_client = token::Client::new(&env, &info.asset);
+        token_client.transfer(&env.current_contract_address(), &payee, &payee_payout);
+
+        ReleaseSessionEvent {
+            user: info.user.clone(),
+            session,
+            payee,
+            asset: info.asset.clone(),
+            amount,
+            budget_remaining: info.budget_remaining,
+        }
+        .publish(&env);
+        log!(
+            &env,
+            "release_payment_session user={} amount={} budget_remaining={}",
+            info.user,
+            amount,
+            info.budget_remaining
+        );
+        Ok(())
+    }
+
+    /// View a session's current scope + remaining budget. `SessionNotFound` if the
+    /// key is unregistered or revoked. Lets a client (or Managed Sessions) confirm
+    /// on-chain exactly what a key may still spend.
+    pub fn get_session(env: Env, session: Address) -> Result<SessionInfo, VaultError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Session(session))
+            .ok_or(VaultError::SessionNotFound)
     }
 
     // Orchestrator registration
