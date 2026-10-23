@@ -91,17 +91,37 @@ export class CleverConError extends Error {
   }
 }
 
+/**
+ * The managed server-path spend (pp/1 binding proof) is retired. Throw a clear,
+ * typed error pointing callers at the client-proven self-custody path.
+ */
+function retiredServerPath(): never {
+  throw new CleverConError(
+    410,
+    'The managed server-path spend (pay/disburse) is retired: the policy verifier now ' +
+      'carries only the pp/2 batch verifying key, so server-built binding proofs no longer ' +
+      'verify on-chain. Use disbursePrivate for self-custody private spend (your policy is ' +
+      'proven locally; only the proof is relayed). Managed/session-key spend is coming.',
+  );
+}
+
 export interface CleverConClient {
-  /** Pay a single address, bounded by a saved limit or one derived from the payment.
-   *  Pass `idempotencyKey` so a retried call (e.g. after a timeout) returns the
-   *  original spend instead of paying twice. */
+  /**
+   * @deprecated The managed server-path spend (pp/1) is retired: the policy verifier
+   * now carries only the pp/2 batch verifying key, so server-built binding proofs no
+   * longer verify on-chain. Use {@link CleverConClient.disbursePrivate} for self-custody
+   * private spend (your policy is proven locally; only the proof is relayed). Managed /
+   * session-key spend returns in a later release. Calling this throws immediately.
+   */
   pay(
     payee: string,
     amount: number,
     opts?: { reason?: string; policyId?: string; idempotencyKey?: string },
   ): Promise<Spend>;
-  /** Disburse to many addresses in one bounded instruction. `idempotencyKey` makes
-   *  a retry return the original spend rather than disbursing twice. */
+  /**
+   * @deprecated See {@link CleverConClient.pay} - the managed server-path is retired.
+   * Use {@link CleverConClient.disbursePrivate} instead. Calling this throws immediately.
+   */
   disburse(
     lines: PaymentLine[],
     opts?: { policyId?: string; idempotencyKey?: string },
@@ -209,20 +229,11 @@ export function createSpender(options: SpenderOptions): CleverConClient {
   }
 
   return {
-    pay: (payee, amount, opts) =>
-      request<Spend>('POST', '/payments', {
-        kind: 'pay',
-        lines: [{ payee, amount, ...(opts?.reason ? { reason: opts.reason } : {}) }],
-        ...(opts?.policyId ? { policyId: opts.policyId } : {}),
-        ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
-      }),
-    disburse: (lines, opts) =>
-      request<Spend>('POST', '/payments', {
-        kind: 'disburse',
-        lines,
-        ...(opts?.policyId ? { policyId: opts.policyId } : {}),
-        ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
-      }),
+    // pp/1 (managed server-path) is RETIRED - the verifier only carries the pp/2 batch
+    // VK, so server-built binding proofs no longer verify. Fail fast with guidance
+    // rather than round-tripping to a 410. Self-custody private spend -> disbursePrivate.
+    pay: async () => retiredServerPath(),
+    disburse: async () => retiredServerPath(),
     disbursePrivate: async (lines) => {
       const bundle = resolveBundle();
       const artifacts = resolvePrivateArtifacts();

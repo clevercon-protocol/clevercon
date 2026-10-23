@@ -20,30 +20,25 @@ describe('createSpender', () => {
     expect(() => createSpender({ apiKey: '' })).toThrow(/apiKey is required/);
   });
 
-  it('pay posts a single-line payment with the api key', async () => {
+  it('pay is retired - throws a clear deprecation error without hitting the network', async () => {
     const { fetchImpl, calls } = mockFetch();
     const cc = createSpender({ apiKey: KEY, apiUrl: 'http://x', fetchImpl });
-    await cc.pay('GPAYEE', 5, { reason: 'design', policyId: 'pol1' });
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe('http://x/payments');
-    expect((calls[0].init.headers as Record<string, string>)['x-api-key']).toBe(KEY);
-    expect(JSON.parse(calls[0].init.body as string)).toEqual({
-      kind: 'pay',
-      lines: [{ payee: 'GPAYEE', amount: 5, reason: 'design' }],
-      policyId: 'pol1',
-    });
+    await expect(cc.pay('GPAYEE', 5, { reason: 'design', policyId: 'pol1' })).rejects.toThrow(
+      /retired/i,
+    );
+    expect(calls).toHaveLength(0);
   });
 
-  it('disburse posts many lines', async () => {
+  it('disburse is retired - throws a clear deprecation error without hitting the network', async () => {
     const { fetchImpl, calls } = mockFetch();
     const cc = createSpender({ apiKey: KEY, apiUrl: 'http://x', fetchImpl });
-    await cc.disburse([
-      { payee: 'GA', amount: 1 },
-      { payee: 'GB', amount: 2, reason: 'r' },
-    ]);
-    const body = JSON.parse(calls[0].init.body as string);
-    expect(body.kind).toBe('disburse');
-    expect(body.lines).toHaveLength(2);
+    await expect(
+      cc.disburse([
+        { payee: 'GA', amount: 1 },
+        { payee: 'GB', amount: 2, reason: 'r' },
+      ]),
+    ).rejects.toThrow(/retired/i);
+    expect(calls).toHaveLength(0);
   });
 
   it('setLimit splits isPrivate from the rules', async () => {

@@ -31,7 +31,7 @@ describe('createAgentWallet', () => {
     expect(typeof wallet.fetch).toBe('function');
   });
 
-  it('topUp pays the agent wallet from the vault, bounded by a policy', async () => {
+  it('topUp is retired - throws (it rides on the managed server-path)', async () => {
     const kp = Keypair.random();
     const { fetchImpl, calls } = mockFetch();
     const wallet = createAgentWallet({
@@ -40,16 +40,8 @@ describe('createAgentWallet', () => {
       apiUrl: 'http://x',
       fetchImpl,
     });
-    await wallet.topUp(5, { policyId: 'pol1' });
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe('http://x/payments');
-    expect((calls[0].init.headers as Record<string, string>)['x-api-key']).toBe(KEY);
-    // The payee is the agent's OWN address: the vault funds the agent, non-custodially.
-    expect(JSON.parse(calls[0].init.body as string)).toEqual({
-      kind: 'pay',
-      lines: [{ payee: kp.publicKey(), amount: 5, reason: 'agent wallet top-up' }],
-      policyId: 'pol1',
-    });
+    await expect(wallet.topUp(5, { policyId: 'pol1' })).rejects.toThrow(/retired/i);
+    expect(calls).toHaveLength(0);
   });
 
   it('getBudget reads the vault position through the spender', async () => {

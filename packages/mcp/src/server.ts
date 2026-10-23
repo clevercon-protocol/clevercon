@@ -102,9 +102,9 @@ class CleverConMCPServer {
           case 'get_service':
             return await getServiceHandler(args || {}, this.config);
           case 'pay':
-            return await payHandler(args || {}, this.config);
+            return await payHandler();
           case 'disburse':
-            return await disburseHandler(args || {}, this.config);
+            return await disburseHandler();
           case 'disburse_private':
             return await disbursePrivateHandler(args || {}, this.config);
           case 'hire_agent':

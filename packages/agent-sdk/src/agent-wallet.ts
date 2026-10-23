@@ -42,8 +42,13 @@ export interface AgentWallet {
   readonly address: string;
   /**
    * Pull USDC from the CleverCon vault into THIS wallet, bounded on-chain by the
-   * owner's policy. Resolves once the spend is accepted; funds land when the
-   * release settles (poll the returned spend, or `getBudget`).
+   * owner's policy.
+   *
+   * @deprecated topUp rides on the managed server-path (pp/1), which is retired - the
+   * verifier only carries the pp/2 batch VK, so server-built binding proofs no longer
+   * verify on-chain. Calling it throws. A session-key-backed working-capital pull
+   * returns in a later release; until then, fund the agent via self-custody private
+   * spend (`clevercon.disbursePrivate([{ payee: wallet.address, amount }])`).
    */
   topUp(amount: number, opts?: { reason?: string; policyId?: string }): Promise<Spend>;
   /** A `fetch` that transparently settles x402 402 challenges from THIS wallet. */

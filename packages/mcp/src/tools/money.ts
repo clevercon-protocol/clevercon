@@ -18,7 +18,7 @@ import {
 export const paySchema = {
   name: 'pay',
   description:
-    'Pay a single Stellar address from the vault, bounded by a spending policy. Provide policyId to use a saved limit, or omit it to derive a tight one from this payment. Requires an API key.',
+    'RETIRED (managed server-path). Use disburse_private for self-custody private spend - your policy is proven locally and only the proof is relayed. Managed/session-key spend returns in a later release.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -31,31 +31,22 @@ export const paySchema = {
   },
 };
 
-export async function payHandler(
-  args: Record<string, unknown>,
-  config: ApiConfig,
-): Promise<ToolResult> {
-  try {
-    const { payee, amount, reason, policyId } = args;
-    if (typeof payee !== 'string' || payee.trim() === '') throw new Error('payee is required');
-    if (typeof amount !== 'number' || amount <= 0) throw new Error('amount must be positive');
-    const client = createApiClient(config);
-    const task = await client.post('/payments', {
-      kind: 'pay',
-      lines: [{ payee: payee.trim(), amount, ...(reason ? { reason } : {}) }],
-      ...(policyId ? { policyId } : {}),
-    });
-    return toolJson(task);
-  } catch (error) {
-    return toolError('pay failed', error);
-  }
+export async function payHandler(): Promise<ToolResult> {
+  return toolError(
+    'pay is retired',
+    new Error(
+      'The managed server-path "pay" is retired: the policy verifier now carries only the ' +
+        'pp/2 batch verifying key, so server-built binding proofs no longer verify on-chain. ' +
+        'Use "disburse_private" for self-custody private spend. Managed/session-key spend is coming.',
+    ),
+  );
 }
 
 // ── disburse ──────────────────────────────────────────────────────────────────
 export const disburseSchema = {
   name: 'disburse',
   description:
-    'Disburse USDC to many addresses in one bounded instruction (varying amounts, per-recipient reasons). Provide policyId to use a saved limit, or omit it to derive one from the lines. Requires an API key.',
+    'RETIRED (managed server-path). Use disburse_private to disburse to many addresses with your policy proven locally and only the proof relayed. Managed/session-key spend returns in a later release.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -80,24 +71,15 @@ export const disburseSchema = {
   },
 };
 
-export async function disburseHandler(
-  args: Record<string, unknown>,
-  config: ApiConfig,
-): Promise<ToolResult> {
-  try {
-    const { lines, policyId } = args;
-    if (!Array.isArray(lines) || lines.length === 0)
-      throw new Error('lines must be a non-empty array');
-    const client = createApiClient(config);
-    const task = await client.post('/payments', {
-      kind: 'disburse',
-      lines,
-      ...(policyId ? { policyId } : {}),
-    });
-    return toolJson(task);
-  } catch (error) {
-    return toolError('disburse failed', error);
-  }
+export async function disburseHandler(): Promise<ToolResult> {
+  return toolError(
+    'disburse is retired',
+    new Error(
+      'The managed server-path "disburse" is retired: the policy verifier now carries only ' +
+        'the pp/2 batch verifying key, so server-built binding proofs no longer verify on-chain. ' +
+        'Use "disburse_private" for self-custody private spend. Managed/session-key spend is coming.',
+    ),
+  );
 }
 
 // ── set_limit ─────────────────────────────────────────────────────────────────
