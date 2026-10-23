@@ -141,3 +141,5 @@ npm run dev -w @clevercon/web        # web app
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+<!-- Updated documentation reference -->
