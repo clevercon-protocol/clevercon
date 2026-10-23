@@ -42,6 +42,18 @@ const batchReleaseSchema = z.object({
   proof: z.object({ a: hex, b: hex, c: hex }),
 });
 
+// Managed Sessions (server + public): the owner authorizes a bounded scope for
+// their server-held delegate/session key (budget + payee allowlist + expiry).
+const sessionEnableSchema = z.object({
+  budgetUsdc: z.number().positive(),
+  allowlist: z.array(z.string().min(1)).min(1).max(32),
+  expiresInSeconds: z.number().int().positive(),
+});
+const sessionPayBodySchema = z.object({
+  payee: z.string().min(1),
+  amount: z.number().positive(),
+});
+
 /** The current session's vault position and on-chain deposit/withdraw. */
 @Controller('vault')
 @UseGuards(ApiAuthGuard) // JWT (console) or x-api-key (agents); deposit/withdraw add StepUpGuard
@@ -148,6 +160,38 @@ export class VaultController {
   submit(@Body() body: unknown) {
     const { signedXdr } = parseBody(submitSchema, body);
     return this.vault.submit(signedXdr);
+  }
+
+  /**
+   * Managed Sessions (server + public lane). Enable builds the register_session
+   * XDR authorizing the caller's server-held delegate as a bounded session key
+   * (budget + payee allowlist + expiry); the wallet signs it and submits via
+   * `submit`. Thereafter `session/pay` spends hands-off (the server signs with the
+   * delegate, no per-payment signature), bounded on-chain. Revoke is wallet-signed.
+   */
+  @Post('session/enable')
+  enableSession(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { budgetUsdc, allowlist, expiresInSeconds } = parseBody(sessionEnableSchema, body);
+    return this.vault.buildEnableSession(user.userId, budgetUsdc, allowlist, expiresInSeconds);
+  }
+
+  /** Hands-off public-lane spend; bounded by the on-chain session scope (no step-up). */
+  @Post('session/pay')
+  sessionPay(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { payee, amount } = parseBody(sessionPayBodySchema, body);
+    return this.vault.sessionPay(user.userId, payee, amount);
+  }
+
+  /** Build the wallet-signed revoke_session XDR; submit via `submit` to kill the key. */
+  @Post('session/revoke')
+  revokeSession(@CurrentUser() user: AuthUser) {
+    return this.vault.buildRevokeSession(user.userId);
+  }
+
+  /** The caller's live managed-session scope (remaining budget, allowlist, expiry), or null. */
+  @Get('session')
+  getSession(@CurrentUser() user: AuthUser) {
+    return this.vault.getSession(user.userId);
   }
 
   /**

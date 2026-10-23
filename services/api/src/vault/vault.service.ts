@@ -103,6 +103,81 @@ export class VaultService {
     return this.contract.readCommitmentAccum(commitmentHex);
   }
 
+  /**
+   * Managed Sessions (server + public lane). The user's server-held delegate IS
+   * the session key: the owner signs register_session ONCE (wallet-signed, via
+   * `submit`) to authorize the on-chain scope (budget + payee allowlist + expiry),
+   * then `sessionPay` spends hands-off with the server signing as that delegate.
+   * The vault enforces the scope, so even the server cannot exceed it; revoke is
+   * wallet-signed and instant. This is the dapp's public option (a browser key
+   * could not sign hands-off), replacing the old server-logic Autopay.
+   */
+  async buildEnableSession(
+    userId: string,
+    budgetUsdc: number,
+    allowlist: string[],
+    expiresInSeconds: number,
+  ) {
+    if (budgetUsdc <= 0) throw new BadRequestException('budgetUsdc must be positive');
+    if (allowlist.length < 1 || allowlist.length > 32) {
+      throw new BadRequestException('allowlist must have 1..32 payees');
+    }
+    if (expiresInSeconds <= 0) throw new BadRequestException('expiresInSeconds must be positive');
+    for (const a of allowlist) {
+      if (!StrKey.isValidEd25519PublicKey(a)) throw new BadRequestException(`invalid payee: ${a}`);
+    }
+    if (!this.delegates.available) {
+      throw new BadRequestException('Managed Sessions are not configured on this deployment');
+    }
+    const address = await this.primaryAddress(userId);
+    const { publicKey } = await this.delegates.getOrProvision(userId);
+    const expiry = Math.floor(Date.now() / 1000) + expiresInSeconds;
+    const xdr = await this.contract.buildRegisterSessionXdr(
+      address,
+      publicKey,
+      budgetUsdc,
+      expiry,
+      allowlist,
+    );
+    return {
+      xdr,
+      networkPassphrase: this.contract.passphrase,
+      sessionPublicKey: publicKey,
+      expiry,
+    };
+  }
+
+  /**
+   * Hands-off public-lane spend: the server signs release_payment_session with the
+   * caller's delegate/session key. No per-payment wallet signature (that is the
+   * point); the vault's on-chain scope is the whole protection.
+   */
+  async sessionPay(userId: string, payee: string, amountUsdc: number) {
+    if (amountUsdc <= 0) throw new BadRequestException('amount must be positive');
+    if (!StrKey.isValidEd25519PublicKey(payee)) throw new BadRequestException('invalid payee');
+    const kp = await this.delegates.keypairFor(userId);
+    if (!kp) throw new BadRequestException('No managed session: enable one first');
+    const txHash = await this.contract.releaseViaSession(kp, payee, amountUsdc);
+    return { txHash };
+  }
+
+  /** Build the wallet-signed revoke_session XDR (kills the managed session on-chain). */
+  async buildRevokeSession(userId: string) {
+    const address = await this.primaryAddress(userId);
+    const publicKey = await this.delegates.publicKeyFor(userId);
+    if (!publicKey) throw new BadRequestException('No managed session to revoke');
+    const xdr = await this.contract.buildRevokeSessionXdr(address, publicKey);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** The caller's live managed-session scope (budget/allowlist/expiry), or null. */
+  async getSession(userId: string) {
+    const publicKey = await this.delegates.publicKeyFor(userId);
+    if (!publicKey) return { sessionPublicKey: null, session: null };
+    const session = await this.contract.readSession(publicKey);
+    return { sessionPublicKey: publicKey, session };
+  }
+
   /** Mark the caller's delegate as authorized (called after the register tx submits). */
   /**
    * The user's registered agent key (for the agent-key payment mode). Returns

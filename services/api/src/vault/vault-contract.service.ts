@@ -224,6 +224,98 @@ export class VaultContractService {
     ]);
   }
 
+  // ── Managed Sessions (server + public lane) ──
+  // The server-held per-user delegate IS the managed session key. The owner
+  // authorizes its on-chain scope ONCE (register_session, wallet-signed), the
+  // server then signs each release with the delegate (release_payment_session),
+  // and the vault enforces the budget + allowlist + expiry. Moving the limits
+  // on-chain is what makes this safe where the old server-logic Autopay was not.
+
+  /** Unsigned `register_session(user, session, usdc_sac, budget, expiry, allowlist)` XDR. */
+  async buildRegisterSessionXdr(
+    userAddress: string,
+    sessionPublicKey: string,
+    budgetUsdc: number,
+    expiry: number,
+    allowlist: string[],
+  ): Promise<string> {
+    this.ensureActive();
+    return this.buildUnsignedXdr(userAddress, 'register_session', [
+      new Address(userAddress).toScVal(),
+      new Address(sessionPublicKey).toScVal(),
+      this.usdcSacScVal(),
+      nativeToScVal(usdcToStroops(budgetUsdc), { type: 'i128' }),
+      nativeToScVal(BigInt(expiry), { type: 'u64' }),
+      xdr.ScVal.scvVec(allowlist.map((a) => new Address(a).toScVal())),
+    ]);
+  }
+
+  /** Unsigned `revoke_session(user, session)` XDR for the owner to sign. */
+  async buildRevokeSessionXdr(userAddress: string, sessionPublicKey: string): Promise<string> {
+    this.ensureActive();
+    return this.buildUnsignedXdr(userAddress, 'revoke_session', [
+      new Address(userAddress).toScVal(),
+      new Address(sessionPublicKey).toScVal(),
+    ]);
+  }
+
+  /**
+   * Hands-off public-lane release: the server signs `release_payment_session` with
+   * the user's delegate (which IS the registered session key), so no per-payment
+   * wallet signature is needed. The vault enforces the on-chain scope and fails
+   * closed off-allowlist / over-budget / past expiry. Returns the tx hash.
+   */
+  async releaseViaSession(delegate: Keypair, payee: string, amountUsdc: number): Promise<string> {
+    this.ensureActive();
+    const { hash } = await this.signAndSubmitAsOrchestrator(delegate, 'release_payment_session', [
+      new Address(delegate.publicKey()).toScVal(),
+      new Address(payee).toScVal(),
+      nativeToScVal(usdcToStroops(amountUsdc), { type: 'i128' }),
+    ]);
+    return hash;
+  }
+
+  /**
+   * Read a session's live on-chain scope (`get_session`). Returns null when no
+   * session is registered for the key (SessionNotFound or revoked). Read-only
+   * simulation with a throwaway source, nothing submitted.
+   */
+  async readSession(sessionPublicKey: string): Promise<{
+    budgetRemainingUsdc: number;
+    expiry: number;
+    allowlist: string[];
+    spentUsdc: number;
+  } | null> {
+    this.ensureActive();
+    const server = this.server();
+    const source = new Account(Keypair.random().publicKey(), '0');
+    const tx = new TransactionBuilder(source, {
+      fee: BASE_FEE,
+      networkPassphrase: this.passphrase,
+    })
+      .addOperation(
+        new Contract(this.contractId).call('get_session', new Address(sessionPublicKey).toScVal()),
+      )
+      .setTimeout(300)
+      .build();
+    const sim = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(sim) || !sim.result?.retval) {
+      return null; // no active session (SessionNotFound / revoked)
+    }
+    const s = scValToNative(sim.result.retval) as {
+      budget_remaining: bigint | number;
+      expiry: bigint | number;
+      allowlist: string[];
+      spent: bigint | number;
+    };
+    return {
+      budgetRemainingUsdc: Number(s.budget_remaining) / STROOPS_PER_USDC,
+      expiry: Number(s.expiry),
+      allowlist: s.allowlist,
+      spentUsdc: Number(s.spent) / STROOPS_PER_USDC,
+    };
+  }
+
   /** Submit a wallet-signed XDR and poll for confirmation; returns the tx hash. */
   async submitSignedXdr(signedXdr: string): Promise<string> {
     this.ensureActive();
