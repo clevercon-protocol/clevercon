@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ShieldCheck,
@@ -19,7 +20,12 @@ import {
   Check,
 } from 'lucide-react';
 import { getPolicies, createPolicy, deletePolicy, type Policy } from '../../lib/policies';
-import { pinCommitment, unpinCommitment, getPinnedCommitments } from '../../lib/vault';
+import {
+  pinCommitment,
+  unpinCommitment,
+  getPinnedCommitments,
+  getManagedSession,
+} from '../../lib/vault';
 import { computePolicyCommitment } from '../../lib/prove';
 import { encryptRuleBundle } from '../../lib/rule-backup';
 import { newSalt } from '@clevercon/agent-sdk/prover';
@@ -729,6 +735,10 @@ export function RulesManager() {
     queryFn: getPinnedCommitments,
   });
   const pinnedSet = new Set(pinnedList.map((c) => c.toLowerCase()));
+  // Public spending IS a Managed Session (a bounded, server-signed key with a
+  // budget + allowlist + expiry) - the plan's public lane. Surface it here so the
+  // public view shows the real thing, not an orphan "public policy".
+  const { data: managed } = useQuery({ queryKey: ['managed-session'], queryFn: getManagedSession });
 
   const toggleDefault = (id: string) => {
     const next = defaultId === id ? '' : id;
@@ -876,12 +886,72 @@ export function RulesManager() {
         </button>
       </div>
 
+      {/* Public lane = Managed Sessions. Surfaced in the Public (and All) views so
+          the public "rule" is the real bounded session, not an orphan policy. */}
+      {formFilter !== 'private' && (
+        <div className="mb-4 rounded-2xl border border-sky-500/20 bg-sky-500/[0.04] p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-500/10 text-sky-300 ring-1 ring-inset ring-sky-500/15">
+                <Eye size={16} />
+              </span>
+              <div>
+                <div className="text-[14px] font-semibold text-white">
+                  Public lane · Managed Session
+                </div>
+                <p className="mt-0.5 max-w-xl text-[12px] leading-relaxed text-slate-400">
+                  Public spending is a bounded, revocable key the server signs with hands-off, under
+                  an on-chain scope (budget + allowlist + expiry). It is set up and managed on the
+                  Vault tab.
+                </p>
+              </div>
+            </div>
+            <Link to="/app/vault" className={controls.secondary + ' shrink-0 !px-3 !py-1.5'}>
+              {managed?.session ? 'Manage' : 'Set up'}
+            </Link>
+          </div>
+          {managed?.session && (
+            <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-xl bg-black/20 p-3 text-[12px] sm:grid-cols-4">
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">
+                  Budget left
+                </div>
+                <div className="font-medium text-emerald-300">
+                  {managed.session.budgetRemainingUsdc.toFixed(2)} USDC
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">Payees</div>
+                <div className="text-slate-300">{managed.session.allowlist.length}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">Expires</div>
+                <div className="text-slate-300">
+                  {new Date(managed.session.expiry * 1000).toLocaleDateString()}
+                </div>
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">
+                  Session key
+                </div>
+                <div
+                  className="truncate font-mono text-[11px] text-slate-400"
+                  title={managed.sessionPublicKey ?? ''}
+                >
+                  {managed.sessionPublicKey?.slice(0, 6)}…{managed.sessionPublicKey?.slice(-4)}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {isLoading && <Loading rows={2} />}
       {error && <ErrorState>Could not load your rules.</ErrorState>}
-      {!isLoading && !error && shown.length === 0 && (
+      {!isLoading && !error && shown.length === 0 && formFilter !== 'public' && (
         <EmptyState>
           {activePolicies.length === 0
-            ? 'No rules yet. Create one to bound what your agent can spend.'
+            ? 'No private rules yet. Create one to bound what your agent can spend.'
             : `No ${formFilter} rules.`}
         </EmptyState>
       )}
