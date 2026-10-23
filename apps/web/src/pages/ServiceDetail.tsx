@@ -39,7 +39,12 @@ function fieldHint(k: string): string {
   const key = k.toLowerCase();
   if (key.includes('address') || key === 'account' || key.includes('wallet'))
     return 'The Stellar account this job is about (what to look up) — not a payment; the fee comes from your vault.';
-  if (key.includes('data') || key.includes('text') || key.includes('message') || key.includes('content'))
+  if (
+    key.includes('data') ||
+    key.includes('text') ||
+    key.includes('message') ||
+    key.includes('content')
+  )
     return 'The text/content for the service to process.';
   if (key.includes('url') || key.includes('endpoint') || key.includes('link'))
     return 'A URL for the service to fetch.';
@@ -53,7 +58,12 @@ function placeholderFor(k: string): string {
     return 'G… (a Stellar account address)';
   if (key.includes('url') || key.includes('endpoint') || key.includes('link')) return 'https://…';
   if (key.includes('amount') || key.includes('price')) return 'e.g. 10';
-  if (key.includes('data') || key.includes('text') || key.includes('message') || key.includes('content'))
+  if (
+    key.includes('data') ||
+    key.includes('text') ||
+    key.includes('message') ||
+    key.includes('content')
+  )
     return 'Text to process…';
   return `Enter ${humanizeField(k).toLowerCase()}`;
 }
@@ -199,9 +209,10 @@ function HireBox({
       )}
       {delegate && !delegate.registered && (
         <p className="mt-2 text-xs text-amber-300">
-          Autopay is off, so this hire will run but won&apos;t pay the provider until you{' '}
+          Your settlement relayer isn&apos;t registered, so this hire will run but won&apos;t pay
+          the provider until you{' '}
           <Link to="/app/vault" className="underline hover:text-amber-200">
-            enable Autopay
+            register the relayer
           </Link>
           .
         </p>
@@ -300,8 +311,8 @@ export function ServiceDetail() {
               {verificationBlurb(service.tier, service.verification)}
             </p>
             <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-slate-500">
-              <Lock size={12} /> Paid from your vault under your private, on-chain-enforced policy, only
-              on an accepted result.
+              <Lock size={12} /> Paid from your vault under your private, on-chain-enforced policy,
+              only on an accepted result.
             </p>
           </div>
 

@@ -399,11 +399,12 @@ export function DisbursePage() {
             </div>
             {blocker === 'autopay' && (
               <p className="text-sm text-amber-300">
-                Autopay isn&apos;t enabled yet.{' '}
+                Your settlement relayer isn&apos;t registered yet.{' '}
                 <Link to="/app/vault" className="font-medium underline hover:text-amber-200">
-                  Authorize the delegate
+                  Register the relayer
                 </Link>{' '}
-                once so the vault can release payments, then come back.
+                once so it can submit your proofs, then come back. It holds no funds and cannot
+                forge a proof.
               </p>
             )}
             {blocker === 'balance' && (

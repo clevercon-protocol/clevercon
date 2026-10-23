@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { VaultService } from '../vault/vault.service.js';
-import { PoliciesService } from '../policies/policies.service.js';
 
 export interface PlanLine {
   payee: string;
@@ -10,37 +9,14 @@ export interface PlanLine {
   reason?: string;
 }
 
-/** A spending limit the planner read (stated or implied) from the instruction. */
-export interface SuggestedLimit {
-  perPaymentCeilingUsdc?: number;
-  rollingCapUsdc?: number;
-  rollingWindowSecs?: number;
-}
-
 export interface AgentPlan {
   kind: 'pay' | 'disburse' | 'hire' | 'none';
   lines: PlanLine[];
   service: { id: string; name: string; pricePerCall: number } | null;
   budget: number;
-  /** A limit the AI extracted from the words, for the user to confirm or edit. */
-  limit: SuggestedLimit | null;
   rationale: string;
   warnings: string[];
   source: 'llm' | 'fallback';
-}
-
-/** Keep only positive, coherent fields; null when the user stated no limit. */
-function cleanLimit(l?: SuggestedLimit): SuggestedLimit | null {
-  if (!l) return null;
-  const out: SuggestedLimit = {};
-  if (typeof l.perPaymentCeilingUsdc === 'number' && l.perPaymentCeilingUsdc > 0)
-    out.perPaymentCeilingUsdc = l.perPaymentCeilingUsdc;
-  if (typeof l.rollingCapUsdc === 'number' && l.rollingCapUsdc > 0) {
-    out.rollingCapUsdc = l.rollingCapUsdc;
-    if (typeof l.rollingWindowSecs === 'number' && l.rollingWindowSecs > 0)
-      out.rollingWindowSecs = l.rollingWindowSecs;
-  }
-  return Object.keys(out).length ? out : null;
 }
 
 const STELLAR_ADDR = /^G[A-Z2-7]{55}$/;
@@ -80,34 +56,12 @@ const PLAN_SCHEMA = {
       description: 'for hire: a few words describing the service to find; else empty',
     },
     budget: { type: 'number', description: 'for hire: max USDC to spend; else 0' },
-    limit: {
-      type: 'object',
-      additionalProperties: false,
-      description:
-        'The spending limit the user STATED or IMPLIED for this instruction. Read it from the wording: "max 500 each" -> perPaymentCeilingUsdc 500; "up to 5000 this month" -> rollingCapUsdc 5000, rollingWindowSecs 2592000; "no more than 1000/week" -> rollingCapUsdc 1000, rollingWindowSecs 604800. Use 0 for any field the user did not state or imply.',
-      properties: {
-        perPaymentCeilingUsdc: {
-          type: 'number',
-          description: 'max per single payout; 0 if unspecified',
-        },
-        rollingCapUsdc: {
-          type: 'number',
-          description: 'cumulative cap over the window; 0 if unspecified',
-        },
-        rollingWindowSecs: {
-          type: 'number',
-          description:
-            'window for the rolling cap (day 86400, week 604800, 30d 2592000); 0 if none',
-        },
-      },
-      required: ['perPaymentCeilingUsdc', 'rollingCapUsdc', 'rollingWindowSecs'],
-    },
     rationale: {
       type: 'string',
       description: 'one short sentence explaining the plan to the user',
     },
   },
-  required: ['kind', 'lines', 'serviceQuery', 'budget', 'limit', 'rationale'],
+  required: ['kind', 'lines', 'serviceQuery', 'budget', 'rationale'],
 };
 
 const SYSTEM_PROMPT =
@@ -116,8 +70,9 @@ const SYSTEM_PROMPT =
   'Only propose what the user actually asked for; never invent Stellar addresses. ' +
   'If the user names a person without an address, leave payee empty and put the name in reason. ' +
   'If the instruction is not a spend or is unclear, use kind "none" and explain in rationale. ' +
-  'Amounts are USDC. Use the context (available budget, saved limits, services) to stay realistic. ' +
-  'Also read any spending limit the user states or implies (per-payment cap, total cap, time window) into "limit"; use 0 for fields they did not state.';
+  'Amounts are USDC; use the available budget to stay realistic. ' +
+  'You NEVER choose, read, or infer a spending rule: the human selects the rule the vault enforces, ' +
+  'and private rules are not visible to you. Plan ONLY the actions (who/how much/which service).';
 const TOOL_DESC = 'Return the structured spending plan for the user to review.';
 
 type Provider = 'anthropic' | 'openai' | 'none';
@@ -127,7 +82,6 @@ interface RawPlan {
   lines: PlanLine[];
   serviceQuery: string;
   budget: number;
-  limit?: SuggestedLimit;
   rationale: string;
 }
 
@@ -138,7 +92,6 @@ export class AgentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly vault: VaultService,
-    private readonly policies: PoliciesService,
   ) {}
 
   /**
@@ -172,7 +125,6 @@ export class AgentService {
         lines: [],
         service: null,
         budget: 0,
-        limit: null,
         rationale: 'Tell me what to do with your budget.',
         warnings: [],
         source: 'fallback',
@@ -281,22 +233,20 @@ export class AgentService {
   }
 
   private async buildContext(userId: string): Promise<string> {
-    const [vault, limits, services] = await Promise.all([
+    // The planner is deliberately NOT told about the user's rules. It only needs
+    // the available budget (for realism) and the hireable services. The human
+    // selects the rule the vault enforces; private rules never reach the model.
+    const [vault, services] = await Promise.all([
       this.vault.getForUser(userId).catch(() => ({ available: 0 })),
-      this.policies.list(userId).catch(() => ({ items: [] as unknown[] })),
       this.prisma.service.findMany({
         where: { status: 'ACTIVE' },
         select: { name: true, pricePerCall: true },
         take: 8,
       }),
     ]);
-    const limitLines = (limits.items as { id: string; rules?: unknown }[])
-      .map((p) => `- ${p.id}: ${JSON.stringify(p.rules ?? 'private')}`)
-      .join('\n');
     const svc = services.map((s) => `- ${s.name} ($${Number(s.pricePerCall)}/call)`).join('\n');
     return [
       `Available budget: ${(vault as { available: number }).available} USDC.`,
-      limitLines ? `Saved limits:\n${limitLines}` : 'No saved limits.',
       svc ? `Services you can hire:\n${svc}` : 'No services available.',
     ].join('\n\n');
   }
@@ -346,7 +296,6 @@ export class AgentService {
         lines,
         service: null,
         budget: total,
-        limit: cleanLimit(raw.limit),
         rationale: raw.rationale || `Send $${total.toFixed(2)} across ${lines.length} payment(s).`,
         warnings,
         source,
@@ -378,7 +327,6 @@ export class AgentService {
         lines: [],
         service: { id: svc.id, name: svc.name, pricePerCall: Number(svc.pricePerCall) },
         budget,
-        limit: cleanLimit(raw.limit),
         rationale: raw.rationale || `Hire ${svc.name} with a $${budget.toFixed(2)} budget.`,
         warnings,
         source,
@@ -398,7 +346,6 @@ export class AgentService {
       lines: [],
       service: null,
       budget: 0,
-      limit: null,
       rationale,
       warnings,
       source,
@@ -470,18 +417,11 @@ function normalizeRaw(input: unknown): RawPlan {
   const kind = ['pay', 'disburse', 'hire', 'none'].includes(String(o.kind))
     ? (o.kind as RawPlan['kind'])
     : 'none';
-  const lim = (o.limit ?? {}) as Record<string, unknown>;
-  const num = (v: unknown) => (typeof v === 'number' && v > 0 ? v : 0);
   return {
     kind,
     lines,
     serviceQuery: typeof o.serviceQuery === 'string' ? o.serviceQuery : '',
     budget: typeof o.budget === 'number' ? o.budget : 0,
-    limit: {
-      perPaymentCeilingUsdc: num(lim.perPaymentCeilingUsdc),
-      rollingCapUsdc: num(lim.rollingCapUsdc),
-      rollingWindowSecs: num(lim.rollingWindowSecs),
-    },
     rationale: typeof o.rationale === 'string' ? o.rationale : '',
   };
 }

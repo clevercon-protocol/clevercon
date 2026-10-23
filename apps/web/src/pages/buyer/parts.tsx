@@ -1181,7 +1181,7 @@ export function DelegateCard() {
         )}
         {authorize.isSuccess && !delegate.registered && (
           <p className="mt-2 text-sm text-emerald-300">
-            Autopay enabled. Jobs now settle automatically.
+            Relayer registered. Your proofs now settle without a per-payment prompt.
           </p>
         )}
       </div>

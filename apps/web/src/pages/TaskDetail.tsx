@@ -13,7 +13,12 @@ import {
   Download,
   AlertTriangle,
 } from 'lucide-react';
-import { getTask, raiseDispute, approveTask, type TaskDetail as TaskDetailData } from '../lib/tasks';
+import {
+  getTask,
+  raiseDispute,
+  approveTask,
+  type TaskDetail as TaskDetailData,
+} from '../lib/tasks';
 import { getDelegate } from '../lib/vault';
 import { config } from '../config';
 
@@ -112,35 +117,35 @@ function ReviewBanner({ task }: { task: TaskDetailData }) {
 
 /**
  * Shown when a job finished running but no payment settled on-chain (spent is 0).
- * The usual cause is Autopay being off, so the vault can't pay the provider on
- * the buyer's behalf, or an unfunded vault. We say so plainly rather than letting
- * a "COMPLETED" badge imply money moved.
+ * The usual cause is the settlement relayer not being registered, so the server
+ * can't submit the release, or an unfunded vault. We say so plainly rather than
+ * letting a "COMPLETED" badge imply money moved.
  */
 function UnpaidBanner({ task }: { task: TaskDetailData }) {
   const { data: delegate } = useQuery({ queryKey: ['delegate'], queryFn: getDelegate });
   const ranUnpaid = task.status === 'COMPLETED' && task.spent === 0 && task.budget > 0;
   if (!ranUnpaid) return null;
-  const autopayOff = delegate ? !delegate.registered : false;
+  const relayerMissing = delegate ? !delegate.registered : false;
   return (
     <div className="rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-4">
       <div className="flex items-start gap-2">
         <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-300" />
         <div className="text-sm text-slate-300">
           <div className="font-medium text-amber-200">Completed, but no payment settled</div>
-          {autopayOff ? (
+          {relayerMissing ? (
             <p className="mt-1 text-xs text-slate-400">
-              The job ran, but <span className="text-slate-300">Autopay is off</span>, so the vault
-              couldn&apos;t pay the provider on your behalf. No funds moved and no receipt was
-              created.{' '}
+              The job ran, but your{' '}
+              <span className="text-slate-300">settlement relayer isn&apos;t registered</span>, so
+              the release couldn&apos;t be submitted. No funds moved and no receipt was created.{' '}
               <Link to="/app/vault" className="text-violet-300 hover:text-violet-200">
-                Enable Autopay
+                Register the relayer
               </Link>{' '}
-              so future hires settle automatically.
+              so future releases settle.
             </p>
           ) : (
             <p className="mt-1 text-xs text-slate-400">
-              The job ran, but nothing settled on-chain yet. If your vault is funded and Autopay is
-              on, settlement may still be processing; otherwise check your{' '}
+              The job ran, but nothing settled on-chain yet. If your vault is funded and the relayer
+              is registered, settlement may still be processing; otherwise check your{' '}
               <Link to="/app/vault" className="text-violet-300 hover:text-violet-200">
                 vault balance
               </Link>

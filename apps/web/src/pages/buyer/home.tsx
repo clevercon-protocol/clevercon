@@ -118,33 +118,6 @@ type Msg =
 const short = (a: string) => (a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
 const hasRule = (d: Draft) => !!d.perPaymentCeiling || !!d.rollingCap || d.allowlist.length > 0;
 
-// Map a limit the agent read from the instruction into an editable Draft, so the
-// enforced boundary comes from the user's own words and still shows in the picker.
-function draftFromSuggested(l: {
-  perPaymentCeilingUsdc?: number;
-  rollingCapUsdc?: number;
-  rollingWindowSecs?: number;
-}): Draft {
-  const rollingWindow: Draft['rollingWindow'] =
-    l.rollingWindowSecs === 86400
-      ? 'day'
-      : l.rollingWindowSecs === 604800
-        ? 'week'
-        : l.rollingWindowSecs === 2592000
-          ? 'month'
-          : l.rollingCapUsdc
-            ? 'month'
-            : 'none';
-  return {
-    ...emptyDraft(),
-    isPrivate: true,
-    perPaymentCeiling: l.perPaymentCeilingUsdc ? String(l.perPaymentCeilingUsdc) : '',
-    rollingCap: l.rollingCapUsdc ? String(l.rollingCapUsdc) : '',
-    rollingWindow,
-    allowlist: [],
-  };
-}
-
 // 'default' = the owner's default (or budget-only if none); 'custom' = the builder
 // below; 'none' = budget-only; otherwise a saved limit's id.
 type LimitChoice = 'default' | 'custom' | 'none' | string;
@@ -248,34 +221,11 @@ export function CommandChat() {
       });
       return;
     }
-    let bind = currentBind();
-    let appliedLimit = applied;
-    const extracted = result.limit;
-    // Respect the buyer's explicit choice: a saved rule, a custom rule, or
-    // budget-only are used exactly as picked. ONLY on "Let the agent decide"
-    // (default, with no saved default) do we adopt a limit the agent READ from the
-    // instruction's words. We never silently DERIVE a ceiling from the plan's own
-    // amounts; the buyer picks the rule.
-    const adopt =
-      limitChoice === 'default' &&
-      extracted &&
-      (extracted.perPaymentCeilingUsdc || extracted.rollingCapUsdc)
-        ? extracted
-        : null;
-    if (adopt) {
-      const d = draftFromSuggested(adopt);
-      // Pin WHO can be paid: for a pay/disburse, the enforced rule should allow
-      // only the plan's payees, not just cap the amount to anyone. (A hire's payee
-      // is the service, bound server-side.) The buyer can still edit this.
-      if (result.kind === 'pay' || result.kind === 'disburse') {
-        const payees = [...new Set(result.lines.map((l) => l.payee).filter(Boolean))];
-        if (payees.length) d.allowlist = payees;
-      }
-      setCustomDraft(d);
-      setLimitChoice('custom');
-      bind = { draft: d };
-      appliedLimit = { label: describeRules(draftToRules(d).rules), isPrivate: d.isPrivate };
-    }
+    // The enforced rule is ALWAYS the one the user selected (or budget-only). The
+    // agent never reads, infers, or chooses a rule - private rules are not even
+    // visible to it - so we bind the user's pick as-is.
+    const bind = currentBind();
+    const appliedLimit = applied;
     if (result.kind === 'hire' && result.service) {
       push({
         id: nextId(),
@@ -466,15 +416,16 @@ export function CommandChat() {
     // the bounded delegate releases a cent.
     if (plan.kind !== 'pay' && plan.kind !== 'disburse') return;
 
-    // Preconditions the chain would otherwise fail on AFTER proving: autopay must be
-    // authorized and the vault must hold enough. Guide instead of proving-then-failing.
+    // Preconditions the chain would otherwise fail on AFTER proving: the settlement
+    // relayer must be registered (it submits your proof; it can't forge or alter it)
+    // and the vault must hold enough. Guide instead of proving-then-failing.
     const planTotal = plan.lines.reduce((s, l) => s + l.amount, 0);
     if (!delegateData?.registered) {
       push({
         id: nextId(),
         role: 'agent',
         ok: false,
-        text: 'Autopay isn’t enabled yet. Open the Vault tab and authorize the delegate once (a single signature), then approve this again.',
+        text: 'Your settlement relayer isn’t registered yet. Open the Vault tab and register it once (a single signature), then approve this again. The relayer only submits your proof; it never holds funds or picks your rule.',
       });
       return;
     }
@@ -1013,9 +964,9 @@ function FirstRunGuide() {
   if (isDemo() || dismissed || tasks.length > 0) return null;
 
   const funded = (vault?.balance ?? 0) > 0;
-  // Autopay is only an onboarding step where the server offers automatic
-  // settlement; otherwise the user signs each payment and it does not apply.
-  const autopayOffered = delegate?.settlementEnabled ?? false;
+  // The settlement relayer is an onboarding step: registering it lets the server
+  // submit your proofs so a release settles without a wallet prompt each time.
+  const relayerOffered = delegate?.settlementEnabled ?? false;
   const steps = [
     {
       done: funded,
@@ -1026,18 +977,18 @@ function FirstRunGuide() {
     },
     {
       done: policies.length > 0,
-      label: 'Set a spending limit',
-      desc: 'A private cap and allowlist the vault enforces. Optional: you can also set one per instruction.',
-      cta: 'Add a limit',
+      label: 'Create a spending rule',
+      desc: 'A private cap + allowlist the vault enforces. You pick which rule governs each spend.',
+      cta: 'Add a rule',
       to: '/app/rules',
     },
-    ...(autopayOffered
+    ...(relayerOffered
       ? [
           {
             done: !!delegate?.registered,
-            label: 'Enable autopay',
-            desc: 'Authorize your bounded delegate once so jobs settle without a wallet prompt each time. It holds no funds and can never exceed your limits.',
-            cta: 'Enable',
+            label: 'Register the settlement relayer',
+            desc: 'Register your bounded relayer once so releases settle without a wallet prompt each time. It only submits your proof — it holds no funds, cannot forge a proof, and never picks your rule.',
+            cta: 'Register',
             to: '/app/vault',
           },
         ]
