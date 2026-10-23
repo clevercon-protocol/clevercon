@@ -120,6 +120,60 @@ export async function pinCommitment(commitment: string): Promise<{ txHash: strin
   return apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
 }
 
+export interface ManagedSessionScope {
+  budgetRemainingUsdc: number;
+  expiry: number;
+  allowlist: string[];
+  spentUsdc: number;
+}
+export interface ManagedSession {
+  sessionPublicKey: string | null;
+  session: ManagedSessionScope | null;
+}
+
+/** The user's live Managed Session scope (server+public lane), or null if none. */
+export async function getManagedSession(): Promise<ManagedSession> {
+  if (isDemo()) return { sessionPublicKey: null, session: null };
+  return apiFetch<ManagedSession>('/vault/session');
+}
+
+/**
+ * Enable Managed Sessions (server + public lane): authorize the user's server-held
+ * delegate as a bounded session key (budget + payee allowlist + hard expiry). The
+ * API builds register_session, the wallet signs ONCE, the API submits. Thereafter
+ * the server can spend hands-off within the scope and the vault enforces it; revoke
+ * instantly with `revokeManagedSession`. This is the dapp's public option (a browser
+ * key cannot sign hands-off), replacing Autopay with on-chain limits.
+ */
+export async function enableManagedSession(
+  budgetUsdc: number,
+  allowlist: string[],
+  expiresInSeconds: number,
+): Promise<{ txHash: string; sessionPublicKey: string; expiry: number }> {
+  const built = await apiPost<BuildResp & { sessionPublicKey: string; expiry: number }>(
+    '/vault/session/enable',
+    { budgetUsdc, allowlist, expiresInSeconds },
+  );
+  const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
+  const res = await apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
+  return { txHash: res.txHash, sessionPublicKey: built.sessionPublicKey, expiry: built.expiry };
+}
+
+/** Hands-off public-lane spend via the Managed Session (the server signs; no wallet prompt). */
+export async function managedSessionPay(
+  payee: string,
+  amount: number,
+): Promise<{ txHash: string }> {
+  return apiPost<{ txHash: string }>('/vault/session/pay', { payee, amount });
+}
+
+/** Revoke the Managed Session on-chain (wallet-signed); the key can spend nothing after. */
+export async function revokeManagedSession(): Promise<{ txHash: string }> {
+  const built = await apiPost<BuildResp>('/vault/session/revoke', {});
+  const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
+  return apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
+}
+
 /**
  * The user's own agent key (for the agent-key payment mode: paying external
  * x402/MPP services). The platform stores only the public key; the user's agent

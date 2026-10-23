@@ -41,6 +41,9 @@ import {
   authorizeDelegate,
   getAgentWallet,
   setAgentWallet,
+  getManagedSession,
+  enableManagedSession,
+  revokeManagedSession,
 } from '../../lib/vault';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import { getConnectedAddress } from '../../lib/wallet';
@@ -290,14 +293,11 @@ export function WalletCard() {
       {mismatch && (
         <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/[0.08] p-3 text-sm text-amber-200">
           <span>
-            Your wallet is on a different account ({liveAddress!.slice(0, 4)}…{liveAddress!.slice(-4)}
-            ) than this session ({address.slice(0, 4)}…{address.slice(-4)}). Reconnect to use the
-            current account.
+            Your wallet is on a different account ({liveAddress!.slice(0, 4)}…
+            {liveAddress!.slice(-4)}) than this session ({address.slice(0, 4)}…{address.slice(-4)}).
+            Reconnect to use the current account.
           </span>
-          <button
-            onClick={() => connect()}
-            className="font-medium underline hover:text-amber-100"
-          >
+          <button onClick={() => connect()} className="font-medium underline hover:text-amber-100">
             Reconnect
           </button>
         </div>
@@ -934,9 +934,7 @@ function TrustBadge({ trust, settlements }: { trust: string; settlements: number
         <CheckCircle2 size={11} /> {settlements} settled
       </Badge>
     );
-  return (
-    <Badge className="border-white/10 bg-white/[0.04] text-slate-400">New · unproven</Badge>
-  );
+  return <Badge className="border-white/10 bg-white/[0.04] text-slate-400">New · unproven</Badge>;
 }
 
 export function Marketplace() {
@@ -991,7 +989,9 @@ export function Marketplace() {
           </span>
           <p className="text-xs leading-relaxed text-slate-300">
             Your agent discovers and pays these under a{' '}
-            <span className="font-medium text-white">private, on-chain-enforced spending policy</span>
+            <span className="font-medium text-white">
+              private, on-chain-enforced spending policy
+            </span>
             . Ranking is <span className="font-medium text-white">settlement-gated</span>: trust is
             earned by real settled jobs, so listing is open but the directory stays proven.
           </p>
@@ -1417,6 +1417,150 @@ export function AgentWalletCard() {
           Bounded top-up and the x402 payment flow are coming next. Registered services are paid
           directly by the vault and do not need this.
         </p>
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * Managed Sessions: the public ("Fast") lane. The owner authorizes a bounded scope
+ * once with their wallet (total budget + payee allowlist + expiry); thereafter the
+ * platform spends within it hands-off and the vault enforces every limit on-chain,
+ * so even the operator cannot pay off-allowlist, over-budget, or past expiry.
+ * Instantly revocable. This replaces Autopay with on-chain limits.
+ */
+export function ManagedSessionCard() {
+  const qc = useQueryClient();
+  const [budget, setBudget] = useState('');
+  const [allowlist, setAllowlist] = useState('');
+  const [hours, setHours] = useState('24');
+  const { data } = useQuery({ queryKey: ['managed-session'], queryFn: getManagedSession });
+  const active = data?.session ?? null;
+
+  const payees = allowlist
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const enable = useMutation({
+    mutationFn: () =>
+      enableManagedSession(Number(budget), payees, Math.round(Number(hours) * 3600)),
+    onSuccess: () => {
+      setBudget('');
+      setAllowlist('');
+      qc.invalidateQueries({ queryKey: ['managed-session'] });
+    },
+  });
+  const revoke = useMutation({
+    mutationFn: () => revokeManagedSession(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['managed-session'] }),
+  });
+
+  if (isDemo()) return null;
+
+  const canEnable =
+    Number(budget) > 0 && payees.length > 0 && Number(hours) > 0 && !enable.isPending;
+
+  return (
+    <Card className="p-0">
+      <CardHeader
+        icon={Zap}
+        title="Managed Sessions (hands-off spending)"
+        hint="A bounded, revocable key the platform signs with, so your agent spends without you present. Every limit is enforced on-chain."
+      />
+      <div className="p-5 pt-4">
+        <p className="text-sm text-slate-400">
+          The public (&ldquo;Fast&rdquo;) lane: authorize a scope once with your wallet &ndash; a
+          total budget, an allowlist of payees, and an expiry &ndash; and the platform spends within
+          it hands-off. The vault enforces every limit on-chain, so even we can never pay anyone off
+          your allowlist, exceed the budget, or spend past expiry. Revoke any time.
+        </p>
+
+        {active ? (
+          <div className="mt-4 space-y-2 rounded-xl bg-white/[0.04] p-4">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-slate-400">Budget remaining</span>
+              <span className="font-medium text-emerald-300">
+                {active.budgetRemainingUsdc.toFixed(2)} USDC
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-slate-400">Spent so far</span>
+              <span className="text-slate-300">{active.spentUsdc.toFixed(2)} USDC</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-slate-400">Payees allowed</span>
+              <span className="text-slate-300">{active.allowlist.length}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-slate-400">Expires</span>
+              <span className="text-slate-300">
+                {new Date(active.expiry * 1000).toLocaleString()}
+              </span>
+            </div>
+            <button
+              onClick={() => !revoke.isPending && revoke.mutate()}
+              disabled={revoke.isPending}
+              className="mt-2 w-full rounded-lg border border-red-500/30 px-3 py-2 text-sm text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+            >
+              {revoke.isPending ? 'Revoking…' : 'Revoke session'}
+            </button>
+            {revoke.error && <p className="text-sm text-red-400">{readError(revoke.error)}</p>}
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (canEnable) enable.mutate();
+            }}
+            className="mt-4 space-y-3"
+          >
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="mb-1 block text-xs text-slate-500">Total budget (USDC)</span>
+                <input
+                  value={budget}
+                  onChange={(e) => setBudget(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="50"
+                  className={inputCls}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs text-slate-500">Expires in (hours)</span>
+                <input
+                  value={hours}
+                  onChange={(e) => setHours(e.target.value)}
+                  inputMode="numeric"
+                  placeholder="24"
+                  className={inputCls}
+                />
+              </label>
+            </div>
+            <label className="block">
+              <span className="mb-1 block text-xs text-slate-500">
+                Payee allowlist (one G… address per line)
+              </span>
+              <textarea
+                value={allowlist}
+                onChange={(e) => setAllowlist(e.target.value)}
+                rows={3}
+                placeholder={'GABC…\nGDEF…'}
+                className={inputCls + ' font-mono text-xs'}
+              />
+            </label>
+            <button type="submit" disabled={!canEnable} className={primaryBtn + ' w-full'}>
+              {enable.isPending ? 'Authorizing…' : 'Enable Managed Sessions'}
+            </button>
+            {enable.error && <p className="text-sm text-red-400">{readError(enable.error)}</p>}
+            <p className="text-[11px] text-slate-600">
+              You will sign once in your wallet to authorize the scope on-chain.
+              {payees.length > 0
+                ? ` ${payees.length} payee${payees.length === 1 ? '' : 's'} on the allowlist.`
+                : ''}
+            </p>
+          </form>
+        )}
       </div>
     </Card>
   );

@@ -1,5 +1,12 @@
 import { isDemo } from '../../config';
-import { WalletCard, VaultCard, DelegateCard, AgentWalletCard, ProveReleaseCard } from './parts';
+import {
+  WalletCard,
+  VaultCard,
+  DelegateCard,
+  AgentWalletCard,
+  ManagedSessionCard,
+  ProveReleaseCard,
+} from './parts';
 
 /**
  * Money and accounts in one place: fund the vault, authorize autopay, and
@@ -14,8 +21,9 @@ export function VaultPage() {
         <DelegateCard />
       </div>
       {!isDemo() && (
-        <div className="max-w-4xl">
+        <div className="grid max-w-4xl gap-6 lg:grid-cols-2">
           <AgentWalletCard />
+          <ManagedSessionCard />
         </div>
       )}
       <div className="max-w-4xl">
