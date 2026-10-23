@@ -347,7 +347,7 @@ export function VaultCard() {
       <CardHeader
         icon={VaultIcon}
         title="Your vault"
-        hint="On-chain balance, mirrored"
+        hint="Live on-chain balance in the active vault"
         action={
           contract ? (
             <a
@@ -1147,14 +1147,16 @@ export function DelegateCard() {
     <Card className="p-0">
       <CardHeader
         icon={ShieldCheck}
-        title="Autopay"
-        hint="Let CleverCon settle your hires automatically, within your limits"
+        title="Settlement relayer"
+        hint="A bounded server key that submits your proofs and spends only within a Managed Session"
       />
       <div className="p-5 pt-4">
         <p className="text-sm text-slate-400">
-          Enable autopay once so your jobs settle automatically without a wallet prompt each time.
-          The vault enforces your spending limits on every payment, so autopay can never overspend
-          or pay an unapproved party. (This is CleverCon's bounded delegate; it holds no funds.)
+          Register this key once so the relayer can submit your private proofs for you: it pays the
+          network fee, holds no funds, and cannot forge a proof or alter a payee. It is also the key
+          a <span className="text-sky-300">Managed Session</span> authorizes for hands-off public
+          spending, bounded on-chain by the scope you set, so it can never overspend or pay an
+          unapproved party.
         </p>
         <div className="mt-3 flex items-center justify-between gap-3">
           <span className="font-mono text-xs text-slate-500">
@@ -1170,7 +1172,7 @@ export function DelegateCard() {
               disabled={authorize.isPending}
               className={primaryBtn}
             >
-              {authorize.isPending ? 'Enabling…' : 'Enable autopay'}
+              {authorize.isPending ? 'Registering…' : 'Register relayer'}
             </button>
           )}
         </div>

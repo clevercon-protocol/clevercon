@@ -7,26 +7,45 @@ import {
   ManagedSessionCard,
   ProveReleaseCard,
 } from './parts';
+import { SectionLabel } from '../../components/ui';
 
 /**
- * Money and accounts in one place: fund the vault, authorize autopay, and
- * register an agent wallet. Spending limits live on their own tab (Limits).
+ * Money and hands-off spending in one place: fund the non-custodial vault, read
+ * the live on-chain balance, authorize a bounded Managed Session for hands-off
+ * public spending, and register the settlement relayer. Rules live on their own
+ * tab; the agent command surface is Home.
  */
 export function VaultPage() {
   return (
-    <div className="space-y-6">
+    <div className="cc-stagger max-w-5xl space-y-7">
+      <header>
+        <p className="cc-eyebrow">Money</p>
+        <h1 className="cc-title mt-2">Vault</h1>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-400">
+          Your funds stay in your own non-custodial vault on Stellar. Fund it, then authorize
+          hands-off spending with a bounded, revocable Managed Session. Every balance here is read
+          live from the active vault on-chain.
+        </p>
+      </header>
+
       {!isDemo() && <WalletCard />}
-      <div className="grid max-w-4xl gap-6 lg:grid-cols-2">
+
+      <div className="grid gap-6 lg:grid-cols-2">
         <VaultCard />
-        <DelegateCard />
+        {!isDemo() && <ManagedSessionCard />}
       </div>
+
       {!isDemo() && (
-        <div className="grid max-w-4xl gap-6 lg:grid-cols-2">
-          <AgentWalletCard />
-          <ManagedSessionCard />
+        <div>
+          <SectionLabel>Keys &amp; relaying</SectionLabel>
+          <div className="mt-2 grid gap-6 lg:grid-cols-2">
+            <DelegateCard />
+            <AgentWalletCard />
+          </div>
         </div>
       )}
-      <div className="max-w-4xl">
+
+      <div className="max-w-3xl">
         <ProveReleaseCard />
       </div>
     </div>
