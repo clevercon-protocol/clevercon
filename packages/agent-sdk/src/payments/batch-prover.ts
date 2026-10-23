@@ -283,9 +283,11 @@ export async function policyCommitment(
   // sanityCheck = 0: we only read output signals, we do not enforce constraints,
   // so a probe release that would not satisfy the rules is still fine here.
   const w = await wc.calculateWitness(input, 0);
-  // Witness layout is [1, commitment, nullifier[0..N-1], ...]; reuse the tested
-  // output splitter on that leading output slice.
-  const signals = w.slice(1, 2 + BATCH_N).map((x) => x.toString());
+  // Witness layout after the leading 1 is the circuit's OUTPUT signals in order:
+  // commitment, nullifier[0..N-1], reset_r2, reset_r7 = (3 + N) values (the two
+  // reset flags were added by the accumulator circuit). Slice exactly those and
+  // reuse the tested output splitter, which requires 3 + N signals.
+  const signals = w.slice(1, 1 + 3 + BATCH_N).map((x) => x.toString());
   return extractBatchOutputs(signals, BATCH_N).commitment;
 }
 
