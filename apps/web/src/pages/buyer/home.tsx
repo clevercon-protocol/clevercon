@@ -248,26 +248,20 @@ export function CommandChat() {
       });
       return;
     }
-    // If the agent read a limit from the words, adopt it as an editable custom
-    // limit (and reflect it in the picker) so the enforced boundary comes from
-    // the instruction itself. Otherwise fall back to the picked limit.
     let bind = currentBind();
     let appliedLimit = applied;
     const extracted = result.limit;
-    // Pick the enforced limit for this plan, in priority order:
-    //  1. a limit the agent READ from the words ("max 500 each"),
-    //  2. else, if the buyer has no saved default, DERIVE a concrete per-payment
-    //     ceiling from the plan's own amounts — so the boundary is always a real
-    //     number the buyer can see and edit, never a vague "within budget only".
-    // An explicitly chosen saved limit is left untouched.
-    const amounts = result.kind === 'hire' ? [result.budget] : result.lines.map((l) => l.amount);
-    const derivedCeiling = amounts.length ? Math.max(...amounts) : 0;
+    // Respect the buyer's explicit choice: a saved rule, a custom rule, or
+    // budget-only are used exactly as picked. ONLY on "Let the agent decide"
+    // (default, with no saved default) do we adopt a limit the agent READ from the
+    // instruction's words. We never silently DERIVE a ceiling from the plan's own
+    // amounts; the buyer picks the rule.
     const adopt =
-      extracted && (extracted.perPaymentCeilingUsdc || extracted.rollingCapUsdc)
+      limitChoice === 'default' &&
+      extracted &&
+      (extracted.perPaymentCeilingUsdc || extracted.rollingCapUsdc)
         ? extracted
-        : limitChoice === 'default' && !defaultPolicy && derivedCeiling > 0
-          ? { perPaymentCeilingUsdc: derivedCeiling }
-          : null;
+        : null;
     if (adopt) {
       const d = draftFromSuggested(adopt);
       // Pin WHO can be paid: for a pay/disburse, the enforced rule should allow
@@ -625,17 +619,16 @@ export function CommandChat() {
               >
                 <option value="default">
                   {defaultPolicy
-                    ? `Default · ${describeSavedLimit(defaultPolicy)}`
-                    : 'Auto · derive a cap from the plan'}
+                    ? `Default: ${defaultPolicy.name || describeSavedLimit(defaultPolicy)}`
+                    : 'Let the agent decide (or pick a rule)'}
                 </option>
                 {policies.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.isPrivate ? 'Private' : 'Transparent'} · {describeSavedLimit(p)}
+                    {p.form === 'public' || (!p.form && !p.isPrivate) ? 'Public' : 'Private'} ·{' '}
+                    {p.name || describeSavedLimit(p)}
                   </option>
                 ))}
-                {defaultPolicy && (
-                  <option value="none">No extra limit (up to vault balance)</option>
-                )}
+                <option value="none">No extra limit (up to vault balance)</option>
               </select>
               <Link to="/app/rules" className="text-xs text-violet-300 hover:text-violet-200">
                 Manage limits
@@ -803,18 +796,17 @@ export function CommandChat() {
                   >
                     <option value="default">
                       {defaultPolicy
-                        ? `Default limit · ${describeSavedLimit(defaultPolicy)}`
-                        : 'Auto · derive a cap from the amounts'}
+                        ? `Default: ${defaultPolicy.name || describeSavedLimit(defaultPolicy)}`
+                        : 'Let the agent decide (or pick a rule)'}
                     </option>
                     {policies.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.isPrivate ? 'Private' : 'Transparent'} · {describeSavedLimit(p)}
+                        {p.form === 'public' || (!p.form && !p.isPrivate) ? 'Public' : 'Private'} ·{' '}
+                        {p.name || describeSavedLimit(p)}
                       </option>
                     ))}
                     <option value="custom">Custom limit for this instruction…</option>
-                    {defaultPolicy && (
-                      <option value="none">No extra limit (up to vault balance)</option>
-                    )}
+                    <option value="none">No extra limit (up to vault balance)</option>
                   </select>
                   <Link
                     to="/app/rules"
