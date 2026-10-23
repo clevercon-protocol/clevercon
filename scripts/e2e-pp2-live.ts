@@ -271,7 +271,10 @@ async function main() {
   }
 
   // ── A. pay via /payments (pp/1 binding path) ────────────────────────────────
-  {
+  // Skippable: pp/1 uses the verifier's BINDING VK (verify_policy), independent of
+  // the pp/2 batch VK. Set E2E_SKIP_PP1=1 to verify only the pp/2 path (e.g. on a
+  // verifier that has the batch VK but not yet the binding VK).
+  if (!process.env.E2E_SKIP_PP1) {
     const policy = await api<{ id: string; commitment: string }>('/policies', {
       body: {
         rules: {
