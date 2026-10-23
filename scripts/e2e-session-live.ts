@@ -33,8 +33,7 @@ const HORIZON_URL = 'https://horizon-testnet.stellar.org';
 const SOROBAN_RPC = process.env.STELLAR_RPC_URL ?? 'https://soroban-testnet.stellar.org';
 const USDC_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 const USDC = new Asset('USDC', USDC_ISSUER);
-const USDC_SAC =
-  process.env.USDC_SAC ?? 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
+const USDC_SAC = process.env.USDC_SAC ?? 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
 const VAULT =
   process.env.AGENT_VAULT_CONTRACT_ID ?? 'CDVMPHPD3V6KNVS2ORBQD6A6FSWDCHN7RK2LW4C2KUPHZLM5H3KNKK6A';
 const PASSPHRASE = Networks.TESTNET;
@@ -123,11 +122,7 @@ const addrVec = (pks: string[]) => xdr.ScVal.scvVec(pks.map((p) => addr(p)));
 /** Build, simulate/assemble, sign (source + extra), submit, poll. Returns the
  *  decoded return value. Throws on a failed simulation or tx (so negative cases
  *  are asserted by catching). */
-async function invoke(
-  source: Keypair,
-  method: string,
-  args: xdr.ScVal[],
-): Promise<unknown> {
+async function invoke(source: Keypair, method: string, args: xdr.ScVal[]): Promise<unknown> {
   const acct = await server.getAccount(source.publicKey());
   const built = new TransactionBuilder(acct, { fee: '2000000', networkPassphrase: PASSPHRASE })
     .addOperation(new Contract(VAULT).call(method, ...args))

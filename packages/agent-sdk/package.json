@@ -19,6 +19,10 @@
       "types": "./dist/spender.d.ts",
       "default": "./dist/spender.js"
     },
+    "./sessions": {
+      "types": "./dist/sessions.d.ts",
+      "default": "./dist/sessions.js"
+    },
     "./prover": {
       "types": "./dist/prover.d.ts",
       "default": "./dist/prover.js"

@@ -52,6 +52,20 @@ export { AgentConfigError } from './config.js';
 export { createProvider, MAX_OUTPUT_CHARS } from './provider.js';
 export { createSpender, CleverConError } from './spender.js';
 export { createAgentWallet } from './agent-wallet.js';
+export {
+  registerSession,
+  createSessionSpender,
+  revokeSession,
+  getSessionScope,
+  SessionError,
+} from './sessions.js';
+export type {
+  SessionNetwork,
+  RegisterSessionOptions,
+  RegisteredSession,
+  SessionScope,
+  SessionSpender,
+} from './sessions.js';
 export type {
   SpenderOptions,
   CleverConClient,
