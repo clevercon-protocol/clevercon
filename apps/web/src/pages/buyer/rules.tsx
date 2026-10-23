@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ShieldCheck,
@@ -406,9 +407,18 @@ function Modal({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    // Lock background scroll while the modal is open.
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
   }, [onClose]);
-  return (
+  // Portal to <body> so the modal escapes the page's `cc-stagger` transform (a
+  // transformed ancestor would make `position: fixed` relative to it, clipping
+  // the modal instead of filling the viewport).
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm sm:p-6"
       onClick={onClose}
@@ -423,7 +433,84 @@ function Modal({
             <X size={18} />
           </button>
         </div>
-        <div className="max-h-[70vh] overflow-y-auto p-5">{children}</div>
+        <div className="max-h-[78vh] overflow-y-auto p-5">{children}</div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// ── Copy field + the post-create "provision your agent" reveal ──────────────
+function CopyRow({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[11px] uppercase tracking-wider text-slate-500">{label}</span>
+        <button
+          onClick={() => {
+            navigator.clipboard?.writeText(value);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          }}
+          className="inline-flex items-center gap-1 text-[11px] text-violet-300 hover:text-violet-200"
+        >
+          {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <pre className="max-h-40 overflow-auto rounded-lg bg-black/40 p-2.5 text-[11px] leading-relaxed whitespace-pre-wrap break-all font-mono text-slate-300">
+        {value}
+      </pre>
+    </div>
+  );
+}
+
+/**
+ * Shown once right after a PRIVATE rule is created: the salt (the only secret) +
+ * the exact bundle to paste into an agent's SDK/MCP config. The plan's copy-once
+ * salt reveal: the server never holds the salt in cleartext; the agent does.
+ */
+function RevealPanel({
+  reveal,
+  onDone,
+}: {
+  reveal: { commitment: string; salt: string; bundleJson: string };
+  onDone: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start gap-2.5 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] p-3">
+        <ShieldCheck size={16} className="mt-0.5 shrink-0 text-emerald-300" />
+        <p className="text-[12.5px] leading-relaxed text-slate-300">
+          Private rule created. To let an agent spend under it, provision the bundle below into your
+          agent&apos;s SDK or MCP config. The <span className="text-violet-300">salt</span> is the
+          secret that lets the agent prove; it is also backed up encrypted under your wallet, so you
+          can recover it by reconnecting on any device. Keep it private.
+        </p>
+      </div>
+
+      <CopyRow label="Commitment · public id, pinned on-chain" value={reveal.commitment} />
+      <CopyRow label="Salt · secret" value={reveal.salt} />
+      <CopyRow label="Agent config · { rules, salt }" value={reveal.bundleJson} />
+
+      <div className="rounded-xl bg-white/[0.03] p-3 text-[11.5px] leading-relaxed text-slate-400">
+        <div className="mb-1 font-medium text-slate-300">Use it with an agent</div>
+        <div className="font-mono text-[11px] text-slate-400">
+          MCP: set <span className="text-violet-300">CLEVERCON_POLICY_JSON</span> to the config
+          above.
+          <br />
+          SDK: <span className="text-violet-300">createSpender(&#123; policyBundle &#125;)</span>,
+          then <span className="text-violet-300">disbursePrivate(lines)</span>.
+        </div>
+      </div>
+
+      <div className="flex items-center justify-end gap-2 border-t border-white/[0.06] pt-3">
+        <span className="mr-auto text-[11px] text-amber-300/80">
+          Next: pin this rule on-chain to use it.
+        </span>
+        <button onClick={onDone} className={primaryBtn}>
+          Done
+        </button>
       </div>
     </div>
   );
@@ -622,6 +709,12 @@ export function RulesManager() {
   const [draft, setDraft] = useState<Draft>(emptyDraft());
   const [name, setName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Set after a PRIVATE rule is created, to show the copy-once salt reveal.
+  const [reveal, setReveal] = useState<null | {
+    commitment: string;
+    salt: string;
+    bundleJson: string;
+  }>(null);
   const [formFilter, setFormFilter] = useState<'all' | 'private' | 'public'>('all');
   const [defaultId, setDefaultId] = useState<string>(() => getDefaultLimitId());
   const {
@@ -645,6 +738,7 @@ export function RulesManager() {
 
   const openNew = () => {
     save.reset(); // clear any stale error from a prior attempt
+    setReveal(null);
     setDraft(emptyDraft());
     setName('');
     setEditingId(null);
@@ -652,6 +746,7 @@ export function RulesManager() {
   };
   const openEdit = (p: Policy) => {
     save.reset();
+    setReveal(null);
     const d = cachedDraft(p.commitment);
     setDraft(d ?? emptyDraft());
     setName(p.name ?? '');
@@ -660,6 +755,7 @@ export function RulesManager() {
   };
   const openDuplicate = (p: Policy) => {
     save.reset();
+    setReveal(null);
     const d = cachedDraft(p.commitment) ?? emptyDraft();
     const priv = p.form ? p.form === 'private' : p.isPrivate;
     setDraft({ ...d, isPrivate: !priv }); // duplicate into the OTHER form
@@ -705,12 +801,23 @@ export function RulesManager() {
       } catch {
         // ignore
       }
-      if (salt) cacheLocalSalt(p.commitment, salt);
+      qc.invalidateQueries({ queryKey: ['policies'] });
+      if (salt) {
+        // Private rule: cache the salt locally, then show the copy-once reveal so
+        // the owner can provision an agent. Keep the modal open for it.
+        cacheLocalSalt(p.commitment, salt);
+        const bundle = { rules: draftToBundleRules(draft), salt };
+        setReveal({
+          commitment: p.commitment,
+          salt,
+          bundleJson: JSON.stringify(bundle, null, 2),
+        });
+        return;
+      }
       setOpen(false);
       setDraft(emptyDraft());
       setName('');
       setEditingId(null);
-      qc.invalidateQueries({ queryKey: ['policies'] });
     },
   });
 
@@ -811,35 +918,64 @@ export function RulesManager() {
 
       {open && (
         <Modal
-          title={editingId ? 'Edit rule (saves a new version)' : 'New rule'}
-          onClose={() => setOpen(false)}
+          title={
+            reveal
+              ? 'Rule created · provision your agent'
+              : editingId
+                ? 'Edit rule (saves a new version)'
+                : 'New rule'
+          }
+          onClose={() => {
+            setOpen(false);
+            setReveal(null);
+            save.reset();
+          }}
         >
-          <label className="mb-4 block">
-            <span className="mb-1 block text-xs text-slate-400">Name</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Payroll, Agent allowance, API budget"
-              className={inputCls}
+          {reveal ? (
+            <RevealPanel
+              reveal={reveal}
+              onDone={() => {
+                setOpen(false);
+                setReveal(null);
+                setDraft(emptyDraft());
+                setName('');
+                setEditingId(null);
+              }}
             />
-          </label>
-          <RuleBuilder value={draft} onChange={setDraft} />
-          <div className="mt-5 flex items-center justify-between gap-3 border-t border-white/[0.06] pt-4">
-            <span className="text-[11px] text-slate-500">{describeDraft(draft)}</span>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => setOpen(false)} className={controls.secondary}>
-                Cancel
-              </button>
-              <button
-                onClick={() => save.mutate()}
-                disabled={!hasAnyRule || save.isPending}
-                className={primaryBtn}
-              >
-                {save.isPending ? 'Saving…' : editingId ? 'Save new version' : 'Save rule'}
-              </button>
-            </div>
-          </div>
-          {save.error && <p className="mt-2 text-sm text-red-400">{errMsg(save.error)}</p>}
+          ) : (
+            <>
+              <label className="mb-4 block">
+                <span className="mb-1 block text-xs text-slate-400">Name</span>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Payroll, Agent allowance, API budget"
+                  className={inputCls}
+                />
+              </label>
+              <RuleBuilder value={draft} onChange={setDraft} />
+              <div className="mt-5 flex items-center justify-between gap-3 border-t border-white/[0.06] pt-4">
+                <span className="text-[11px] text-slate-500">{describeDraft(draft)}</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOpen(false)}
+                    className={controls.secondary}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => save.mutate()}
+                    disabled={!hasAnyRule || save.isPending}
+                    className={primaryBtn}
+                  >
+                    {save.isPending ? 'Saving…' : editingId ? 'Save new version' : 'Save rule'}
+                  </button>
+                </div>
+              </div>
+              {save.error && <p className="mt-2 text-sm text-red-400">{errMsg(save.error)}</p>}
+            </>
+          )}
         </Modal>
       )}
     </div>
