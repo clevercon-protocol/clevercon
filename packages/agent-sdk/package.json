@@ -54,6 +54,9 @@
       "spender": [
         "./dist/spender.d.ts"
       ],
+      "sessions": [
+        "./dist/sessions.d.ts"
+      ],
       "verifier": [
         "./dist/verifier.d.ts"
       ],

@@ -47,6 +47,12 @@ import {
   getActivitySchema,
 } from './tools/money.js';
 import { disbursePrivateHandler, disbursePrivateSchema } from './tools/disburse-private.js';
+import {
+  sessionPayHandler,
+  sessionPaySchema,
+  sessionScopeHandler,
+  sessionScopeSchema,
+} from './tools/session.js';
 import type { ApiConfig } from './api-client.js';
 
 function getConfig(): ApiConfig {
@@ -79,6 +85,8 @@ class CleverConMCPServer {
         paySchema,
         disburseSchema,
         disbursePrivateSchema,
+        sessionPaySchema,
+        sessionScopeSchema,
         hireAgentSchema,
         // limits
         setLimitSchema,
@@ -107,6 +115,10 @@ class CleverConMCPServer {
             return await disburseHandler();
           case 'disburse_private':
             return await disbursePrivateHandler(args || {}, this.config);
+          case 'session_pay':
+            return await sessionPayHandler(args || {});
+          case 'session_scope':
+            return await sessionScopeHandler();
           case 'hire_agent':
             return await hireAgentHandler(args || {}, this.config);
           case 'set_limit':
