@@ -25,7 +25,7 @@ import { getPolicies, createPolicy, type Policy } from '../../lib/policies';
 import { getTasks, createTask, planInstruction, type HireMode } from '../../lib/tasks';
 import { proveAndReleaseBatch } from '../../lib/prove';
 import { Card, CardHeader, EmptyState, PageHeader, controls } from '../../components/ui';
-import { LimitsBuilder } from './limits';
+import { RuleBuilder } from './rules';
 import {
   describeRules,
   describeSavedLimit,
@@ -637,7 +637,7 @@ export function CommandChat() {
                   <option value="none">No extra limit (up to vault balance)</option>
                 )}
               </select>
-              <Link to="/app/limits" className="text-xs text-violet-300 hover:text-violet-200">
+              <Link to="/app/rules" className="text-xs text-violet-300 hover:text-violet-200">
                 Manage limits
               </Link>
               <button
@@ -817,7 +817,7 @@ export function CommandChat() {
                     )}
                   </select>
                   <Link
-                    to="/app/limits"
+                    to="/app/rules"
                     className="text-xs text-violet-300 hover:text-violet-200"
                     title="Create and manage reusable limits"
                   >
@@ -827,11 +827,11 @@ export function CommandChat() {
 
                 {limitChoice === 'custom' && (
                   <div className="mt-3 rounded-lg bg-black/20 p-3">
-                    <LimitsBuilder value={customDraft} onChange={setCustomDraft} />
+                    <RuleBuilder value={customDraft} onChange={setCustomDraft} />
                     <p className="mt-3 text-[11px] text-slate-600">
                       This one-off limit is saved and bound to this task when you approve. To reuse
                       it later, it will appear in your{' '}
-                      <Link to="/app/limits" className="text-violet-300 hover:text-violet-200">
+                      <Link to="/app/rules" className="text-violet-300 hover:text-violet-200">
                         Limits
                       </Link>{' '}
                       tab.
@@ -1037,7 +1037,7 @@ function FirstRunGuide() {
       label: 'Set a spending limit',
       desc: 'A private cap and allowlist the vault enforces. Optional: you can also set one per instruction.',
       cta: 'Add a limit',
-      to: '/app/limits',
+      to: '/app/rules',
     },
     ...(autopayOffered
       ? [

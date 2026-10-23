@@ -10,14 +10,14 @@ import { Connect } from './pages/Connect';
 import { Placeholder } from './pages/Placeholder';
 
 // Persona consoles are code-split: each loads only when its route is visited.
-const lazyFrom = <T extends Record<string, ComponentType>>(
-  loader: () => Promise<T>,
-  key: keyof T,
-) => lazy(() => loader().then((m) => ({ default: m[key] })));
+// Picks one page export from a module; the module may also export non-page
+// helpers (e.g. a props-ful builder), so we don't constrain every export.
+const lazyFrom = <T, K extends keyof T>(loader: () => Promise<T>, key: K) =>
+  lazy(() => loader().then((m) => ({ default: m[key] as unknown as ComponentType })));
 
 const BuyerLayout = lazyFrom(() => import('./pages/buyer/BuyerLayout'), 'BuyerLayout');
 const Home = lazyFrom(() => import('./pages/buyer/home'), 'Home');
-const LimitsPage = lazyFrom(() => import('./pages/buyer/LimitsPage'), 'LimitsPage');
+const RulesPage = lazyFrom(() => import('./pages/buyer/rules'), 'RulesPage');
 const VaultPage = lazyFrom(() => import('./pages/buyer/VaultPage'), 'VaultPage');
 const DisbursePage = lazyFrom(() => import('./pages/buyer/DisbursePage'), 'DisbursePage');
 const ServicesPage = lazyFrom(() => import('./pages/buyer/ServicesPage'), 'ServicesPage');
@@ -52,7 +52,7 @@ export function App() {
                 }
               >
                 <Route index element={<Home />} />
-                <Route path="limits" element={<LimitsPage />} />
+                <Route path="rules" element={<RulesPage />} />
                 <Route path="services" element={<ServicesPage />} />
                 <Route path="vault" element={<VaultPage />} />
                 <Route path="disburse" element={<DisbursePage />} />
@@ -63,7 +63,8 @@ export function App() {
                 <Route path="hire" element={<Navigate to="/app" replace />} />
                 <Route path="jobs" element={<Navigate to="/app/activity" replace />} />
                 <Route path="marketplace" element={<Navigate to="/app/services" replace />} />
-                <Route path="policies" element={<Navigate to="/app/limits" replace />} />
+                <Route path="limits" element={<Navigate to="/app/rules" replace />} />
+                <Route path="policies" element={<Navigate to="/app/rules" replace />} />
               </Route>
 
               <Route

@@ -46,7 +46,7 @@ const NETWORKS: Record<string, { label: string; dot: string; text: string; borde
 // money, and the proof of every spend.
 const PRIMARY: { to: string; label: string; icon: Icon; end?: boolean }[] = [
   { to: '/app', label: 'Agent', icon: Bot, end: true },
-  { to: '/app/limits', label: 'Limits', icon: SlidersHorizontal },
+  { to: '/app/rules', label: 'Rules', icon: SlidersHorizontal },
   { to: '/app/services', label: 'Services', icon: Search },
   { to: '/app/disburse', label: 'Disburse', icon: ShieldCheck },
   { to: '/app/activity', label: 'Activity', icon: ActivityIcon },
@@ -62,7 +62,11 @@ const CONSOLES: { to: string; label: string; role: Role; icon: Icon; selfServe?:
 
 function Brand({ collapsed = false }: { collapsed?: boolean }) {
   return (
-    <Link to="/" className={`flex items-center gap-2.5 ${collapsed ? 'px-0' : 'px-2'}`} title="CleverCon">
+    <Link
+      to="/"
+      className={`flex items-center gap-2.5 ${collapsed ? 'px-0' : 'px-2'}`}
+      title="CleverCon"
+    >
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-700 shadow-lg shadow-violet-900/40">
         <Layers size={16} className="text-white" />
       </span>
@@ -96,7 +100,13 @@ function NonCustodialBadge() {
   );
 }
 
-function WalletButton({ full = false, collapsed = false }: { full?: boolean; collapsed?: boolean }) {
+function WalletButton({
+  full = false,
+  collapsed = false,
+}: {
+  full?: boolean;
+  collapsed?: boolean;
+}) {
   const session = useSession((s) => s.session);
   const { disconnect } = useWalletAuth();
   if (collapsed) {
@@ -142,7 +152,13 @@ function WalletButton({ full = false, collapsed = false }: { full?: boolean; col
   );
 }
 
-function NavRail({ onNavigate, collapsed = false }: { onNavigate?: () => void; collapsed?: boolean }) {
+function NavRail({
+  onNavigate,
+  collapsed = false,
+}: {
+  onNavigate?: () => void;
+  collapsed?: boolean;
+}) {
   const session = useSession((s) => s.session);
   const loc = useLocation();
   const roles = session?.roles ?? [];
@@ -258,7 +274,9 @@ export function Shell({ children }: { children: ReactNode }) {
           collapsed ? 'w-16 px-2' : 'w-60 px-3'
         }`}
       >
-        <div className={`mb-6 flex items-center ${collapsed ? 'flex-col gap-3' : 'justify-between'}`}>
+        <div
+          className={`mb-6 flex items-center ${collapsed ? 'flex-col gap-3' : 'justify-between'}`}
+        >
           <Brand collapsed={collapsed} />
           <button
             onClick={toggleCollapsed}
