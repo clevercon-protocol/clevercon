@@ -27,6 +27,14 @@ async function main() {
     secretKey: SECRET_KEY!,
     apiUrl: process.env.CLEVERCON_API_URL, // defaults to http://localhost:4100
     network: process.env.STELLAR_NETWORK, // defaults to stellar:testnet
+    // Public-lane funding for topUp: the owner registers THIS agent key as a
+    // session (allowlist incl. the agent's address) with registerSession, then the
+    // agent pulls working capital by signing release_payment_session for itself.
+    vault: {
+      vaultId: process.env.CLEVERCON_VAULT_ID!,
+      usdcSac: process.env.CLEVERCON_USDC_SAC!,
+      rpcUrl: process.env.STELLAR_RPC_URL,
+    },
   });
   console.log('agent wallet:', wallet.address);
 
@@ -34,11 +42,11 @@ async function main() {
   const budget = await wallet.getBudget();
   console.log('vault budget available to pull:', budget.available, 'USDC');
 
-  // 2. Pull working capital into the agent's own wallet. Bounded on-chain by the
-  //    owner's policy; the release settles asynchronously, so give it a moment.
-  const topUp = await wallet.topUp(0.1, { reason: 'top up for market data' });
-  console.log('top-up spend:', topUp.id, topUp.status);
-  await new Promise((r) => setTimeout(r, 12_000));
+  // 2. Pull working capital into the agent's own wallet via the session (bounded
+  //    on-chain by the scope the owner authorized). Settles on submit.
+  const topUp = await wallet.topUp(0.1);
+  console.log('top-up tx:', topUp.txHash);
+  await new Promise((r) => setTimeout(r, 5_000));
 
   // 3. Spend it autonomously on an external x402 service. Each 402 challenge is
   //    settled transparently with the agent's own key.

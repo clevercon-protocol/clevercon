@@ -31,7 +31,7 @@ describe('createAgentWallet', () => {
     expect(typeof wallet.fetch).toBe('function');
   });
 
-  it('topUp is retired - throws (it rides on the managed server-path)', async () => {
+  it('topUp without vault config throws (needs a session to pull on the public lane)', async () => {
     const kp = Keypair.random();
     const { fetchImpl, calls } = mockFetch();
     const wallet = createAgentWallet({
@@ -40,7 +40,7 @@ describe('createAgentWallet', () => {
       apiUrl: 'http://x',
       fetchImpl,
     });
-    await expect(wallet.topUp(5, { policyId: 'pol1' })).rejects.toThrow(/retired/i);
+    await expect(wallet.topUp(5)).rejects.toThrow(/vault config/i);
     expect(calls).toHaveLength(0);
   });
 
