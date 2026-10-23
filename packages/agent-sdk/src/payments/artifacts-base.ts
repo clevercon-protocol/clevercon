@@ -12,9 +12,24 @@
  */
 export const DEFAULT_ARTIFACT_BASE_URL = 'https://pub-e758f36ef6b048099ecc75f84a702f7a.r2.dev/v2';
 
+/**
+ * Cache-bust tag appended to every hosted artifact URL. BUMP THIS whenever the
+ * circuit artifacts at a given path change, so a browser/CDN that cached a wasm
+ * under the bare URL fetches the new one (a mismatched wasm produces the wrong
+ * number of public signals and breaks proving). `acc1` = the accumulator circuit.
+ */
+export const ARTIFACT_VERSION = 'acc1';
+
+/** Append the cache-bust tag to a hosted artifact URL (no-op for local paths). */
+export function versioned(url: string): string {
+  return /^https?:\/\//.test(url)
+    ? `${url}${url.includes('?') ? '&' : '?'}v=${ARTIFACT_VERSION}`
+    : url;
+}
+
 /** The hosted poseidon2/3/4 wasm for {@link makePoseidon} (allowlist/calendar proving). */
 export const DEFAULT_POSEIDON_ARTIFACTS = {
-  p2: `${DEFAULT_ARTIFACT_BASE_URL}/poseidon2.wasm`,
-  p3: `${DEFAULT_ARTIFACT_BASE_URL}/poseidon3.wasm`,
-  p4: `${DEFAULT_ARTIFACT_BASE_URL}/poseidon4.wasm`,
+  p2: versioned(`${DEFAULT_ARTIFACT_BASE_URL}/poseidon2.wasm`),
+  p3: versioned(`${DEFAULT_ARTIFACT_BASE_URL}/poseidon3.wasm`),
+  p4: versioned(`${DEFAULT_ARTIFACT_BASE_URL}/poseidon4.wasm`),
 };

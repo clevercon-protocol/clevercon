@@ -19,6 +19,8 @@ export {
 export {
   DEFAULT_ARTIFACT_BASE_URL,
   DEFAULT_POSEIDON_ARTIFACTS,
+  ARTIFACT_VERSION,
+  versioned,
 } from './payments/artifacts-base.js';
 export { buildAllowlist, windowsRoot } from './payments/allowlist.js';
 export type { AllowlistEntry, Allowlist } from './payments/allowlist.js';

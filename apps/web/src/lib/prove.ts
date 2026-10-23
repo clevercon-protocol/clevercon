@@ -9,6 +9,7 @@ import {
   buildBatchReleaseRequest,
   DEFAULT_ARTIFACT_BASE_URL,
   DEFAULT_POSEIDON_ARTIFACTS,
+  versioned,
   type BatchRelease,
   type BatchContext,
   type Allowlist,
@@ -17,8 +18,11 @@ import {
 } from '@clevercon/agent-sdk/prover';
 
 const STROOPS = 10_000_000;
-const WASM = `${DEFAULT_ARTIFACT_BASE_URL}/policy_batch.wasm`;
-const ZKEY = `${DEFAULT_ARTIFACT_BASE_URL}/policy_batch_final.zkey`;
+// Cache-busted so a browser/CDN that cached an older circuit wasm under the bare
+// URL re-fetches the current one (a stale wasm yields the wrong public-signal
+// count and breaks commitment/proof).
+const WASM = versioned(`${DEFAULT_ARTIFACT_BASE_URL}/policy_batch.wasm`);
+const ZKEY = versioned(`${DEFAULT_ARTIFACT_BASE_URL}/policy_batch_final.zkey`);
 
 /** One Groth16 proof authorizes up to this many payouts (circuit N=4). */
 export const PROOF_WIDTH = 4;
