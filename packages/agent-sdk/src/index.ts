@@ -66,6 +66,8 @@ export type {
   SessionScope,
   SessionSpender,
 } from './sessions.js';
+export { receipt, ReceiptError } from './receipts.js';
+export type { Receipt, ReceiptAuthorizer } from './receipts.js';
 export type {
   SpenderOptions,
   CleverConClient,

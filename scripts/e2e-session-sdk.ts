@@ -28,6 +28,7 @@ import {
   createSessionSpender,
   revokeSession,
   SessionError,
+  receipt,
 } from '@clevercon/agent-sdk';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -165,12 +166,24 @@ async function main() {
 
   const spender = createSessionSpender({ ...net, sessionSecret: reg.sessionSecret });
   const before = await usdcBalance(payee.publicKey());
-  await spender.pay(payee.publicKey(), 1);
+  const paid = await spender.pay(payee.publicKey(), 1);
   const after = await usdcBalance(payee.publicKey());
   record(
     'SDK sessionSpender.pay moved funds',
     Math.round((after - before) * UNIT) === UNIT,
     `payee +${(after - before).toFixed(4)} USDC`,
+  );
+
+  // receipt(): decode the on-chain authorizer of that payment.
+  const r = await receipt({ txHash: paid.txHash, rpcUrl: SOROBAN_RPC });
+  record(
+    'receipt() shows the session key authorized it',
+    r.authorizer.lane === 'public' &&
+      r.authorizer.kind === 'session-key' &&
+      r.authorizer.sessionKey === session.publicKey() &&
+      r.payees[0] === payee.publicKey() &&
+      r.amountsUsdc[0] === 1,
+    `lane=${r.authorizer.lane} via ${r.authorizer.kind}`,
   );
 
   const scope = await spender.scope();

@@ -23,6 +23,10 @@
       "types": "./dist/sessions.d.ts",
       "default": "./dist/sessions.js"
     },
+    "./receipts": {
+      "types": "./dist/receipts.d.ts",
+      "default": "./dist/receipts.js"
+    },
     "./prover": {
       "types": "./dist/prover.d.ts",
       "default": "./dist/prover.js"
@@ -56,6 +60,9 @@
       ],
       "sessions": [
         "./dist/sessions.d.ts"
+      ],
+      "receipts": [
+        "./dist/receipts.d.ts"
       ],
       "verifier": [
         "./dist/verifier.d.ts"
