@@ -316,6 +316,57 @@ export class VaultContractService {
     };
   }
 
+  /**
+   * Read a user's AUTHORITATIVE on-chain USDC position in the ACTIVE vault
+   * (`get_account`). The Postgres mirror is keyed by (address, asset) not by vault
+   * id, so after a vault cutover it can show a stale balance from a previous vault;
+   * the headline balance must come from here. Returns null when the user has no
+   * account in this vault. Read-only simulate, nothing submitted.
+   */
+  async readUserAccount(address: string): Promise<{
+    balance: number;
+    locked: number;
+    available: number;
+    totalDeposited: number;
+    totalSpent: number;
+  } | null> {
+    this.ensureActive();
+    const server = this.server();
+    const source = new Account(Keypair.random().publicKey(), '0');
+    const tx = new TransactionBuilder(source, {
+      fee: BASE_FEE,
+      networkPassphrase: this.passphrase,
+    })
+      .addOperation(
+        new Contract(this.contractId).call(
+          'get_account',
+          new Address(address).toScVal(),
+          this.usdcSacScVal(),
+        ),
+      )
+      .setTimeout(300)
+      .build();
+    const sim = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(sim) || !sim.result?.retval) return null;
+    const acct = scValToNative(sim.result.retval) as null | {
+      balance: bigint | number;
+      locked: bigint | number;
+      total_deposited: bigint | number;
+      total_spent: bigint | number;
+    };
+    if (!acct) return null;
+    const toUsdc = (v: bigint | number) => Number(v) / STROOPS_PER_USDC;
+    const balance = toUsdc(acct.balance);
+    const locked = toUsdc(acct.locked);
+    return {
+      balance,
+      locked,
+      available: balance - locked,
+      totalDeposited: toUsdc(acct.total_deposited),
+      totalSpent: toUsdc(acct.total_spent),
+    };
+  }
+
   /** Submit a wallet-signed XDR and poll for confirmation; returns the tx hash. */
   async submitSignedXdr(signedXdr: string): Promise<string> {
     this.ensureActive();

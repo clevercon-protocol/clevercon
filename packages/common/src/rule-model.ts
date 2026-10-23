@@ -61,7 +61,12 @@ export type RuleClause =
   | { type: 'bondStatus'; minBondUsdc: number }
   | { type: 'serviceAllow'; serviceIds: string[] }
   | { type: 'serviceDeny'; serviceIds: string[] }
-  | { type: 'providerCriteria'; minReputation?: number; maxDisputeRate?: number; maxPriceUsdc?: number };
+  | {
+      type: 'providerCriteria';
+      minReputation?: number;
+      maxDisputeRate?: number;
+      maxPriceUsdc?: number;
+    };
 
 export type ClauseType = RuleClause['type'];
 
@@ -109,14 +114,22 @@ export interface ClauseEnforcement {
  */
 export const CLAUSE_ENFORCEMENT: Record<ClauseType, ClauseEnforcement> = {
   perPaymentMax: { status: 'enforced-now', modes: ['private', 'public'], label: 'Max per payment' },
-  perPaymentMin: { status: 'committed-pending', modes: ['private', 'public'], label: 'Min per payment' },
-  rollingCap: { status: 'committed-pending', modes: ['private', 'public'], label: 'Rolling budget' },
+  perPaymentMin: {
+    status: 'committed-pending',
+    modes: ['private', 'public'],
+    label: 'Min per payment',
+  },
+  // R2 rolling cap + R7 velocity are enforced on-chain in the PRIVATE lane via the
+  // pp/2 proof's per-commitment tumbling-window accumulators (they hold across
+  // tasks). The public/session lane bounds spend with its own on-chain budget
+  // instead, so these clauses are private-only.
+  rollingCap: { status: 'enforced-now', modes: ['private'], label: 'Rolling budget' },
   allowlist: { status: 'enforced-now', modes: ['private', 'public'], label: 'Approved payees' },
   denylist: { status: 'committed-pending', modes: ['private', 'public'], label: 'Blocked payees' },
   calendar: { status: 'committed-pending', modes: ['private', 'public'], label: 'Calendar window' },
   velocity: {
-    status: 'committed-pending',
-    modes: ['private', 'public'],
+    status: 'enforced-now',
+    modes: ['private'],
     label: 'Max payments per window',
   },
   categoryCeilings: {
@@ -125,10 +138,18 @@ export const CLAUSE_ENFORCEMENT: Record<ClauseType, ClauseEnforcement> = {
     label: 'Per-category caps',
   },
   tier: { status: 'app-enforced', modes: ['private', 'public'], label: 'Allowed tiers' },
-  bondStatus: { status: 'committed-pending', modes: ['private', 'public'], label: 'Min provider bond' },
+  bondStatus: {
+    status: 'committed-pending',
+    modes: ['private', 'public'],
+    label: 'Min provider bond',
+  },
   serviceAllow: { status: 'app-enforced', modes: ['private', 'public'], label: 'Allowed services' },
   serviceDeny: { status: 'app-enforced', modes: ['private', 'public'], label: 'Blocked services' },
-  providerCriteria: { status: 'app-enforced', modes: ['private', 'public'], label: 'Provider criteria' },
+  providerCriteria: {
+    status: 'app-enforced',
+    modes: ['private', 'public'],
+    label: 'Provider criteria',
+  },
 };
 
 /** True if a clause type can be enforced in the given form. */
@@ -140,7 +161,8 @@ export function clauseSupportsForm(type: ClauseType, form: RuleForm): boolean {
 export function weakestEnforcement(rule: Rule): EnforcementStatus {
   const order: EnforcementStatus[] = ['enforced-now', 'committed-pending', 'app-enforced'];
   let worst = 0;
-  for (const c of rule.clauses) worst = Math.max(worst, order.indexOf(CLAUSE_ENFORCEMENT[c.type].status));
+  for (const c of rule.clauses)
+    worst = Math.max(worst, order.indexOf(CLAUSE_ENFORCEMENT[c.type].status));
   return order[worst] ?? 'enforced-now';
 }
 
@@ -200,7 +222,8 @@ export function validateRule(rule: Rule): RuleValidation {
         break;
       case 'allowlist':
         if (!c.payees.length) errors.push('Allowlist is empty: add a payee or drop the clause.');
-        if (c.payees.length > MAX_ALLOWLIST) errors.push(`Allowlist exceeds ${MAX_ALLOWLIST} payees.`);
+        if (c.payees.length > MAX_ALLOWLIST)
+          errors.push(`Allowlist exceeds ${MAX_ALLOWLIST} payees.`);
         for (const p of c.payees) {
           if (!isStellarAddr(p.address)) errors.push(`Invalid payee address: ${p.address}.`);
           if (p.perPayeeCapUsdc != null && !(p.perPayeeCapUsdc > 0)) {
@@ -212,9 +235,12 @@ export function validateRule(rule: Rule): RuleValidation {
         }
         break;
       case 'denylist':
-        if (!c.addresses.length) errors.push('Denylist is empty: add an address or drop the clause.');
-        if (c.addresses.length > MAX_DENYLIST) errors.push(`Denylist exceeds ${MAX_DENYLIST} addresses.`);
-        for (const a of c.addresses) if (!isStellarAddr(a)) errors.push(`Invalid denylist address: ${a}.`);
+        if (!c.addresses.length)
+          errors.push('Denylist is empty: add an address or drop the clause.');
+        if (c.addresses.length > MAX_DENYLIST)
+          errors.push(`Denylist exceeds ${MAX_DENYLIST} addresses.`);
+        for (const a of c.addresses)
+          if (!isStellarAddr(a)) errors.push(`Invalid denylist address: ${a}.`);
         if (c.thresholdUsdc != null && !(c.thresholdUsdc >= 0)) {
           errors.push('Denylist threshold must be 0 or more.');
         }
@@ -225,7 +251,8 @@ export function validateRule(rule: Rule): RuleValidation {
           errors.push(`Calendar exceeds ${MAX_CALENDAR_WINDOWS} windows.`);
         }
         for (const w of c.windows) {
-          if (!(w.endUnix > w.startUnix)) errors.push('A calendar window must end after it starts.');
+          if (!(w.endUnix > w.startUnix))
+            errors.push('A calendar window must end after it starts.');
         }
         break;
       case 'categoryCeilings':
@@ -233,7 +260,8 @@ export function validateRule(rule: Rule): RuleValidation {
         if (c.ceilingsUsdc.length > MAX_CATEGORIES) {
           errors.push(`Category ceilings exceed ${MAX_CATEGORIES}.`);
         }
-        for (const v of c.ceilingsUsdc) if (!(v > 0)) errors.push('Each category ceiling must be greater than 0.');
+        for (const v of c.ceilingsUsdc)
+          if (!(v > 0)) errors.push('Each category ceiling must be greater than 0.');
         break;
       case 'bondStatus':
         if (!(c.minBondUsdc > 0)) errors.push('Minimum bond must be greater than 0.');
@@ -329,7 +357,8 @@ export interface BundleRules {
  */
 export function ruleToBundleRules(rule: Rule): BundleRules {
   const max = getClause(rule, 'perPaymentMax');
-  if (!max) throw new Error('ruleToBundleRules: a perPaymentMax clause is required (the R1 ceiling).');
+  if (!max)
+    throw new Error('ruleToBundleRules: a perPaymentMax clause is required (the R1 ceiling).');
   const roll = getClause(rule, 'rollingCap');
   const vel = getClause(rule, 'velocity');
   const allow = getClause(rule, 'allowlist');

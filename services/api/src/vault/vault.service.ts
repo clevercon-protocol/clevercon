@@ -219,6 +219,7 @@ export class VaultService {
   async getForUser(userId: string) {
     const wallets = await this.prisma.wallet.findMany({
       where: { userId },
+      orderBy: { isPrimary: 'desc' },
       select: { address: true },
     });
     const addresses = wallets.map((w) => w.address);
@@ -231,6 +232,47 @@ export class VaultService {
         totalSpent: 0,
         accounts: [],
       };
+    }
+
+    // Authoritative headline: the primary wallet's position read live from the
+    // ACTIVE vault. The mirror below is keyed by (address, asset) not by vault id,
+    // so after a cutover it can report a stale balance from an old vault; on-chain
+    // is the source of truth. Fall back to the mirror only if the read is
+    // unavailable (RPC blip / inactive contract).
+    if (this.contract.active) {
+      try {
+        const onchain = await this.contract.readUserAccount(addresses[0]);
+        if (onchain) {
+          return {
+            balance: onchain.balance,
+            available: onchain.available,
+            locked: onchain.locked,
+            totalDeposited: onchain.totalDeposited,
+            totalSpent: onchain.totalSpent,
+            accounts: [
+              {
+                address: addresses[0],
+                asset: this.contract.usdcAsset,
+                balance: onchain.balance,
+                available: onchain.available,
+                locked: onchain.locked,
+                activeTasks: 0,
+              },
+            ],
+          };
+        }
+        // No account in this vault yet: honest zeros (not a stale mirror balance).
+        return {
+          balance: 0,
+          available: 0,
+          locked: 0,
+          totalDeposited: 0,
+          totalSpent: 0,
+          accounts: [],
+        };
+      } catch {
+        // fall through to the mirror
+      }
     }
 
     // The app denominates the vault in USDC. Filter to the configured USDC asset
