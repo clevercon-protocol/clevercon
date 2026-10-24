@@ -26,6 +26,7 @@ import {
   getManagedSession,
   managedSessionPay,
   getGlobals,
+  getPinnedCommitments,
   type ManagedSession,
 } from '../../lib/vault';
 import { getServices } from '../../lib/services';
@@ -183,13 +184,15 @@ function RuleLanePicker({
               ))}
             </select>
           ) : (
-            <span className="text-xs text-amber-300/80">No private rule yet</span>
+            <span className="text-xs text-amber-300/80">
+              No pinned private rule. Create one and pin it on the Rules tab.
+            </span>
           )
         ) : (
           <span className="text-xs text-slate-400">
             {sessionActive
               ? `Managed Session · ${managed!.session!.budgetRemainingUsdc.toFixed(2)} USDC left · ${managed!.session!.allowlist.length} payee(s)`
-              : 'No Managed Session yet'}
+              : 'No Managed Session. Set one up on the Vault tab.'}
           </span>
         )}
         <Link to="/app/rules" className="text-xs text-violet-300 hover:text-violet-200">
@@ -252,15 +255,26 @@ export function CommandChat() {
   const services = servicePage?.items ?? [];
   const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
   const { data: vaultData } = useQuery({ queryKey: ['vault'], queryFn: getVault });
+  const { data: pinnedList = [] } = useQuery({
+    queryKey: ['pinned-commitments'],
+    queryFn: getPinnedCommitments,
+  });
+  const pinnedSet = new Set(pinnedList.map((c) => c.toLowerCase()));
   const { data: managed } = useQuery({
     queryKey: ['managed-session'],
     queryFn: getManagedSession,
   });
 
-  // Only user-created PRIVATE rules are selectable (public spending is the Managed
-  // Session, not a per-instruction rule). Default the pick to the account default if
-  // it is private, else the first private rule.
-  const privateRules = policies.filter((p) => p.form === 'private' || (!p.form && p.isPrivate));
+  // Only PINNED private rules are selectable: an unpinned commitment cannot authorize
+  // a spend on-chain (the vault rejects it, CommitmentNotAuthorized), so offering it
+  // would only lead to a failed release. Public spending is the Managed Session, not a
+  // per-instruction rule. Default the pick to the account default if it is a pinned
+  // private rule, else the first pinned private rule.
+  const privateRules = policies.filter(
+    (p) =>
+      (p.form === 'private' || (!p.form && p.isPrivate)) &&
+      pinnedSet.has(p.commitment.toLowerCase()),
+  );
   const defaultPrivateId =
     privateRules.find((p) => p.id === getDefaultLimitId())?.id ?? privateRules[0]?.id ?? '';
   const effectiveRuleId = privateRules.some((p) => p.id === ruleId) ? ruleId : defaultPrivateId;
@@ -299,10 +313,29 @@ export function CommandChat() {
     mutationFn: (instruction: string) => planInstruction(instruction),
   });
 
+  // A clear reason the current lane can't act, or null when it's ready. Nothing (not
+  // even the AI planner) runs until a valid, enforceable rule is in place.
+  function laneBlockedReason(): string | null {
+    if (lane === 'public') {
+      return sessionActive
+        ? null
+        : 'No active Managed Session. Set one up on the Vault tab before spending in public mode.';
+    }
+    return selectedRule
+      ? null
+      : 'No pinned private rule selected. Create a private rule and pin it on the Rules tab, then pick it here.';
+  }
+
   // Send the typed instruction to the agent; it returns a plan you then approve.
   async function askAgent() {
     const instruction = nl.trim();
     if (!instruction) return;
+    // Do NOT call the AI (or anything) without an enforceable rule in place.
+    const blocked = laneBlockedReason();
+    if (blocked) {
+      push({ id: nextId(), role: 'agent', ok: false, text: blocked });
+      return;
+    }
     push({ id: nextId(), role: 'user', text: instruction });
     setNl('');
     let result: Awaited<ReturnType<typeof planInstruction>>;
@@ -390,6 +423,11 @@ export function CommandChat() {
 
   function propose() {
     if (!action) return;
+    const blocked = laneBlockedReason();
+    if (blocked) {
+      push({ id: nextId(), role: 'agent', ok: false, text: blocked });
+      return;
+    }
     const bind = currentBind();
     let plan: Plan | null = null;
     let userText = '';

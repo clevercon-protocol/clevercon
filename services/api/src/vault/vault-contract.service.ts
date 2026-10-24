@@ -1,4 +1,9 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
 import {
@@ -20,6 +25,39 @@ const STROOPS_PER_USDC = 10_000_000;
 
 function usdcToStroops(usdc: number): bigint {
   return BigInt(Math.round(usdc * STROOPS_PER_USDC));
+}
+
+/** Friendly messages for the vault's VaultError codes that a client can act on. */
+const CONTRACT_ERROR_MESSAGES: Record<number, string> = {
+  5: 'Not enough balance in your vault for this payment.',
+  6: 'Not enough available balance (some is locked by active tasks).',
+  11: 'Invalid amount.',
+  32: 'The vault rejected the proof: this payment does not satisfy your rule (check the amount and payee against the rule, and its rolling-cap / velocity window).',
+  33: 'This exact payment was already settled (replay protection). Nothing was charged twice.',
+  34: 'Malformed payment batch. Please try again.',
+  35: 'Duplicate payment within the batch. Please try again.',
+  36: 'The payment is outside its validity window (check your device clock), please try again.',
+  39: 'This rule is not pinned on-chain for your account, so it cannot authorize a spend. Pin it on the Rules tab, then try again.',
+  40: 'The payment validity window is too long, please try again.',
+  48: 'A global rule is set but its second proof is missing. Reload the app; if it persists, clear the global on the Rules tab.',
+  49: 'Your global rule changed. Reload the app and try again.',
+};
+
+/**
+ * Translate a raw Soroban `Error(Contract, #NN)` into a clean, actionable message
+ * for the dapp and SDK/MCP (a 400, not a 503 HostError dump). Rethrows non-contract
+ * errors unchanged.
+ */
+function mapContractError(err: unknown): never {
+  const msg = err instanceof Error ? err.message : String(err);
+  const m = msg.match(/Error\(Contract,\s*#(\d+)\)/);
+  if (m) {
+    const code = Number(m[1]);
+    throw new BadRequestException(
+      CONTRACT_ERROR_MESSAGES[code] ?? `The vault rejected this payment (code #${code}).`,
+    );
+  }
+  throw err instanceof Error ? err : new Error(msg);
 }
 
 /** Encode a Groth16Proof{a,b,c} as its contract struct ScVal (same as the batch path). */
@@ -830,8 +868,14 @@ export class VaultContractService {
       groth16ProofScVal(params.proof),
       params.global ? globalProofScVal(params.global) : xdr.ScVal.scvVoid(),
     ];
-    const { hash } = await this.signAndSubmitAsOrchestrator(kp, 'release_proved_keyless', args);
-    return hash;
+    try {
+      const { hash } = await this.signAndSubmitAsOrchestrator(kp, 'release_proved_keyless', args);
+      return hash;
+    } catch (e) {
+      // Turn a raw HostError (e.g. CommitmentNotAuthorized) into a clean 400 message
+      // the dapp and SDK/MCP can show directly.
+      mapContractError(e);
+    }
   }
 
   // ── Protocol fee administration (operator console) ──────────────────────────

@@ -44,7 +44,20 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   if (res.status === 401 && (await tryRefresh())) {
     res = await doFetch();
   }
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    // Surface the API's human message (NestJS returns { message, error, statusCode })
+    // rather than a raw "API 503: {json}" dump, so callers can show it as-is.
+    const text = await res.text();
+    let message = text;
+    try {
+      const body = JSON.parse(text) as { message?: unknown };
+      if (typeof body.message === 'string') message = body.message;
+      else if (Array.isArray(body.message)) message = body.message.join(', ');
+    } catch {
+      // not JSON; keep the raw text
+    }
+    throw new Error(message || `Request failed (${res.status})`);
+  }
   return (await res.json()) as T;
 }
 
