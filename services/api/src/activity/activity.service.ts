@@ -115,9 +115,9 @@ export class ActivityService {
       });
     }
 
-    // Vault money movements (deposit/withdraw) from the on-chain event log, so the
-    // timeline reflects funding too, not only task spend. Best-effort: these are a
-    // nice-to-have, so a lookup hiccup must never break the rest of the feed.
+    // Vault money movements (deposit/withdraw) + keyless private payments, from the
+    // on-chain event log, so the timeline reflects funding and private spend, not only
+    // task spend. Best-effort: a lookup hiccup must never break the rest of the feed.
     try {
       items.push(...(await this.vaultMovements(userId, limit)));
     } catch {
@@ -143,28 +143,52 @@ export class ActivityService {
     if (addresses.size === 0) return [];
 
     const events = await this.prisma.chainEvent.findMany({
-      where: { type: { in: ['deposit_event', 'withdraw_event'] } },
+      where: {
+        type: { in: ['deposit_event', 'withdraw_event', 'release_proved_keyless_event'] },
+      },
       orderBy: { ledger: 'desc' },
       take: 400,
     });
 
     const out: ActivityItem[] = [];
     for (const e of events) {
-      const p = e.payload as { topics?: unknown[]; data?: { amount?: string } | null } | null;
+      const p = e.payload as {
+        topics?: unknown[];
+        data?: { amount?: string; asset?: string } | null;
+      } | null;
+      // For deposit/withdraw the account is topics[0]; for a keyless release the
+      // topics are [user, commitment], so the owner is topics[0] in both cases.
       const account = typeof p?.topics?.[0] === 'string' ? (p.topics[0] as string) : '';
       if (!addresses.has(account)) continue;
       const raw = p?.data?.amount;
-      const asset = typeof p?.topics?.[1] === 'string' ? (p.topics[1] as string) : undefined;
-      const isDeposit = e.type === 'deposit_event';
-      out.push({
-        id: `chain-${e.id}`,
-        kind: isDeposit ? 'deposit' : 'withdraw',
-        title: isDeposit ? 'Deposited to vault' : 'Withdrew from vault',
-        amount: raw != null ? Number(BigInt(raw)) / STROOPS_PER_USDC : undefined,
-        asset,
-        txHash: e.txHash,
-        at: e.createdAt.toISOString(),
-      });
+      const amount = raw != null ? Number(BigInt(raw)) / STROOPS_PER_USDC : undefined;
+      if (e.type === 'release_proved_keyless_event') {
+        // A private, keyless spend: one event per payee. The rule stays private, so we
+        // only surface the amount + the on-chain tx (the receipt), never the rule.
+        out.push({
+          id: `chain-${e.id}`,
+          kind: 'payment',
+          title: 'Private payment sent',
+          detail: 'keyless, rule kept private',
+          amount,
+          asset: 'USDC',
+          status: 'SETTLED',
+          txHash: e.txHash,
+          at: e.createdAt.toISOString(),
+        });
+      } else {
+        const asset = typeof p?.topics?.[1] === 'string' ? (p.topics[1] as string) : undefined;
+        const isDeposit = e.type === 'deposit_event';
+        out.push({
+          id: `chain-${e.id}`,
+          kind: isDeposit ? 'deposit' : 'withdraw',
+          title: isDeposit ? 'Deposited to vault' : 'Withdrew from vault',
+          amount,
+          asset,
+          txHash: e.txHash,
+          at: e.createdAt.toISOString(),
+        });
+      }
       if (out.length >= limit) break;
     }
     return out;

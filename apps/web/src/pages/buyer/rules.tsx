@@ -787,7 +787,7 @@ function RuleCard({
           </button>
         )}
         <div className="flex shrink-0 items-center gap-1">
-          {priv && (
+          {priv && (pinned || isGlobal) && (
             <button
               onClick={isGlobal ? onClearGlobal : onMakeGlobal}
               disabled={globalBusy}
@@ -1232,7 +1232,7 @@ export function RulesManager() {
           <span>
             {globalPrivate
               ? 'The rule with the Global badge is your global-private: AND-applied to every private spend, on top of whatever rule you pick. Use the globe icon to change or clear it.'
-              : 'Make a rule global: the globe icon on any private rule sets it as your global-private, AND-applied to every private spend on top of whatever rule you pick. (The public global is on the Public tab.)'}
+              : 'Make a rule global: the globe icon on any PINNED private rule sets it as your global-private. A global must be pinned to be active; it then applies to every private spend, and can even govern on its own when no specific rule is picked. (The public global is on the Public tab.)'}
           </span>
         </p>
       )}
@@ -1257,11 +1257,18 @@ export function RulesManager() {
                   : '';
               if (window.confirm(`Delete "${p.name || 'this rule'}"?${onChain}`)) del.mutate(p);
             }}
-            pinBusy={pin.isPending || unpin.isPending || del.isPending}
+            pinBusy={
+              (pin.isPending && pin.variables === p.commitment) ||
+              (unpin.isPending && unpin.variables === p.commitment) ||
+              (del.isPending && del.variables?.id === p.id)
+            }
             isGlobal={globalPrivate === p.commitment.toLowerCase()}
             onMakeGlobal={() => makeGlobal.mutate(p.commitment)}
             onClearGlobal={() => clearGlobal.mutate()}
-            globalBusy={makeGlobal.isPending || clearGlobal.isPending}
+            globalBusy={
+              (makeGlobal.isPending && makeGlobal.variables === p.commitment) ||
+              (clearGlobal.isPending && globalPrivate === p.commitment.toLowerCase())
+            }
           />
         ))}
       </div>

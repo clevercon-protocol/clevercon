@@ -32,28 +32,18 @@ import {
 import { getServices } from '../../lib/services';
 import { getPolicies, type Policy } from '../../lib/policies';
 import { getTasks, createTask, planInstruction, type HireMode } from '../../lib/tasks';
+import { getActivity } from '../../lib/activity';
 import { proveAndReleaseBatch } from '../../lib/prove';
 import { Card, CardHeader, EmptyState, PageHeader, controls } from '../../components/ui';
 import {
   describeSavedLimit,
   resolvePinnedBundle,
   resolveGlobalPrivateBundle,
-  getDefaultLimitId,
 } from './limits-model';
 
 const inputCls = controls.field;
 const primaryBtn = controls.primary;
 const chipBtn = controls.chip;
-
-const STATUS_TINT: Record<string, string> = {
-  RUNNING: 'text-sky-300',
-  PENDING: 'text-amber-300',
-  COMPLETED: 'text-emerald-300',
-  DRAFT: 'text-slate-400',
-  CANCELLED: 'text-slate-500',
-  DISPUTED: 'text-red-300',
-  FAILED: 'text-red-400',
-};
 
 // ── Vault hero: the money the agent can spend is the main number ────────────────
 
@@ -137,6 +127,7 @@ function RuleLanePicker({
   sessionActive,
   managed,
   applied,
+  usingGlobalAsRule,
 }: {
   lane: 'private' | 'public';
   setLane: (l: 'private' | 'public') => void;
@@ -146,6 +137,7 @@ function RuleLanePicker({
   sessionActive: boolean;
   managed: ManagedSession | undefined;
   applied: Applied;
+  usingGlobalAsRule: boolean;
 }) {
   return (
     <div className="space-y-2">
@@ -177,6 +169,9 @@ function RuleLanePicker({
               className="cc-input max-w-[17rem] flex-1 !py-1.5 text-sm"
               aria-label="Private rule the vault enforces"
             >
+              <option value="">
+                {usingGlobalAsRule ? 'None (global rule applies)' : 'None selected'}
+              </option>
               {privateRules.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name || describeSavedLimit(p)}
@@ -204,7 +199,9 @@ function RuleLanePicker({
         <span>
           The vault enforces <span className="text-slate-300">{applied.label}</span>
           {lane === 'private'
-            ? ', keyless and on-chain: your rule stays private and only you can prove a spend.'
+            ? usingGlobalAsRule
+              ? ': your global rule governs every private spend on its own, keyless and on-chain.'
+              : ', keyless and on-chain: your rule stays private and only you can prove a spend.'
             : ', on-chain via your Managed Session, hands-off within its scope.'}
         </span>
       </p>
@@ -264,21 +261,29 @@ export function CommandChat() {
     queryKey: ['managed-session'],
     queryFn: getManagedSession,
   });
+  const { data: globals } = useQuery({ queryKey: ['globals'], queryFn: getGlobals });
 
   // Only PINNED private rules are selectable: an unpinned commitment cannot authorize
-  // a spend on-chain (the vault rejects it, CommitmentNotAuthorized), so offering it
-  // would only lead to a failed release. Public spending is the Managed Session, not a
-  // per-instruction rule. Default the pick to the account default if it is a pinned
-  // private rule, else the first pinned private rule.
+  // a spend on-chain (the vault rejects it, CommitmentNotAuthorized). Public spending
+  // is the Managed Session, not a per-instruction rule.
   const privateRules = policies.filter(
     (p) =>
       (p.form === 'private' || (!p.form && p.isPrivate)) &&
       pinnedSet.has(p.commitment.toLowerCase()),
   );
-  const defaultPrivateId =
-    privateRules.find((p) => p.id === getDefaultLimitId())?.id ?? privateRules[0]?.id ?? '';
-  const effectiveRuleId = privateRules.some((p) => p.id === ruleId) ? ruleId : defaultPrivateId;
-  const selectedRule = privateRules.find((p) => p.id === effectiveRuleId);
+  // The global-private rule, if set AND it is a pinned private rule (only a pinned
+  // commitment can authorize). It applies to EVERY private spend.
+  const globalPolicy = globals?.privateCommitment
+    ? privateRules.find(
+        (p) => p.commitment.toLowerCase() === globals.privateCommitment!.toLowerCase(),
+      )
+    : undefined;
+  // No auto-default: the picker starts at "none selected" and a private spend cannot
+  // run until you pick a rule - UNLESS a global is active, which then governs on its
+  // own (the one case a spend runs with nothing picked).
+  const pickedRule = privateRules.find((p) => p.id === ruleId);
+  const enforcedRule = pickedRule ?? globalPolicy;
+  const usingGlobalAsRule = !pickedRule && !!globalPolicy;
   const sessionActive = !!managed?.session && managed.session.expiry * 1000 > Date.now();
 
   // What the vault will enforce for the next instruction, as a short label.
@@ -291,11 +296,12 @@ export function CommandChat() {
         isPrivate: false,
       };
     }
-    if (selectedRule) return { label: describeSavedLimit(selectedRule), isPrivate: true };
-    return { label: 'no private rule yet', isPrivate: true };
+    if (usingGlobalAsRule) return { label: 'your global rule', isPrivate: true };
+    if (enforcedRule) return { label: describeSavedLimit(enforcedRule), isPrivate: true };
+    return { label: 'none selected', isPrivate: true };
   })();
-  // Whether the current lane is ready to spend (a rule selected, or a live session).
-  const laneReady = lane === 'public' ? sessionActive : !!selectedRule;
+  // Whether the current lane is ready to spend (a rule selected/global active, or a live session).
+  const laneReady = lane === 'public' ? sessionActive : !!enforcedRule;
 
   const hire = useMutation({
     mutationFn: (p: { title: string; serviceId: string; budget: number; policyId?: string }) =>
@@ -321,9 +327,9 @@ export function CommandChat() {
         ? null
         : 'No active Managed Session. Set one up on the Vault tab before spending in public mode.';
     }
-    return selectedRule
+    return enforcedRule
       ? null
-      : 'No pinned private rule selected. Create a private rule and pin it on the Rules tab, then pick it here.';
+      : 'No rule selected. Pick a pinned private rule above (or set a global rule on the Rules tab, which then applies on its own).';
   }
 
   // Send the typed instruction to the agent; it returns a plan you then approve.
@@ -418,7 +424,7 @@ export function CommandChat() {
 
   function currentBind(): Bind {
     // Private binds the selected pinned rule; public spends under the Managed Session.
-    return lane === 'private' ? { policyId: effectiveRuleId || undefined } : {};
+    return lane === 'private' ? { policyId: enforcedRule?.id } : {};
   }
 
   function propose() {
@@ -612,6 +618,7 @@ export function CommandChat() {
       });
       qc.invalidateQueries({ queryKey: ['tasks'] });
       qc.invalidateQueries({ queryKey: ['vault'] });
+      qc.invalidateQueries({ queryKey: ['activity'] });
       push({
         id: nextId(),
         role: 'agent',
@@ -694,12 +701,13 @@ export function CommandChat() {
               <RuleLanePicker
                 lane={lane}
                 setLane={setLane}
-                ruleId={effectiveRuleId}
+                ruleId={ruleId}
                 setRuleId={setRuleId}
                 privateRules={privateRules}
                 sessionActive={sessionActive}
                 managed={managed}
                 applied={applied}
+                usingGlobalAsRule={usingGlobalAsRule}
               />
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] leading-relaxed text-slate-500">
@@ -851,12 +859,13 @@ export function CommandChat() {
                 <RuleLanePicker
                   lane={lane}
                   setLane={setLane}
-                  ruleId={effectiveRuleId}
+                  ruleId={ruleId}
                   setRuleId={setRuleId}
                   privateRules={privateRules}
                   sessionActive={sessionActive}
                   managed={managed}
                   applied={applied}
+                  usingGlobalAsRule={usingGlobalAsRule}
                 />
               </div>
 
@@ -965,15 +974,21 @@ function ChatBubble({
 // ── Recent activity (a unified ledger of what the agent did) ────────────────────
 
 export function RecentActivity() {
-  const { data: tasks = [], isLoading } = useQuery({ queryKey: ['tasks'], queryFn: getTasks });
-  const shown = tasks.slice(0, 6);
+  // The unified feed (job lifecycle + deposits/withdrawals + keyless private
+  // payments), so a private spend you just made shows here with its on-chain receipt,
+  // not only task events.
+  const { data: items = [], isLoading } = useQuery({
+    queryKey: ['activity'],
+    queryFn: getActivity,
+  });
+  const shown = items.slice(0, 6);
   return (
     <Card className="p-0">
       <CardHeader
         icon={ListChecks}
         title="Recent activity"
         action={
-          tasks.length > 6 ? (
+          items.length > 6 ? (
             <Link
               to="/app/activity"
               className="inline-flex items-center gap-1 text-xs text-violet-300 hover:text-violet-200"
@@ -988,24 +1003,37 @@ export function RecentActivity() {
           <EmptyState>Nothing yet. Instruct your agent above to get going.</EmptyState>
         )}
         <div className="space-y-2">
-          {shown.map((t) => (
-            <Link
-              key={t.id}
-              to={`/app/tasks/${t.id}`}
-              className="flex items-center justify-between rounded-xl bg-surface p-3 transition-colors hover:bg-surface-2"
+          {shown.map((item) => (
+            <div
+              key={item.id}
+              className="flex items-center justify-between gap-3 rounded-xl bg-surface p-3"
             >
               <div className="min-w-0">
-                <div className="truncate text-sm font-medium">{t.title}</div>
+                <div className="truncate text-sm font-medium">{item.title}</div>
                 <div className="text-xs text-slate-500">
-                  {t.mode} · ${t.spent.toFixed(2)} of ${t.budget.toFixed(2)}
+                  {item.detail ? `${item.detail} · ` : ''}
+                  {item.status ?? item.kind.replace(/_/g, ' ')}
                 </div>
               </div>
-              <span
-                className={`ml-3 shrink-0 text-xs ${STATUS_TINT[t.status] ?? 'text-slate-400'}`}
-              >
-                {t.status}
-              </span>
-            </Link>
+              <div className="flex shrink-0 items-center gap-3">
+                {item.amount != null && (
+                  <span className="cc-num font-mono text-sm font-semibold text-slate-100">
+                    ${item.amount.toFixed(2)}
+                  </span>
+                )}
+                {item.txHash && (
+                  <a
+                    href={`https://stellar.expert/explorer/testnet/tx/${item.txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-slate-500 hover:text-violet-300"
+                    title="View the on-chain receipt"
+                  >
+                    receipt
+                  </a>
+                )}
+              </div>
+            </div>
           ))}
         </div>
       </div>
