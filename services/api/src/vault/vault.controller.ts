@@ -20,15 +20,27 @@ const amountSchema = z.object({ amountUsdc: z.number().positive() });
 const submitSchema = z.object({ signedXdr: z.string().min(1) });
 const pinSchema = z.object({ commitment: z.string().regex(/^[0-9a-fA-F]{64}$/) });
 const agentWalletSchema = z.object({ publicKey: z.string().min(1) });
-// A global-public rule: a cleartext AND-filter checked on every public (session)
-// spend. Each field is independently optional (0 cap / empty list / 0 expiry = no
-// constraint on that axis).
-const publicGlobalSchema = z.object({
+// A named cleartext PUBLIC rule: the full clause vocabulary the vault checks directly
+// on each session spend. Each field is independently optional (0 / empty = no
+// constraint on that axis). Identified by a 32-byte rule id.
+const rid64 = z.string().regex(/^[0-9a-fA-F]{64}$/);
+const publicRuleSchema = z.object({
   perPaymentMaxUsdc: z.number().nonnegative(),
-  allowlist: z.array(z.string().min(1)).max(32),
+  perPaymentMinUsdc: z.number().nonnegative(),
+  rollingCapUsdc: z.number().nonnegative(),
+  rollingWindowSecs: z.number().int().nonnegative(),
+  velocityMax: z.number().int().nonnegative(),
+  velocityWindowSecs: z.number().int().nonnegative(),
+  allowlist: z
+    .array(z.object({ addr: z.string().min(1), capUsdc: z.number().nonnegative() }))
+    .max(32),
   denylist: z.array(z.string().min(1)).max(32),
-  expiry: z.number().int().nonnegative(),
+  denylistThresholdUsdc: z.number().nonnegative(),
+  calendarStart: z.number().int().nonnegative(),
+  calendarEnd: z.number().int().nonnegative(),
 });
+const setPublicRuleSchema = z.object({ ruleId: rid64, rule: publicRuleSchema });
+const ruleIdOnlySchema = z.object({ ruleId: rid64 });
 
 const hex = z.string().regex(/^[0-9a-fA-F]+$/);
 // A pp/2 batch release: the client proved locally and POSTs this; the API relays
@@ -75,13 +87,17 @@ const batchReleaseKeylessSchema = z.object({
   global: globalProofSchema.nullish(),
 });
 
-// Managed Sessions (server + public): the owner authorizes a bounded scope for
-// their server-held delegate/session key (budget + payee allowlist + expiry).
+// Managed Sessions (server + public): the owner authorizes a server-held key with a
+// total spend cap + expiry (no allowlist; it pays any payee up to the cap).
 const sessionEnableSchema = z.object({
-  budgetUsdc: z.number().positive(),
-  allowlist: z.array(z.string().min(1)).min(1).max(32),
+  spendCapUsdc: z.number().positive(),
   expiresInSeconds: z.number().int().positive(),
 });
+const sessionUpdateSchema = z.object({
+  newExpiresInSeconds: z.number().int().nonnegative(),
+  newSpendCapUsdc: z.number().nonnegative(),
+});
+const sessionPauseSchema = z.object({ paused: z.boolean() });
 const sessionPayBodySchema = z.object({
   payee: z.string().min(1),
   amount: z.number().positive(),
@@ -174,11 +190,36 @@ export class VaultController {
     return this.vault.buildClearGlobalPrivate(user.userId);
   }
 
-  /** Build the wallet-signed set_global_public(scope) XDR. */
+  /** Build the wallet-signed set_public_rule XDR (store a named cleartext public rule). */
+  @Post('public-rule/set')
+  setPublicRule(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { ruleId, rule } = parseBody(setPublicRuleSchema, body);
+    return this.vault.buildSetPublicRule(user.userId, ruleId, rule);
+  }
+
+  /** Build the wallet-signed clear_public_rule XDR. */
+  @Post('public-rule/clear')
+  clearPublicRule(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { ruleId } = parseBody(ruleIdOnlySchema, body);
+    return this.vault.buildClearPublicRule(user.userId, ruleId);
+  }
+
+  /** Read a named public rule (USDC / seconds) + its live usage. */
+  @Get('public-rule/:ruleId')
+  async publicRule(@CurrentUser() user: AuthUser, @Param('ruleId') ruleId: string) {
+    if (!/^[0-9a-fA-F]{64}$/.test(ruleId)) throw new BadRequestException('rule id must be 64-hex');
+    const [rule, usage] = await Promise.all([
+      this.vault.getPublicRule(user.userId, ruleId),
+      this.vault.getPublicUsage(user.userId, ruleId),
+    ]);
+    return { rule, usage };
+  }
+
+  /** Build the wallet-signed set_global_public(rule_id) XDR (mark a public rule global). */
   @Post('global/public/set')
   setGlobalPublic(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    const scope = parseBody(publicGlobalSchema, body);
-    return this.vault.buildSetGlobalPublic(user.userId, scope);
+    const { ruleId } = parseBody(ruleIdOnlySchema, body);
+    return this.vault.buildSetGlobalPublic(user.userId, ruleId);
   }
 
   /** Build the wallet-signed clear_global_public XDR. */
@@ -247,23 +288,38 @@ export class VaultController {
   }
 
   /**
-   * Managed Sessions (server + public lane). Enable builds the register_session
-   * XDR authorizing the caller's server-held delegate as a bounded session key
-   * (budget + payee allowlist + expiry); the wallet signs it and submits via
-   * `submit`. Thereafter `session/pay` spends hands-off (the server signs with the
-   * delegate, no per-payment signature), bounded on-chain. Revoke is wallet-signed.
+   * Managed Sessions (server + public lane). Enable builds the register_session XDR
+   * authorizing the caller's server-held delegate as a bounded session key (total
+   * spend cap + expiry; it pays any payee up to the cap); the wallet signs it and
+   * submits via `submit`. Thereafter `session/pay` spends hands-off (the server signs
+   * with the delegate, no per-payment signature), bounded on-chain. Pause, edit, and
+   * revoke are wallet-signed.
    */
   @Post('session/enable')
   enableSession(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    const { budgetUsdc, allowlist, expiresInSeconds } = parseBody(sessionEnableSchema, body);
-    return this.vault.buildEnableSession(user.userId, budgetUsdc, allowlist, expiresInSeconds);
+    const { spendCapUsdc, expiresInSeconds } = parseBody(sessionEnableSchema, body);
+    return this.vault.buildEnableSession(user.userId, spendCapUsdc, expiresInSeconds);
   }
 
-  /** Hands-off public-lane spend; bounded by the on-chain session scope (no step-up). */
+  /** Hands-off public-lane spend; bounded by the on-chain session cap (no step-up). */
   @Post('session/pay')
   sessionPay(@CurrentUser() user: AuthUser, @Body() body: unknown) {
     const { payee, amount } = parseBody(sessionPayBodySchema, body);
     return this.vault.sessionPay(user.userId, payee, amount);
+  }
+
+  /** Build the wallet-signed pause/unpause XDR for the caller's Managed Session key. */
+  @Post('session/pause')
+  pauseSession(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { paused } = parseBody(sessionPauseSchema, body);
+    return this.vault.buildPauseSession(user.userId, paused);
+  }
+
+  /** Build the wallet-signed edit XDR (extend expiry / raise cap). 0 leaves a field. */
+  @Post('session/update')
+  updateSession(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { newExpiresInSeconds, newSpendCapUsdc } = parseBody(sessionUpdateSchema, body);
+    return this.vault.buildUpdateSession(user.userId, newExpiresInSeconds, newSpendCapUsdc);
   }
 
   /** Build the wallet-signed revoke_session XDR; submit via `submit` to kill the key. */

@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { StrKey } from '@stellar/stellar-sdk';
 import { Prisma } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { VaultContractService } from './vault-contract.service.js';
+import { VaultContractService, type PublicRuleInput } from './vault-contract.service.js';
 import { DelegateService } from './delegate.service.js';
 
 const ZERO = new Prisma.Decimal(0);
@@ -117,13 +117,24 @@ export class VaultService {
     return { xdr, networkPassphrase: this.contract.passphrase };
   }
 
-  /** Build the wallet-signed set_global_public(scope) XDR. */
-  async buildSetGlobalPublic(
-    userId: string,
-    scope: { perPaymentMaxUsdc: number; allowlist: string[]; denylist: string[]; expiry: number },
-  ) {
+  /** Build the wallet-signed set_public_rule XDR (store a named cleartext public rule). */
+  async buildSetPublicRule(userId: string, ruleIdHex: string, rule: PublicRuleInput) {
     const address = await this.primaryAddress(userId);
-    const xdr = await this.contract.buildSetGlobalPublicXdr(address, scope);
+    const xdr = await this.contract.buildSetPublicRuleXdr(address, ruleIdHex, rule);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed clear_public_rule XDR. */
+  async buildClearPublicRule(userId: string, ruleIdHex: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildClearPublicRuleXdr(address, ruleIdHex);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed set_global_public(rule_id) XDR (mark a public rule global). */
+  async buildSetGlobalPublic(userId: string, ruleIdHex: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildSetGlobalPublicXdr(address, ruleIdHex);
     return { xdr, networkPassphrase: this.contract.passphrase };
   }
 
@@ -134,15 +145,29 @@ export class VaultService {
     return { xdr, networkPassphrase: this.contract.passphrase };
   }
 
-  /** The user's current globals (private commitment hex + public cleartext scope). */
+  /** The user's current globals: the private commitment (hex) + the public rule id (hex). */
   async getGlobals(userId: string) {
-    if (!this.contract.active) return { privateCommitment: null, publicScope: null };
+    if (!this.contract.active) return { privateCommitment: null, publicRuleId: null };
     const address = await this.primaryAddress(userId);
-    const [privateCommitment, publicScope] = await Promise.all([
+    const [privateCommitment, publicRuleId] = await Promise.all([
       this.contract.readGlobalPrivate(address),
       this.contract.readGlobalPublic(address),
     ]);
-    return { privateCommitment, publicScope };
+    return { privateCommitment, publicRuleId };
+  }
+
+  /** Read a named public rule (USDC / seconds), or null. */
+  async getPublicRule(userId: string, ruleIdHex: string) {
+    if (!this.contract.active) return null;
+    const address = await this.primaryAddress(userId);
+    return this.contract.readPublicRule(address, ruleIdHex);
+  }
+
+  /** Read live usage for a public rule (window + lifetime spend/count), or null. */
+  async getPublicUsage(userId: string, ruleIdHex: string) {
+    if (!this.contract.active) return null;
+    const address = await this.primaryAddress(userId);
+    return this.contract.readPublicUsage(address, ruleIdHex);
   }
 
   /** The user's on-chain pinned-commitment set (hex), so the dapp can mark which rules are live. */
@@ -175,32 +200,24 @@ export class VaultService {
    * wallet-signed and instant. This is the dapp's public option (a browser key
    * could not sign hands-off), replacing the old server-logic Autopay.
    */
-  async buildEnableSession(
-    userId: string,
-    budgetUsdc: number,
-    allowlist: string[],
-    expiresInSeconds: number,
-  ) {
-    if (budgetUsdc <= 0) throw new BadRequestException('budgetUsdc must be positive');
-    if (allowlist.length < 1 || allowlist.length > 32) {
-      throw new BadRequestException('allowlist must have 1..32 payees');
-    }
+  async buildEnableSession(userId: string, spendCapUsdc: number, expiresInSeconds: number) {
+    if (spendCapUsdc <= 0) throw new BadRequestException('spendCapUsdc must be positive');
     if (expiresInSeconds <= 0) throw new BadRequestException('expiresInSeconds must be positive');
-    for (const a of allowlist) {
-      if (!StrKey.isValidEd25519PublicKey(a)) throw new BadRequestException(`invalid payee: ${a}`);
-    }
     if (!this.delegates.available) {
       throw new BadRequestException('Managed Sessions are not configured on this deployment');
     }
     const address = await this.primaryAddress(userId);
     const { publicKey } = await this.delegates.getOrProvision(userId);
     const expiry = Math.floor(Date.now() / 1000) + expiresInSeconds;
+    // The dapp's Managed Session is a SERVER-HELD key: a total spend cap + expiry,
+    // no allowlist/rule (it pays any payee up to the cap). server_held=true, rule=null.
     const xdr = await this.contract.buildRegisterSessionXdr(
       address,
       publicKey,
-      budgetUsdc,
       expiry,
-      allowlist,
+      spendCapUsdc,
+      null,
+      true,
     );
     return {
       xdr,
@@ -208,6 +225,29 @@ export class VaultService {
       sessionPublicKey: publicKey,
       expiry,
     };
+  }
+
+  /** Build the wallet-signed pause/unpause XDR for the caller's Managed Session key. */
+  async buildPauseSession(userId: string, paused: boolean) {
+    const address = await this.primaryAddress(userId);
+    const { publicKey } = await this.delegates.getOrProvision(userId);
+    const xdr = await this.contract.buildSetSessionPausedXdr(address, publicKey, paused);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed edit XDR (extend expiry / raise cap). 0 leaves a field. */
+  async buildUpdateSession(userId: string, newExpiresInSeconds: number, newSpendCapUsdc: number) {
+    const address = await this.primaryAddress(userId);
+    const { publicKey } = await this.delegates.getOrProvision(userId);
+    const newExpiry =
+      newExpiresInSeconds > 0 ? Math.floor(Date.now() / 1000) + newExpiresInSeconds : 0;
+    const xdr = await this.contract.buildUpdateSessionXdr(
+      address,
+      publicKey,
+      newExpiry,
+      newSpendCapUsdc,
+    );
+    return { xdr, networkPassphrase: this.contract.passphrase };
   }
 
   /**

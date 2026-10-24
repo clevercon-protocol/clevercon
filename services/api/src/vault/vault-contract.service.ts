@@ -29,24 +29,47 @@ function usdcToStroops(usdc: number): bigint {
 
 /** Friendly messages for the vault's VaultError codes that a client can act on. */
 const CONTRACT_ERROR_MESSAGES: Record<number, string> = {
-  5: 'Not enough balance in your vault for this payment.',
-  6: 'Not enough available balance (some is locked by active tasks).',
+  2: 'The vault is paused by the operator; try again shortly.',
+  4: 'That action is not allowed for this account.',
+  5: 'Not enough balance in your vault for this.',
+  6: 'Not enough available balance (some is locked by active jobs).',
   11: 'Invalid amount.',
+  17: 'That key is not the authorized orchestrator for this account.',
+  29: 'The proof verifier is not configured on this network yet.',
+  30: 'This spend needs a proof, which was not provided.',
   32: 'The vault rejected the proof: this payment does not satisfy your rule (check the amount and payee against the rule, and its rolling-cap / velocity window).',
   33: 'This exact payment was already settled (replay protection). Nothing was charged twice.',
   34: 'Malformed payment batch. Please try again.',
   35: 'Duplicate payment within the batch. Please try again.',
   36: 'The payment is outside its validity window (check your device clock), please try again.',
+  37: 'You have pinned the maximum number of rules; unpin one first.',
+  38: 'That rule is not pinned on-chain.',
   39: 'This rule is not pinned on-chain for your account, so it cannot authorize a spend. Pin it on the Rules tab, then try again.',
   40: 'The payment validity window is too long, please try again.',
+  42: 'That session key is not registered (or was revoked).',
+  43: 'This session key has expired. Create a new one (or extend it).',
+  44: 'That payee is not on this rule’s approved list.',
+  45: 'This payment would exceed the session key’s spend cap.',
+  46: 'Only the owner can manage this session.',
   48: 'A global rule is set but its second proof is missing. Reload the app; if it persists, clear the global on the Rules tab.',
   49: 'Your global rule changed. Reload the app and try again.',
+  50: 'That payee is blocked by your rule’s deny-list.',
+  51: 'This payment exceeds the rule’s per-payment cap.',
+  52: 'The session key has expired.',
+  53: 'This session key is paused; unpause it on the Vault tab to spend again.',
+  54: 'The public rule this key runs under no longer exists. Re-create it, or re-register the key.',
+  55: 'This payment is below the rule’s per-payment minimum.',
+  56: 'This payment would exceed the rule’s rolling cap for its window.',
+  57: 'This payment would exceed the rule’s rate limit (too many in the window).',
+  58: 'This payment is outside the rule’s allowed calendar window.',
+  59: 'Invalid session or rule parameters (a server key needs a future expiry; caps cannot be negative).',
+  60: 'A session key must have a spend cap and/or a rule; this one had neither.',
 };
 
 /**
- * Translate a raw Soroban `Error(Contract, #NN)` into a clean, actionable message
- * for the dapp and SDK/MCP (a 400, not a 503 HostError dump). Rethrows non-contract
- * errors unchanged.
+ * Translate a raw Soroban `Error(Contract, #NN)` / HostError into a clean, actionable
+ * message (a 400, not a 503 HostError dump) for the dapp and SDK/MCP. Also tidies the
+ * common non-contract sequence error. Rethrows anything else unchanged.
  */
 function mapContractError(err: unknown): never {
   const msg = err instanceof Error ? err.message : String(err);
@@ -54,7 +77,12 @@ function mapContractError(err: unknown): never {
   if (m) {
     const code = Number(m[1]);
     throw new BadRequestException(
-      CONTRACT_ERROR_MESSAGES[code] ?? `The vault rejected this payment (code #${code}).`,
+      CONTRACT_ERROR_MESSAGES[code] ?? `The vault rejected this (code #${code}).`,
+    );
+  }
+  if (/txBadSeq/i.test(msg)) {
+    throw new ServiceUnavailableException(
+      'The network was busy (sequence conflict). Please try again in a moment.',
     );
   }
   throw err instanceof Error ? err : new Error(msg);
@@ -94,6 +122,72 @@ function globalProofScVal(g: {
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('proof'), val: groth16ProofScVal(g.proof) }),
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('reset_r2'), val: xdr.ScVal.scvBool(g.resetR2) }),
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('reset_r7'), val: xdr.ScVal.scvBool(g.resetR7) }),
+  ]);
+}
+
+/** A cleartext public rule as the API/dapp expresses it (USDC + seconds). */
+export interface PublicRuleInput {
+  perPaymentMaxUsdc: number;
+  perPaymentMinUsdc: number;
+  rollingCapUsdc: number;
+  rollingWindowSecs: number;
+  velocityMax: number;
+  velocityWindowSecs: number;
+  allowlist: { addr: string; capUsdc: number }[];
+  denylist: string[];
+  denylistThresholdUsdc: number;
+  calendarStart: number;
+  calendarEnd: number;
+}
+
+/** Encode a PublicRule struct ScVal (ScMap, fields sorted by symbol key). */
+function publicRuleScVal(r: PublicRuleInput): xdr.ScVal {
+  const i128 = (usdc: number) => nativeToScVal(usdcToStroops(usdc), { type: 'i128' });
+  const u64 = (n: number) => nativeToScVal(BigInt(Math.max(0, Math.round(n))), { type: 'u64' });
+  const payee = (p: { addr: string; capUsdc: number }) =>
+    xdr.ScVal.scvMap([
+      new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('addr'), val: new Address(p.addr).toScVal() }),
+      new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('cap'), val: i128(p.capUsdc) }),
+    ]);
+  // Sorted by symbol: allowlist, calendar_end, calendar_start, denylist,
+  // denylist_threshold, per_payment_max, per_payment_min, rolling_cap,
+  // rolling_window_secs, velocity_max, velocity_window_secs.
+  return xdr.ScVal.scvMap([
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol('allowlist'),
+      val: xdr.ScVal.scvVec(r.allowlist.map(payee)),
+    }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('calendar_end'), val: u64(r.calendarEnd) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('calendar_start'), val: u64(r.calendarStart) }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol('denylist'),
+      val: xdr.ScVal.scvVec(r.denylist.map((a) => new Address(a).toScVal())),
+    }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol('denylist_threshold'),
+      val: i128(r.denylistThresholdUsdc),
+    }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol('per_payment_max'),
+      val: i128(r.perPaymentMaxUsdc),
+    }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol('per_payment_min'),
+      val: i128(r.perPaymentMinUsdc),
+    }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('rolling_cap'), val: i128(r.rollingCapUsdc) }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol('rolling_window_secs'),
+      val: u64(r.rollingWindowSecs),
+    }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol('velocity_max'),
+      val: nativeToScVal(Math.max(0, Math.round(r.velocityMax)), { type: 'u32' }),
+    }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol('velocity_window_secs'),
+      val: u64(r.velocityWindowSecs),
+    }),
   ]);
 }
 
@@ -183,7 +277,10 @@ export class VaultContractService {
 
     const simulated = await server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simulated)) {
-      throw new ServiceUnavailableException(`Vault simulation failed: ${simulated.error}`);
+      // A contract rejection surfaces here as a HostError even for build-time
+      // simulation (e.g. set_public_rule with bad params); translate it to a clean
+      // message instead of leaking the raw dump.
+      mapContractError(new Error(simulated.error));
     }
     return SorobanRpc.assembleTransaction(tx, simulated).build().toXDR();
   }
@@ -306,27 +403,65 @@ export class VaultContractService {
 
   // ── Managed Sessions (server + public lane) ──
   // The server-held per-user delegate IS the managed session key. The owner
-  // authorizes its on-chain scope ONCE (register_session, wallet-signed), the
-  // server then signs each release with the delegate (release_payment_session),
-  // and the vault enforces the budget + allowlist + expiry. Moving the limits
-  // on-chain is what makes this safe where the old server-logic Autopay was not.
+  // authorizes it ONCE (register_session, wallet-signed) with a spend cap + expiry;
+  // the server then signs each release with the delegate (release_payment_session),
+  // and the vault enforces the cap (and any named/global public rule) on-chain. A
+  // server-held key is the simple cap+expiry form (rule_id null).
 
-  /** Unsigned `register_session(user, session, usdc_sac, budget, expiry, allowlist)` XDR. */
+  /**
+   * Unsigned `register_session(user, session, asset, expiry, spend_cap, rule_id,
+   * server_held)` XDR. A key is bounded by a spend cap and/or a named public rule.
+   */
   async buildRegisterSessionXdr(
     userAddress: string,
     sessionPublicKey: string,
-    budgetUsdc: number,
     expiry: number,
-    allowlist: string[],
+    spendCapUsdc: number,
+    ruleIdHex: string | null,
+    serverHeld: boolean,
   ): Promise<string> {
     this.ensureActive();
+    const ruleIdScVal = ruleIdHex
+      ? xdr.ScVal.scvBytes(Buffer.from(ruleIdHex.replace(/^0x/, ''), 'hex'))
+      : xdr.ScVal.scvVoid();
     return this.buildUnsignedXdr(userAddress, 'register_session', [
       new Address(userAddress).toScVal(),
       new Address(sessionPublicKey).toScVal(),
       this.usdcSacScVal(),
-      nativeToScVal(usdcToStroops(budgetUsdc), { type: 'i128' }),
       nativeToScVal(BigInt(expiry), { type: 'u64' }),
-      xdr.ScVal.scvVec(allowlist.map((a) => new Address(a).toScVal())),
+      nativeToScVal(usdcToStroops(spendCapUsdc), { type: 'i128' }),
+      ruleIdScVal,
+      xdr.ScVal.scvBool(serverHeld),
+    ]);
+  }
+
+  /** Unsigned `set_session_paused(user, session, paused)` XDR (pause/unpause a key). */
+  async buildSetSessionPausedXdr(
+    userAddress: string,
+    sessionPublicKey: string,
+    paused: boolean,
+  ): Promise<string> {
+    this.ensureActive();
+    return this.buildUnsignedXdr(userAddress, 'set_session_paused', [
+      new Address(userAddress).toScVal(),
+      new Address(sessionPublicKey).toScVal(),
+      xdr.ScVal.scvBool(paused),
+    ]);
+  }
+
+  /** Unsigned `update_session(user, session, new_expiry, new_spend_cap)` XDR (0 = leave). */
+  async buildUpdateSessionXdr(
+    userAddress: string,
+    sessionPublicKey: string,
+    newExpiry: number,
+    newSpendCapUsdc: number,
+  ): Promise<string> {
+    this.ensureActive();
+    return this.buildUnsignedXdr(userAddress, 'update_session', [
+      new Address(userAddress).toScVal(),
+      new Address(sessionPublicKey).toScVal(),
+      nativeToScVal(BigInt(newExpiry), { type: 'u64' }),
+      nativeToScVal(usdcToStroops(newSpendCapUsdc), { type: 'i128' }),
     ]);
   }
 
@@ -361,38 +496,40 @@ export class VaultContractService {
    * simulation with a throwaway source, nothing submitted.
    */
   async readSession(sessionPublicKey: string): Promise<{
-    budgetRemainingUsdc: number;
-    expiry: number;
-    allowlist: string[];
+    spendCapUsdc: number;
     spentUsdc: number;
+    remainingUsdc: number;
+    expiry: number;
+    ruleId: string | null;
+    serverHeld: boolean;
+    paused: boolean;
+    releaseCount: number;
   } | null> {
     this.ensureActive();
-    const server = this.server();
-    const source = new Account(Keypair.random().publicKey(), '0');
-    const tx = new TransactionBuilder(source, {
-      fee: BASE_FEE,
-      networkPassphrase: this.passphrase,
-    })
-      .addOperation(
-        new Contract(this.contractId).call('get_session', new Address(sessionPublicKey).toScVal()),
-      )
-      .setTimeout(300)
-      .build();
-    const sim = await server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(sim) || !sim.result?.retval) {
-      return null; // no active session (SessionNotFound / revoked)
-    }
-    const s = scValToNative(sim.result.retval) as {
-      budget_remaining: bigint | number;
+    const s = (await this.simulateReadRaw('get_session', [
+      new Address(sessionPublicKey).toScVal(),
+    ])) as {
+      asset: string;
       expiry: bigint | number;
-      allowlist: string[];
+      spend_cap: bigint | number;
+      rule_id: Buffer | Uint8Array | null;
+      server_held: boolean;
+      paused: boolean;
       spent: bigint | number;
-    };
+      release_count: number;
+    } | null;
+    if (!s) return null;
+    const cap = Number(s.spend_cap) / STROOPS_PER_USDC;
+    const spent = Number(s.spent) / STROOPS_PER_USDC;
     return {
-      budgetRemainingUsdc: Number(s.budget_remaining) / STROOPS_PER_USDC,
+      spendCapUsdc: cap,
+      spentUsdc: spent,
+      remainingUsdc: cap > 0 ? Math.max(0, cap - spent) : 0,
       expiry: Number(s.expiry),
-      allowlist: s.allowlist,
-      spentUsdc: Number(s.spent) / STROOPS_PER_USDC,
+      ruleId: s.rule_id ? Buffer.from(s.rule_id).toString('hex') : null,
+      serverHeld: !!s.server_held,
+      paused: !!s.paused,
+      releaseCount: Number(s.release_count),
     };
   }
 
@@ -505,34 +642,41 @@ export class VaultContractService {
     return val ? Buffer.from(val).toString('hex') : null;
   }
 
-  /** Unsigned set_global_public(user, scope): a cleartext AND-filter on public spends. */
-  async buildSetGlobalPublicXdr(
+  private ridBytes(ruleIdHex: string): Buffer {
+    const b = Buffer.from(ruleIdHex.replace(/^0x/, ''), 'hex');
+    if (b.length !== 32) throw new BadRequestException('rule id must be 32-byte hex');
+    return b;
+  }
+
+  /** Unsigned set_public_rule(user, rule_id, rule): store a named cleartext public rule. */
+  async buildSetPublicRuleXdr(
     userAddress: string,
-    scope: { perPaymentMaxUsdc: number; allowlist: string[]; denylist: string[]; expiry: number },
+    ruleIdHex: string,
+    rule: PublicRuleInput,
   ): Promise<string> {
     this.ensureActive();
-    // PublicGlobal struct fields, sorted by symbol key.
-    const scopeVal = xdr.ScVal.scvMap([
-      new xdr.ScMapEntry({
-        key: xdr.ScVal.scvSymbol('allowlist'),
-        val: xdr.ScVal.scvVec(scope.allowlist.map((a) => new Address(a).toScVal())),
-      }),
-      new xdr.ScMapEntry({
-        key: xdr.ScVal.scvSymbol('denylist'),
-        val: xdr.ScVal.scvVec(scope.denylist.map((a) => new Address(a).toScVal())),
-      }),
-      new xdr.ScMapEntry({
-        key: xdr.ScVal.scvSymbol('expiry'),
-        val: nativeToScVal(BigInt(scope.expiry), { type: 'u64' }),
-      }),
-      new xdr.ScMapEntry({
-        key: xdr.ScVal.scvSymbol('per_payment_max'),
-        val: nativeToScVal(usdcToStroops(scope.perPaymentMaxUsdc), { type: 'i128' }),
-      }),
+    return this.buildUnsignedXdr(userAddress, 'set_public_rule', [
+      new Address(userAddress).toScVal(),
+      xdr.ScVal.scvBytes(this.ridBytes(ruleIdHex)),
+      publicRuleScVal(rule),
     ]);
+  }
+
+  /** Unsigned clear_public_rule(user, rule_id). */
+  async buildClearPublicRuleXdr(userAddress: string, ruleIdHex: string): Promise<string> {
+    this.ensureActive();
+    return this.buildUnsignedXdr(userAddress, 'clear_public_rule', [
+      new Address(userAddress).toScVal(),
+      xdr.ScVal.scvBytes(this.ridBytes(ruleIdHex)),
+    ]);
+  }
+
+  /** Unsigned set_global_public(user, rule_id): mark a stored public rule as the global. */
+  async buildSetGlobalPublicXdr(userAddress: string, ruleIdHex: string): Promise<string> {
+    this.ensureActive();
     return this.buildUnsignedXdr(userAddress, 'set_global_public', [
       new Address(userAddress).toScVal(),
-      scopeVal,
+      xdr.ScVal.scvBytes(this.ridBytes(ruleIdHex)),
     ]);
   }
 
@@ -544,36 +688,96 @@ export class VaultContractService {
     ]);
   }
 
-  /** Read get_global_public(user): the cleartext public global scope, or null. */
-  async readGlobalPublic(userAddress: string): Promise<{
-    perPaymentMaxUsdc: number;
-    allowlist: string[];
-    denylist: string[];
-    expiry: number;
-  } | null> {
-    this.ensureActive();
+  /** Read a read-only call's decoded return value with a throwaway source. */
+  private async simulateReadRaw(method: string, args: xdr.ScVal[]): Promise<unknown | null> {
     const server = this.server();
     const source = new Account(Keypair.random().publicKey(), '0');
     const tx = new TransactionBuilder(source, { fee: BASE_FEE, networkPassphrase: this.passphrase })
-      .addOperation(
-        new Contract(this.contractId).call('get_global_public', new Address(userAddress).toScVal()),
-      )
+      .addOperation(new Contract(this.contractId).call(method, ...args))
       .setTimeout(300)
       .build();
     const sim = await server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(sim) || !sim.result?.retval) return null;
-    const v = scValToNative(sim.result.retval) as {
+    return scValToNative(sim.result.retval);
+  }
+
+  /** Read the rule_id of the account global-public rule (hex), or null. */
+  async readGlobalPublic(userAddress: string): Promise<string | null> {
+    this.ensureActive();
+    const v = (await this.simulateReadRaw('get_global_public', [
+      new Address(userAddress).toScVal(),
+    ])) as Buffer | Uint8Array | null;
+    return v ? Buffer.from(v).toString('hex') : null;
+  }
+
+  /** Read a named public rule (decoded to USDC / seconds), or null. */
+  async readPublicRule(userAddress: string, ruleIdHex: string): Promise<PublicRuleInput | null> {
+    this.ensureActive();
+    const v = (await this.simulateReadRaw('get_public_rule', [
+      new Address(userAddress).toScVal(),
+      xdr.ScVal.scvBytes(this.ridBytes(ruleIdHex)),
+    ])) as {
       per_payment_max: bigint | number;
-      allowlist: string[];
+      per_payment_min: bigint | number;
+      rolling_cap: bigint | number;
+      rolling_window_secs: bigint | number;
+      velocity_max: number;
+      velocity_window_secs: bigint | number;
+      allowlist: { addr: string; cap: bigint | number }[];
       denylist: string[];
-      expiry: bigint | number;
+      denylist_threshold: bigint | number;
+      calendar_start: bigint | number;
+      calendar_end: bigint | number;
+    } | null;
+    if (!v) return null;
+    const usdc = (x: bigint | number) => Number(x) / STROOPS_PER_USDC;
+    return {
+      perPaymentMaxUsdc: usdc(v.per_payment_max),
+      perPaymentMinUsdc: usdc(v.per_payment_min),
+      rollingCapUsdc: usdc(v.rolling_cap),
+      rollingWindowSecs: Number(v.rolling_window_secs),
+      velocityMax: Number(v.velocity_max),
+      velocityWindowSecs: Number(v.velocity_window_secs),
+      allowlist: v.allowlist.map((p) => ({ addr: p.addr, capUsdc: usdc(p.cap) })),
+      denylist: v.denylist,
+      denylistThresholdUsdc: usdc(v.denylist_threshold),
+      calendarStart: Number(v.calendar_start),
+      calendarEnd: Number(v.calendar_end),
+    };
+  }
+
+  /** Read live usage for a public rule (window + lifetime spend/count), or null. */
+  async readPublicUsage(
+    userAddress: string,
+    ruleIdHex: string,
+  ): Promise<{
+    windowSpentUsdc: number;
+    windowCount: number;
+    lifetimeSpentUsdc: number;
+    lifetimeCount: number;
+    anchorR2: number;
+    anchorR7: number;
+  } | null> {
+    this.ensureActive();
+    const v = (await this.simulateReadRaw('get_public_usage', [
+      new Address(userAddress).toScVal(),
+      xdr.ScVal.scvBytes(this.ridBytes(ruleIdHex)),
+    ])) as {
+      window_spent: bigint | number;
+      window_count: number;
+      lifetime_spent: bigint | number;
+      lifetime_count: number;
+      anchor_r2: bigint | number;
+      anchor_r7: bigint | number;
     } | null;
     if (!v) return null;
     return {
-      perPaymentMaxUsdc: Number(v.per_payment_max) / STROOPS_PER_USDC,
-      allowlist: v.allowlist,
-      denylist: v.denylist,
-      expiry: Number(v.expiry),
+      windowSpentUsdc: Number(v.window_spent) / STROOPS_PER_USDC,
+      windowCount: Number(v.window_count),
+      lifetimeSpentUsdc: Number(v.lifetime_spent) / STROOPS_PER_USDC,
+      lifetimeCount: Number(v.lifetime_count),
+      anchorR2: Number(v.anchor_r2),
+      anchorR7: Number(v.anchor_r7),
     };
   }
 
@@ -611,17 +815,18 @@ export class VaultContractService {
     const tx = TransactionBuilder.fromXDR(signedXdr, this.passphrase);
     const response = await server.sendTransaction(tx);
     if (response.status === 'ERROR') {
-      // Surface the actual reason (e.g. txBadSeq, txInsufficientBalance) so the
-      // UI can tell the user why, instead of a generic failure.
       let reason = 'rejected';
       try {
         reason = response.errorResult?.result().switch().name ?? reason;
       } catch {
         // keep the generic reason
       }
-      throw new ServiceUnavailableException(
-        `Vault transaction rejected on submit: ${reason}. If it says txBadSeq, wait a few seconds and retry.`,
-      );
+      if (/txBadSeq/i.test(reason)) {
+        throw new ServiceUnavailableException(
+          'The network was busy (sequence conflict). Please try again in a moment.',
+        );
+      }
+      throw new ServiceUnavailableException(`The vault transaction was rejected (${reason}).`);
     }
     for (let i = 0; i < 30; i++) {
       await new Promise((r) => setTimeout(r, 1000));
@@ -730,7 +935,9 @@ export class VaultContractService {
         .build();
       const simulated = await server.simulateTransaction(tx);
       if (SorobanRpc.Api.isSimulationError(simulated)) {
-        throw new ServiceUnavailableException(`${method} simulation failed: ${simulated.error}`);
+        // A contract rejection (session paused, cap exceeded, rule violated, ...)
+        // surfaces as a HostError at simulation; translate it to a clean message.
+        mapContractError(new Error(simulated.error));
       }
       const prepared = SorobanRpc.assembleTransaction(tx, simulated).build();
       prepared.sign(kp);
