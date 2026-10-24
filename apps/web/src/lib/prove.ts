@@ -112,8 +112,15 @@ export async function proveAndReleaseBatch(opts: {
    */
   ceilingUsdc?: number;
   bundleRules?: PolicyBundleRules | null;
+  /**
+   * The global-private rule (its pinned bundle), when one is set. The vault requires
+   * a SECOND proof that the SAME batch also satisfies this rule (an AND filter), so
+   * each group is proven twice: once against the selected rule, once against the
+   * global. Omit when no global-private is set.
+   */
+  globalBundle?: { rules: PolicyBundleRules; salt: string } | null;
 }): Promise<ProveResult> {
-  const { recipients, onPhase, bundle, ceilingUsdc, bundleRules } = opts;
+  const { recipients, onPhase, bundle, ceilingUsdc, bundleRules, globalBundle } = opts;
 
   // Resolve the exact rules + salt the proof binds to. The pinned bundle is used
   // verbatim (its ceiling is the committed one); the ad-hoc path layers the
@@ -159,20 +166,42 @@ export async function proveAndReleaseBatch(opts: {
     anchorR7: '0',
   }));
 
+  // When a global-private rule is set, build its witness + read its own accumulator
+  // too: every group is proven a SECOND time against it, and its window rolls
+  // independently of the selected rule's.
+  const g = globalBundle
+    ? await (async () => {
+        const w = await buildWitness(globalBundle.rules, globalBundle.salt);
+        const gCommitment = await computePolicyCommitment(globalBundle.rules, globalBundle.salt);
+        const gAccum = await apiGet<{
+          runningSpend: string;
+          priorCount: string;
+          anchorR2: string;
+          anchorR7: string;
+        }>(`/vault/accumulator/${gCommitment}`).catch(() => ({
+          runningSpend: '0',
+          priorCount: '0',
+          anchorR2: '0',
+          anchorR7: '0',
+        }));
+        return { policy: w.policy, allowlist: w.allowlist, accum: gAccum };
+      })()
+    : null;
+
   const groups: ProveRecipient[][] = [];
   for (let i = 0; i < active.length; i += PROOF_WIDTH)
     groups.push(active.slice(i, i + PROOF_WIDTH));
 
   const txHashes: string[] = [];
   let sum = 0;
-  for (let g = 0; g < groups.length; g++) {
-    onPhase?.('proving', { i: g + 1, n: groups.length });
+  for (let batchIdx = 0; batchIdx < groups.length; batchIdx++) {
+    onPhase?.('proving', { i: batchIdx + 1, n: groups.length });
     const base = Date.now();
-    const releases: BatchRelease[] = groups[g].map((l, i) => {
+    const releases: BatchRelease[] = groups[batchIdx].map((l, i) => {
       const payee = l.payee.trim();
       const membership = allowlist?.membership(payee);
       if (allowlist && !membership)
-        throw new Error(`${payee} is not on this limit's approved-payee list`);
+        throw new Error(`${payee} is not on this rule's approved-payee list`);
       return {
         payeeAddress: payee,
         amountStroops: String(BigInt(Math.round(l.amount * STROOPS))),
@@ -193,20 +222,78 @@ export async function proveAndReleaseBatch(opts: {
     const proof = await createBatchProof(policy, releases, ctx, { wasmPath: WASM, zkeyPath: ZKEY });
     const groupStroops = releases.reduce((s, r) => s + BigInt(r.amountStroops), 0n);
     sum += Number(groupStroops) / STROOPS;
+
+    // GLOBAL-private AND filter: prove the SAME batch also satisfies the global rule,
+    // under the global commitment's own window. Same payees/amounts/window; its own
+    // allowlist membership and (distinct-salt) nullifiers.
+    let globalField: {
+      commitment: string;
+      nullifiers: string[];
+      resetR2: boolean;
+      resetR7: boolean;
+      proof: { a: string; b: string; c: string };
+    } | null = null;
+    if (g) {
+      const gReleases: BatchRelease[] = groups[batchIdx].map((l, i) => {
+        const payee = l.payee.trim();
+        const membership = g.allowlist?.membership(payee);
+        if (g.allowlist && !membership)
+          throw new Error(`${payee} is not on your global rule's approved-payee list`);
+        return {
+          payeeAddress: payee,
+          amountStroops: String(BigInt(Math.round(l.amount * STROOPS))),
+          spendCounter: String(base + i),
+          membership,
+        };
+      });
+      const gCtx: BatchContext = {
+        validAfter,
+        validBefore: String(now + 86400),
+        runningSpend: g.accum.runningSpend,
+        priorCount: g.accum.priorCount,
+        anchorR2: g.accum.anchorR2,
+        anchorR7: g.accum.anchorR7,
+      };
+      const gProof = await createBatchProof(g.policy, gReleases, gCtx, {
+        wasmPath: WASM,
+        zkeyPath: ZKEY,
+      });
+      globalField = {
+        commitment: gProof.commitment.toString('hex'),
+        nullifiers: gProof.nullifiers.map((n) => n.toString('hex')),
+        resetR2: gProof.resetR2,
+        resetR7: gProof.resetR7,
+        proof: {
+          a: gProof.proof.a.toString('hex'),
+          b: gProof.proof.b.toString('hex'),
+          c: gProof.proof.c.toString('hex'),
+        },
+      };
+      // Roll the global window forward for the next group, exactly like the primary.
+      g.accum.runningSpend = String(
+        (gProof.resetR2 ? 0n : BigInt(g.accum.runningSpend)) + groupStroops,
+      );
+      g.accum.priorCount = String(
+        (gProof.resetR7 ? 0 : Number(g.accum.priorCount)) + gReleases.length,
+      );
+      if (gProof.resetR2) g.accum.anchorR2 = validAfter;
+      if (gProof.resetR7) g.accum.anchorR7 = validAfter;
+    }
+
     // The keyless endpoint ignores the task meta (vaultTaskId/planCostUsdc/stepId);
-    // it draws from the user's balance directly, authorized by the proof. We reuse
-    // the same request builder for the proof/nullifier/payee mapping, add `global`
-    // (null until a global-private is set), and POST to the KEYLESS path: no
-    // delegate, no per-payment signature, settled synchronously (returns a tx hash).
+    // it draws from the user's balance directly, authorized by the proof(s). We reuse
+    // the request builder for the proof/nullifier/payee mapping, attach `global` when
+    // set, and POST to the KEYLESS path: no delegate, no per-payment signature,
+    // settled synchronously (returns a tx hash).
     const request = buildBatchReleaseRequest(proof, releases, ctx, {
       vaultTaskId: null,
       planCostUsdc: Number(groupStroops) / STROOPS,
-      stepId: (base + g) % 1_000_000,
+      stepId: (base + batchIdx) % 1_000_000,
     });
-    onPhase?.('relaying', { i: g + 1, n: groups.length });
+    onPhase?.('relaying', { i: batchIdx + 1, n: groups.length });
     const resp = await apiPost<{ txHash: string }>('/vault/batch-release-keyless', {
       ...request,
-      global: null,
+      global: globalField,
     });
     txHashes.push(resp.txHash);
     // Advance the local accumulator for the next group using the PROVEN reset flags

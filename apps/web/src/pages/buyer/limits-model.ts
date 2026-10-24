@@ -261,6 +261,28 @@ export async function resolvePinnedBundle(p: {
 }
 
 /**
+ * Resolve the bundle (rules + salt) for the account's global-private rule, so a
+ * private spend can emit the SECOND proof the vault requires against it. Returns
+ * null when no global-private is set, or (importantly) when it is set but its bundle
+ * cannot be proven on this device, so the caller can surface a clear error rather
+ * than proving-then-failing with GlobalProofRequired.
+ */
+export async function resolveGlobalPrivateBundle(
+  policies: Array<{
+    commitment: string;
+    rules?: PolicyRules | null;
+    encryptedBackup?: string | null;
+  }>,
+  globalPrivateCommitment: string | null,
+): Promise<RuleBundle | null> {
+  if (!globalPrivateCommitment) return null;
+  const p = policies.find(
+    (x) => x.commitment.toLowerCase() === globalPrivateCommitment.toLowerCase(),
+  );
+  return p ? resolvePinnedBundle(p) : null;
+}
+
+/**
  * A readable summary of a saved limit for lists and pickers. Transparent limits
  * describe their server-held rule; private limits fall back to this device's
  * local copy, and only to "rule kept private" if there is none. Never a raw hash.

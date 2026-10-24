@@ -13,8 +13,13 @@ import {
   Layers,
 } from 'lucide-react';
 import { getPolicies, type Policy } from '../../lib/policies';
-import { getVault, getDelegate } from '../../lib/vault';
-import { describeSavedLimit, savedLimitBundleRules, resolvePinnedBundle } from './limits-model';
+import { getVault, getDelegate, getGlobals } from '../../lib/vault';
+import {
+  describeSavedLimit,
+  savedLimitBundleRules,
+  resolvePinnedBundle,
+  resolveGlobalPrivateBundle,
+} from './limits-model';
 import {
   proveAndReleaseBatch,
   PROOF_WIDTH,
@@ -120,13 +125,25 @@ export function DisbursePage() {
       const pinned = selectedPolicy ? await resolvePinnedBundle(selectedPolicy) : null;
       if (selectedPolicy && !pinned) {
         throw new Error(
-          'This limit was created on another device and has no backup, so it cannot be proven here. Re-create it on this device, or pick another.',
+          'This rule was created on another device and has no backup, so it cannot be proven here. Re-create it on this device, or pick another.',
         );
+      }
+      // If a global-private rule is set, the vault requires a SECOND proof against it.
+      const globals = await getGlobals();
+      let globalBundle: Awaited<ReturnType<typeof resolveGlobalPrivateBundle>> = null;
+      if (globals.privateCommitment) {
+        globalBundle = await resolveGlobalPrivateBundle(policies, globals.privateCommitment);
+        if (!globalBundle) {
+          throw new Error(
+            'Your global rule was created on another device and cannot be proven here. Re-create it on this device, or clear the global on the Rules tab.',
+          );
+        }
       }
       return proveAndReleaseBatch({
         bundle: pinned ?? undefined,
         ceilingUsdc: pinned ? undefined : Number(ceiling),
         bundleRules: pinned ? undefined : savedBundle,
+        globalBundle,
         recipients,
         onPhase: (p, batch) => {
           if (p === 'done') {

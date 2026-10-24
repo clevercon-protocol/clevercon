@@ -25,6 +25,7 @@ import {
   getDelegate,
   getManagedSession,
   managedSessionPay,
+  getGlobals,
   type ManagedSession,
 } from '../../lib/vault';
 import { getServices } from '../../lib/services';
@@ -32,7 +33,12 @@ import { getPolicies, type Policy } from '../../lib/policies';
 import { getTasks, createTask, planInstruction, type HireMode } from '../../lib/tasks';
 import { proveAndReleaseBatch } from '../../lib/prove';
 import { Card, CardHeader, EmptyState, PageHeader, controls } from '../../components/ui';
-import { describeSavedLimit, resolvePinnedBundle, getDefaultLimitId } from './limits-model';
+import {
+  describeSavedLimit,
+  resolvePinnedBundle,
+  resolveGlobalPrivateBundle,
+  getDefaultLimitId,
+} from './limits-model';
 
 const inputCls = controls.field;
 const primaryBtn = controls.primary;
@@ -541,6 +547,21 @@ export function CommandChat() {
         });
         return;
       }
+      // If a global-private rule is set, the vault requires a SECOND proof against it.
+      const globals = await getGlobals();
+      let globalBundle: Awaited<ReturnType<typeof resolveGlobalPrivateBundle>> = null;
+      if (globals.privateCommitment) {
+        globalBundle = await resolveGlobalPrivateBundle(policies, globals.privateCommitment);
+        if (!globalBundle) {
+          push({
+            id: nextId(),
+            role: 'agent',
+            ok: false,
+            text: 'Your global rule was created on another device and cannot be proven here. Re-create it on this device, or clear the global on the Rules tab.',
+          });
+          return;
+        }
+      }
       push({
         id: nextId(),
         role: 'agent',
@@ -548,6 +569,7 @@ export function CommandChat() {
       });
       const result = await proveAndReleaseBatch({
         bundle: pinned,
+        globalBundle,
         recipients: plan.lines.map((l) => ({ payee: l.payee, amount: l.amount })),
       });
       qc.invalidateQueries({ queryKey: ['tasks'] });

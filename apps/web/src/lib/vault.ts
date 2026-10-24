@@ -115,6 +115,50 @@ export async function unpinCommitment(commitment: string): Promise<{ txHash: str
   return apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
 }
 
+// ── Global rules (AND-filter applied to every spend in a lane) ─────────────────
+
+export interface PublicGlobalScope {
+  perPaymentMaxUsdc: number;
+  allowlist: string[];
+  denylist: string[];
+  expiry: number;
+}
+export interface GlobalsState {
+  /** The global-private rule's commitment (hex), or null if none set. */
+  privateCommitment: string | null;
+  /** The cleartext public global scope, or null if none set. */
+  publicScope: PublicGlobalScope | null;
+}
+
+/** The user's current globals (one per lane). */
+export async function getGlobals(): Promise<GlobalsState> {
+  if (isDemo()) return { privateCommitment: null, publicScope: null };
+  return apiFetch<GlobalsState>('/vault/globals');
+}
+
+async function signAndSubmitBuild(path: string, body: unknown): Promise<{ txHash: string }> {
+  const built = await apiPost<BuildResp>(path, body);
+  const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
+  return apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
+}
+
+/** Make a PRIVATE rule the global-private (applies to every private spend; wallet-signed). */
+export function setGlobalPrivate(commitment: string): Promise<{ txHash: string }> {
+  return signAndSubmitBuild('/vault/global/private/set', { commitment });
+}
+/** Clear the global-private rule. */
+export function clearGlobalPrivate(): Promise<{ txHash: string }> {
+  return signAndSubmitBuild('/vault/global/private/clear', {});
+}
+/** Set the global-public cleartext scope (applies to every public spend; wallet-signed). */
+export function setGlobalPublic(scope: PublicGlobalScope): Promise<{ txHash: string }> {
+  return signAndSubmitBuild('/vault/global/public/set', scope);
+}
+/** Clear the global-public scope. */
+export function clearGlobalPublic(): Promise<{ txHash: string }> {
+  return signAndSubmitBuild('/vault/global/public/clear', {});
+}
+
 export interface ManagedSessionScope {
   budgetRemainingUsdc: number;
   expiry: number;

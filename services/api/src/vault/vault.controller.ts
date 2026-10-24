@@ -20,6 +20,15 @@ const amountSchema = z.object({ amountUsdc: z.number().positive() });
 const submitSchema = z.object({ signedXdr: z.string().min(1) });
 const pinSchema = z.object({ commitment: z.string().regex(/^[0-9a-fA-F]{64}$/) });
 const agentWalletSchema = z.object({ publicKey: z.string().min(1) });
+// A global-public rule: a cleartext AND-filter checked on every public (session)
+// spend. Each field is independently optional (0 cap / empty list / 0 expiry = no
+// constraint on that axis).
+const publicGlobalSchema = z.object({
+  perPaymentMaxUsdc: z.number().nonnegative(),
+  allowlist: z.array(z.string().min(1)).max(32),
+  denylist: z.array(z.string().min(1)).max(32),
+  expiry: z.number().int().nonnegative(),
+});
 
 const hex = z.string().regex(/^[0-9a-fA-F]+$/);
 // A pp/2 batch release: the client proved locally and POSTs this; the API relays
@@ -142,6 +151,40 @@ export class VaultController {
   @Get('pinned-commitments')
   pinnedCommitments(@CurrentUser() user: AuthUser) {
     return this.vault.getPinnedCommitments(user.userId);
+  }
+
+  // ── Global rules (AND-filter applied to every spend in a lane) ───────────────
+
+  /** The caller's current globals: the private commitment (hex) + the public scope. */
+  @Get('globals')
+  globals(@CurrentUser() user: AuthUser) {
+    return this.vault.getGlobals(user.userId);
+  }
+
+  /** Build the wallet-signed set_global(Private, commitment) XDR (make a rule global). */
+  @Post('global/private/set')
+  setGlobalPrivate(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { commitment } = parseBody(pinSchema, body);
+    return this.vault.buildSetGlobalPrivate(user.userId, commitment);
+  }
+
+  /** Build the wallet-signed clear_global(Private) XDR. */
+  @Post('global/private/clear')
+  clearGlobalPrivate(@CurrentUser() user: AuthUser) {
+    return this.vault.buildClearGlobalPrivate(user.userId);
+  }
+
+  /** Build the wallet-signed set_global_public(scope) XDR. */
+  @Post('global/public/set')
+  setGlobalPublic(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const scope = parseBody(publicGlobalSchema, body);
+    return this.vault.buildSetGlobalPublic(user.userId, scope);
+  }
+
+  /** Build the wallet-signed clear_global_public XDR. */
+  @Post('global/public/clear')
+  clearGlobalPublic(@CurrentUser() user: AuthUser) {
+    return this.vault.buildClearGlobalPublic(user.userId);
   }
 
   /**

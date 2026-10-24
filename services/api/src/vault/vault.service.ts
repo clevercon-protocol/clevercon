@@ -101,6 +101,50 @@ export class VaultService {
     return { xdr, networkPassphrase: this.contract.passphrase };
   }
 
+  // ── Global rules ─────────────────────────────────────────────────────────────
+
+  /** Build the wallet-signed set_global(Private, commitment) XDR (make a rule global). */
+  async buildSetGlobalPrivate(userId: string, commitmentHex: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildSetGlobalPrivateXdr(address, commitmentHex);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed clear_global(Private) XDR. */
+  async buildClearGlobalPrivate(userId: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildClearGlobalPrivateXdr(address);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed set_global_public(scope) XDR. */
+  async buildSetGlobalPublic(
+    userId: string,
+    scope: { perPaymentMaxUsdc: number; allowlist: string[]; denylist: string[]; expiry: number },
+  ) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildSetGlobalPublicXdr(address, scope);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed clear_global_public XDR. */
+  async buildClearGlobalPublic(userId: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildClearGlobalPublicXdr(address);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** The user's current globals (private commitment hex + public cleartext scope). */
+  async getGlobals(userId: string) {
+    if (!this.contract.active) return { privateCommitment: null, publicScope: null };
+    const address = await this.primaryAddress(userId);
+    const [privateCommitment, publicScope] = await Promise.all([
+      this.contract.readGlobalPrivate(address),
+      this.contract.readGlobalPublic(address),
+    ]);
+    return { privateCommitment, publicScope };
+  }
+
   /** The user's on-chain pinned-commitment set (hex), so the dapp can mark which rules are live. */
   async getPinnedCommitments(userId: string): Promise<{ commitments: string[] }> {
     if (!this.contract.active) return { commitments: [] };

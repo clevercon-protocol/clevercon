@@ -419,6 +419,126 @@ export class VaultContractService {
     ]);
   }
 
+  // ── Global rules (AND-filter applied to every spend in a lane) ───────────────
+
+  /** A soroban unit-variant enum (Lane) encodes as a 1-element vec of its symbol. */
+  private laneScVal(lane: 'Private' | 'Public'): xdr.ScVal {
+    return xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(lane)]);
+  }
+
+  /** Unsigned set_global(user, Private, commitment): pin a rule as the global-private. */
+  async buildSetGlobalPrivateXdr(userAddress: string, commitmentHex: string): Promise<string> {
+    this.ensureActive();
+    const bytes = Buffer.from(commitmentHex.replace(/^0x/, ''), 'hex');
+    return this.buildUnsignedXdr(userAddress, 'set_global', [
+      new Address(userAddress).toScVal(),
+      this.laneScVal('Private'),
+      xdr.ScVal.scvBytes(bytes),
+    ]);
+  }
+
+  /** Unsigned clear_global(user, Private). */
+  async buildClearGlobalPrivateXdr(userAddress: string): Promise<string> {
+    this.ensureActive();
+    return this.buildUnsignedXdr(userAddress, 'clear_global', [
+      new Address(userAddress).toScVal(),
+      this.laneScVal('Private'),
+    ]);
+  }
+
+  /** Read get_global(user, Private): the global-private commitment hex, or null. */
+  async readGlobalPrivate(userAddress: string): Promise<string | null> {
+    this.ensureActive();
+    const server = this.server();
+    const source = new Account(Keypair.random().publicKey(), '0');
+    const tx = new TransactionBuilder(source, { fee: BASE_FEE, networkPassphrase: this.passphrase })
+      .addOperation(
+        new Contract(this.contractId).call(
+          'get_global',
+          new Address(userAddress).toScVal(),
+          this.laneScVal('Private'),
+        ),
+      )
+      .setTimeout(300)
+      .build();
+    const sim = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(sim) || !sim.result?.retval) return null;
+    const val = scValToNative(sim.result.retval) as Buffer | Uint8Array | null;
+    return val ? Buffer.from(val).toString('hex') : null;
+  }
+
+  /** Unsigned set_global_public(user, scope): a cleartext AND-filter on public spends. */
+  async buildSetGlobalPublicXdr(
+    userAddress: string,
+    scope: { perPaymentMaxUsdc: number; allowlist: string[]; denylist: string[]; expiry: number },
+  ): Promise<string> {
+    this.ensureActive();
+    // PublicGlobal struct fields, sorted by symbol key.
+    const scopeVal = xdr.ScVal.scvMap([
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol('allowlist'),
+        val: xdr.ScVal.scvVec(scope.allowlist.map((a) => new Address(a).toScVal())),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol('denylist'),
+        val: xdr.ScVal.scvVec(scope.denylist.map((a) => new Address(a).toScVal())),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol('expiry'),
+        val: nativeToScVal(BigInt(scope.expiry), { type: 'u64' }),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol('per_payment_max'),
+        val: nativeToScVal(usdcToStroops(scope.perPaymentMaxUsdc), { type: 'i128' }),
+      }),
+    ]);
+    return this.buildUnsignedXdr(userAddress, 'set_global_public', [
+      new Address(userAddress).toScVal(),
+      scopeVal,
+    ]);
+  }
+
+  /** Unsigned clear_global_public(user). */
+  async buildClearGlobalPublicXdr(userAddress: string): Promise<string> {
+    this.ensureActive();
+    return this.buildUnsignedXdr(userAddress, 'clear_global_public', [
+      new Address(userAddress).toScVal(),
+    ]);
+  }
+
+  /** Read get_global_public(user): the cleartext public global scope, or null. */
+  async readGlobalPublic(userAddress: string): Promise<{
+    perPaymentMaxUsdc: number;
+    allowlist: string[];
+    denylist: string[];
+    expiry: number;
+  } | null> {
+    this.ensureActive();
+    const server = this.server();
+    const source = new Account(Keypair.random().publicKey(), '0');
+    const tx = new TransactionBuilder(source, { fee: BASE_FEE, networkPassphrase: this.passphrase })
+      .addOperation(
+        new Contract(this.contractId).call('get_global_public', new Address(userAddress).toScVal()),
+      )
+      .setTimeout(300)
+      .build();
+    const sim = await server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(sim) || !sim.result?.retval) return null;
+    const v = scValToNative(sim.result.retval) as {
+      per_payment_max: bigint | number;
+      allowlist: string[];
+      denylist: string[];
+      expiry: bigint | number;
+    } | null;
+    if (!v) return null;
+    return {
+      perPaymentMaxUsdc: Number(v.per_payment_max) / STROOPS_PER_USDC,
+      allowlist: v.allowlist,
+      denylist: v.denylist,
+      expiry: Number(v.expiry),
+    };
+  }
+
   /**
    * Read the user's bounded set of pinned policy commitments (`get_policy_commitments`)
    * as hex strings, so the dapp can show which saved rules are actually pinned

@@ -18,6 +18,7 @@ import {
   X,
   Lock,
   Check,
+  Globe,
 } from 'lucide-react';
 import { getPolicies, createPolicy, deletePolicy, type Policy } from '../../lib/policies';
 import {
@@ -26,6 +27,12 @@ import {
   getPinnedCommitments,
   getManagedSession,
   enableManagedSession,
+  getGlobals,
+  setGlobalPrivate,
+  clearGlobalPrivate,
+  setGlobalPublic,
+  clearGlobalPublic,
+  type PublicGlobalScope,
 } from '../../lib/vault';
 import { computePolicyCommitment } from '../../lib/prove';
 import { encryptRuleBundle } from '../../lib/rule-backup';
@@ -191,10 +198,11 @@ export function RuleBuilder({ value, onChange }: { value: Draft; onChange: (d: D
         </div>
         {!value.isPrivate && (
           <p className="mt-1.5 text-[11px] leading-relaxed text-sky-300/80">
-            A public rule is a <span className="font-medium">Managed Session</span>: the server signs
-            within this scope hands-off, bounded on-chain by the budget, allowlist, and expiry.
-            Saving it prompts your wallet once to authorize the scope; revoke it any time on the
-            Vault tab. There is one Managed Session per account, so saving replaces the current one.
+            A public rule is a <span className="font-medium">Managed Session</span>: the server
+            signs within this scope hands-off, bounded on-chain by the budget, allowlist, and
+            expiry. Saving it prompts your wallet once to authorize the scope; revoke it any time on
+            the Vault tab. There is one Managed Session per account, so saving replaces the current
+            one.
           </p>
         )}
       </div>
@@ -510,7 +518,13 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 
 type Reveal =
   | { kind: 'private'; commitment: string; salt: string; bundleJson: string }
-  | { kind: 'public'; sessionPublicKey: string; budgetUsdc: number; payees: number; expiry: number };
+  | {
+      kind: 'public';
+      sessionPublicKey: string;
+      budgetUsdc: number;
+      payees: number;
+      expiry: number;
+    };
 
 /**
  * Shown once right after a rule is created. Private: the salt (the only secret) +
@@ -526,8 +540,8 @@ function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void })
           <Eye size={16} className="mt-0.5 shrink-0 text-sky-300" />
           <p className="text-[12.5px] leading-relaxed text-slate-300">
             Managed Session active. The server now signs within this scope hands-off, with no
-            per-payment signature, and the vault enforces it. There is no secret to copy: the key
-            is server-held and bounded on-chain. Spend via your agent or automation, and manage or
+            per-payment signature, and the vault enforces it. There is no secret to copy: the key is
+            server-held and bounded on-chain. Spend via your agent or automation, and manage or
             revoke it any time on the Vault tab.
           </p>
         </div>
@@ -542,13 +556,14 @@ function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void })
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-wider text-slate-500">Expires</div>
-            <div className="text-slate-300">
-              {new Date(reveal.expiry * 1000).toLocaleString()}
-            </div>
+            <div className="text-slate-300">{new Date(reveal.expiry * 1000).toLocaleString()}</div>
           </div>
           <div className="min-w-0">
             <div className="text-[10px] uppercase tracking-wider text-slate-500">Session key</div>
-            <div className="truncate font-mono text-[11px] text-slate-400" title={reveal.sessionPublicKey}>
+            <div
+              className="truncate font-mono text-[11px] text-slate-400"
+              title={reveal.sessionPublicKey}
+            >
               {reveal.sessionPublicKey.slice(0, 8)}…{reveal.sessionPublicKey.slice(-6)}
             </div>
           </div>
@@ -612,6 +627,10 @@ function RuleCard({
   onDuplicate,
   onDelete,
   pinBusy,
+  isGlobal,
+  onMakeGlobal,
+  onClearGlobal,
+  globalBusy,
 }: {
   p: Policy;
   isDefault: boolean;
@@ -623,6 +642,10 @@ function RuleCard({
   onDuplicate: () => void;
   onDelete: () => void;
   pinBusy: boolean;
+  isGlobal: boolean;
+  onMakeGlobal: () => void;
+  onClearGlobal: () => void;
+  globalBusy: boolean;
 }) {
   const priv = p.form ? p.form === 'private' : p.isPrivate;
   const form: RuleForm = priv ? 'private' : 'public';
@@ -681,6 +704,14 @@ function RuleCard({
                   className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-300"
                 >
                   Default
+                </span>
+              )}
+              {isGlobal && (
+                <span
+                  title="Global-private: this rule is AND-applied to EVERY private spend, on top of whatever rule you pick."
+                  className="inline-flex items-center gap-1 rounded bg-fuchsia-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-fuchsia-300"
+                >
+                  <Globe size={9} /> Global
                 </span>
               )}
             </div>
@@ -756,6 +787,21 @@ function RuleCard({
           </button>
         )}
         <div className="flex shrink-0 items-center gap-1">
+          {priv && (
+            <button
+              onClick={isGlobal ? onClearGlobal : onMakeGlobal}
+              disabled={globalBusy}
+              title={
+                isGlobal
+                  ? 'Clear as the global-private rule'
+                  : 'Make global: AND-apply this rule to every private spend (wallet signs set_global)'
+              }
+              aria-label={isGlobal ? 'Clear global' : 'Make global'}
+              className={`rounded-md p-1.5 hover:bg-white/[0.06] disabled:opacity-40 ${isGlobal ? 'text-fuchsia-300' : 'text-slate-500 hover:text-fuchsia-300'}`}
+            >
+              <Globe size={14} />
+            </button>
+          )}
           <button
             onClick={onEdit}
             title="Edit (saves a new version)"
@@ -783,6 +829,115 @@ function RuleCard({
         </div>
       </div>
     </Card>
+  );
+}
+
+/**
+ * The global-public rule: a cleartext AND-filter the vault checks on every public
+ * (Managed Session) spend, on top of the session's own scope. A master per-payment
+ * cap + denylist + expiry that can only tighten. Wallet-signed set/clear.
+ */
+function PublicGlobalEditor({ current }: { current: PublicGlobalScope | null }) {
+  const qc = useQueryClient();
+  const [cap, setCap] = useState('');
+  const [deny, setDeny] = useState('');
+  const [expiryHours, setExpiryHours] = useState('');
+  useEffect(() => {
+    setCap(current && current.perPaymentMaxUsdc > 0 ? String(current.perPaymentMaxUsdc) : '');
+    setDeny(current ? current.denylist.join('\n') : '');
+    setExpiryHours(
+      current && current.expiry > 0
+        ? String(Math.max(0, Math.round((current.expiry * 1000 - Date.now()) / 3_600_000)))
+        : '',
+    );
+  }, [current]);
+
+  const set = useMutation({
+    mutationFn: () => {
+      const denylist = deny
+        .split(/[\s,]+/)
+        .map((a) => a.trim())
+        .filter(Boolean);
+      for (const a of denylist) {
+        if (!isStellarAddr(a)) throw new Error(`Not a valid address: ${a}`);
+      }
+      const hours = Number(expiryHours);
+      const scope: PublicGlobalScope = {
+        perPaymentMaxUsdc: Number(cap) > 0 ? Number(cap) : 0,
+        allowlist: [],
+        denylist,
+        expiry: hours > 0 ? Math.floor(Date.now() / 1000) + Math.round(hours * 3600) : 0,
+      };
+      return setGlobalPublic(scope);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['globals'] }),
+  });
+  const clear = useMutation({
+    mutationFn: () => clearGlobalPublic(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['globals'] }),
+  });
+
+  return (
+    <div className="mt-3 rounded-xl border border-fuchsia-500/20 bg-fuchsia-500/[0.04] p-3">
+      <div className="flex items-center gap-1.5 text-[12px] font-medium text-fuchsia-200">
+        <Globe size={13} /> Global-public rule {current ? '(active)' : '(none)'}
+      </div>
+      <p className="mt-1 text-[11.5px] leading-relaxed text-slate-400">
+        A cleartext filter AND-applied to every public (Managed Session) spend, on top of the
+        session scope. It can only tighten.
+      </p>
+      <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
+        <label className="block">
+          <span className="mb-1 block text-xs text-slate-400">
+            Per-payment cap (USDC, 0 = none)
+          </span>
+          <input
+            value={cap}
+            onChange={(e) => setCap(e.target.value.replace(/[^0-9.]/g, ''))}
+            inputMode="decimal"
+            placeholder="e.g. 25"
+            className={inputCls}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs text-slate-400">Expires in (hours, 0 = never)</span>
+          <input
+            value={expiryHours}
+            onChange={(e) => setExpiryHours(e.target.value.replace(/[^0-9]/g, ''))}
+            inputMode="numeric"
+            placeholder="e.g. 168"
+            className={inputCls}
+          />
+        </label>
+      </div>
+      <label className="mt-2.5 block">
+        <span className="mb-1 block text-xs text-slate-400">Denylist (one address per line)</span>
+        <textarea
+          value={deny}
+          onChange={(e) => setDeny(e.target.value)}
+          rows={2}
+          placeholder="G… addresses that public spends may never pay"
+          className={`${inputCls} font-mono text-[11px]`}
+        />
+      </label>
+      <div className="mt-2.5 flex items-center justify-end gap-2">
+        {current && (
+          <button
+            onClick={() => clear.mutate()}
+            disabled={clear.isPending}
+            className={controls.secondary + ' !px-3 !py-1.5'}
+          >
+            {clear.isPending ? 'Clearing…' : 'Clear'}
+          </button>
+        )}
+        <button onClick={() => set.mutate()} disabled={set.isPending} className={primaryBtn}>
+          {set.isPending ? 'Signing…' : current ? 'Update global' : 'Set global'}
+        </button>
+      </div>
+      {(set.error || clear.error) && (
+        <p className="mt-2 text-sm text-red-400">{errMsg(set.error || clear.error)}</p>
+      )}
+    </div>
   );
 }
 
@@ -814,6 +969,19 @@ export function RulesManager() {
   // budget + allowlist + expiry) - the plan's public lane. Surface it here so the
   // public view shows the real thing, not an orphan "public policy".
   const { data: managed } = useQuery({ queryKey: ['managed-session'], queryFn: getManagedSession });
+  // The account's globals (one per lane). The private global's commitment marks which
+  // card carries the Global badge; AND-applied to every private spend.
+  const { data: globals } = useQuery({ queryKey: ['globals'], queryFn: getGlobals });
+  const globalPrivate = globals?.privateCommitment?.toLowerCase() ?? null;
+
+  const makeGlobal = useMutation({
+    mutationFn: (commitment: string) => setGlobalPrivate(commitment),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['globals'] }),
+  });
+  const clearGlobal = useMutation({
+    mutationFn: () => clearGlobalPrivate(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['globals'] }),
+  });
 
   const toggleDefault = (id: string) => {
     const next = defaultId === id ? '' : id;
@@ -857,11 +1025,7 @@ export function RulesManager() {
       if (!draft.isPrivate) {
         const budget = Number(draft.publicBudget);
         const hours = Number(draft.publicExpiryHours);
-        const res = await enableManagedSession(
-          budget,
-          draft.allowlist,
-          Math.round(hours * 3600),
-        );
+        const res = await enableManagedSession(budget, draft.allowlist, Math.round(hours * 3600));
         return { kind: 'public' as const, res, budget };
       }
       // PRIVATE: pin the CANONICAL pp/2 commitment from the full bundle + a stable
@@ -1036,6 +1200,7 @@ export function RulesManager() {
               </div>
             </div>
           )}
+          <PublicGlobalEditor current={globals?.publicScope ?? null} />
         </div>
       )}
 
@@ -1070,6 +1235,10 @@ export function RulesManager() {
                 del.mutate(p.id);
             }}
             pinBusy={pin.isPending || unpin.isPending}
+            isGlobal={globalPrivate === p.commitment.toLowerCase()}
+            onMakeGlobal={() => makeGlobal.mutate(p.commitment)}
+            onClearGlobal={() => clearGlobal.mutate()}
+            globalBusy={makeGlobal.isPending || clearGlobal.isPending}
           />
         ))}
       </div>
@@ -1078,6 +1247,9 @@ export function RulesManager() {
         <p className="mt-3 text-sm text-red-400">{errMsg(pin.error || unpin.error)}</p>
       )}
       {del.error && <p className="mt-3 text-sm text-red-400">{errMsg(del.error)}</p>}
+      {(makeGlobal.error || clearGlobal.error) && (
+        <p className="mt-3 text-sm text-red-400">{errMsg(makeGlobal.error || clearGlobal.error)}</p>
+      )}
 
       {open && (
         <Modal
