@@ -101,8 +101,7 @@ export class VaultContractService {
     // Keyless releases submit via a fee-payer that has NO authority over funds
     // (the proof authorizes). Falls back to the admin account when no dedicated
     // relayer is configured, so the Sovereign private path works out of the box.
-    this.relayerKey =
-      (config.get('RELAYER_SECRET_KEY', { infer: true }) ?? '') || this.adminKey;
+    this.relayerKey = (config.get('RELAYER_SECRET_KEY', { infer: true }) ?? '') || this.adminKey;
     this.passphrase = config.get('NETWORK_PASSPHRASE', { infer: true });
     this.active = this.contractId.length > 10 && !this.contractId.startsWith('C...');
     if (!this.active) {

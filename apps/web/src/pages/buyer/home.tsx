@@ -17,28 +17,22 @@ import {
   ListChecks,
   ArrowRight,
   SlidersHorizontal,
+  Lock,
 } from 'lucide-react';
 import { isDemo } from '../../config';
-import { getVault, getDelegate } from '../../lib/vault';
+import {
+  getVault,
+  getDelegate,
+  getManagedSession,
+  managedSessionPay,
+  type ManagedSession,
+} from '../../lib/vault';
 import { getServices } from '../../lib/services';
-import { getPolicies, createPolicy, type Policy } from '../../lib/policies';
+import { getPolicies, type Policy } from '../../lib/policies';
 import { getTasks, createTask, planInstruction, type HireMode } from '../../lib/tasks';
 import { proveAndReleaseBatch } from '../../lib/prove';
 import { Card, CardHeader, EmptyState, PageHeader, controls } from '../../components/ui';
-import { RuleBuilder } from './rules';
-import {
-  describeRules,
-  describeSavedLimit,
-  draftToRules,
-  draftToBundleRules,
-  savedLimitBundleRules,
-  resolvePinnedBundle,
-  emptyDraft,
-  getDefaultLimitId,
-  LIMIT_CACHE_PREFIX,
-  type Draft,
-} from './limits-model';
-import type { PolicyBundleRules } from '@clevercon/agent-sdk/prover';
+import { describeSavedLimit, resolvePinnedBundle, getDefaultLimitId } from './limits-model';
 
 const inputCls = controls.field;
 const primaryBtn = controls.primary;
@@ -98,11 +92,12 @@ function VaultStrip() {
 type Applied = { label: string; isPrivate: boolean };
 // How that limit binds to the task: an existing saved limit (policyId), an ad-hoc
 // custom rule (draft, saved-and-bound on approval), or nothing (budget only).
-type Bind = { policyId?: string; draft?: Draft };
+type Bind = { policyId?: string };
 type Line = { payee: string; amount: string; reason: string };
 type PlanLine = { payee: string; amount: number; reason?: string };
 type Plan = {
   kind: 'pay' | 'disburse' | 'hire';
+  lane: 'private' | 'public';
   summary: string;
   lines: PlanLine[];
   limit: Applied;
@@ -116,14 +111,97 @@ type Msg =
   | { id: number; role: 'agent'; text: string; ok?: boolean };
 
 const short = (a: string) => (a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
-const hasRule = (d: Draft) => !!d.perPaymentCeiling || !!d.rollingCap || d.allowlist.length > 0;
-
-// 'default' = the owner's default (or budget-only if none); 'custom' = the builder
-// below; 'none' = budget-only; otherwise a saved limit's id.
-type LimitChoice = 'default' | 'custom' | 'none' | string;
 
 const AGENT_INTRO =
-  "I'm your spending agent. Tell me what to do with your budget, or use a quick action. I'll propose a plan and you approve before anything moves. The vault enforces the limit you pick, so I can never overspend or pay outside your rules.";
+  "I'm your spending agent. Tell me what to do with your budget, or use a quick action. I'll propose a plan and you approve before anything moves. The vault enforces the rule you pick, so I can never overspend or pay outside it.";
+
+/**
+ * The lane toggle + rule selector shared by the NL composer and the quick-action
+ * composer. Private (default) is a ZK-proven, keyless spend under a pinned rule you
+ * created; public is the single Managed Session's on-chain scope. Only user-created
+ * rules are selectable, filtered by lane.
+ */
+function RuleLanePicker({
+  lane,
+  setLane,
+  ruleId,
+  setRuleId,
+  privateRules,
+  sessionActive,
+  managed,
+  applied,
+}: {
+  lane: 'private' | 'public';
+  setLane: (l: 'private' | 'public') => void;
+  ruleId: string;
+  setRuleId: (id: string) => void;
+  privateRules: Policy[];
+  sessionActive: boolean;
+  managed: ManagedSession | undefined;
+  applied: Applied;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-300">
+          <SlidersHorizontal size={13} className="text-violet-300" /> Enforced rule
+        </span>
+        <div className="inline-flex rounded-lg bg-black/30 p-0.5 text-xs">
+          <button
+            type="button"
+            onClick={() => setLane('private')}
+            className={`flex items-center gap-1 rounded-md px-2 py-1 ${lane === 'private' ? 'bg-violet-500/25 text-violet-200' : 'text-slate-400 hover:text-slate-200'}`}
+          >
+            <Lock size={11} /> Private
+          </button>
+          <button
+            type="button"
+            onClick={() => setLane('public')}
+            className={`flex items-center gap-1 rounded-md px-2 py-1 ${lane === 'public' ? 'bg-sky-500/25 text-sky-200' : 'text-slate-400 hover:text-slate-200'}`}
+          >
+            <Eye size={11} /> Public
+          </button>
+        </div>
+        {lane === 'private' ? (
+          privateRules.length ? (
+            <select
+              value={ruleId}
+              onChange={(e) => setRuleId(e.target.value)}
+              className="cc-input max-w-[17rem] flex-1 !py-1.5 text-sm"
+              aria-label="Private rule the vault enforces"
+            >
+              {privateRules.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name || describeSavedLimit(p)}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="text-xs text-amber-300/80">No private rule yet</span>
+          )
+        ) : (
+          <span className="text-xs text-slate-400">
+            {sessionActive
+              ? `Managed Session · ${managed!.session!.budgetRemainingUsdc.toFixed(2)} USDC left · ${managed!.session!.allowlist.length} payee(s)`
+              : 'No Managed Session yet'}
+          </span>
+        )}
+        <Link to="/app/rules" className="text-xs text-violet-300 hover:text-violet-200">
+          Manage rules
+        </Link>
+      </div>
+      <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-slate-500">
+        <ShieldCheck size={13} className="mt-0.5 shrink-0 text-violet-300" />
+        <span>
+          The vault enforces <span className="text-slate-300">{applied.label}</span>
+          {lane === 'private'
+            ? ', keyless and on-chain: your rule stays private and only you can prove a spend.'
+            : ', on-chain via your Managed Session, hands-off within its scope.'}
+        </span>
+      </p>
+    </div>
+  );
+}
 
 export function CommandChat() {
   const qc = useQueryClient();
@@ -149,9 +227,14 @@ export function CommandChat() {
   const [serviceId, setServiceId] = useState('');
   const [budget, setBudget] = useState('');
 
-  // Limit for the next instruction. Sticky across instructions (not reset after send).
-  const [limitChoice, setLimitChoice] = useState<LimitChoice>('default');
-  const [customDraft, setCustomDraft] = useState<Draft>(emptyDraft());
+  // Which lane the vault enforces this spend in: private (a ZK proof hides the rule,
+  // keyless, the safe default) or public (the Managed Session's on-chain scope,
+  // hands-off). Sticky across instructions.
+  const [lane, setLane] = useState<'private' | 'public'>('private');
+  // The selected PRIVATE rule (a user-created, pinned policy). No 'default'/'none'/
+  // 'custom': only a rule you created ever governs a spend. Public spending is the
+  // single Managed Session, so it needs no per-instruction rule pick.
+  const [ruleId, setRuleId] = useState<string>('');
 
   // Natural-language box: the agent parses it into a plan you then approve.
   const [nl, setNl] = useState('');
@@ -163,28 +246,36 @@ export function CommandChat() {
   const services = servicePage?.items ?? [];
   const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
   const { data: vaultData } = useQuery({ queryKey: ['vault'], queryFn: getVault });
-  const defaultPolicy = policies.find((p) => p.id === getDefaultLimitId());
+  const { data: managed } = useQuery({
+    queryKey: ['managed-session'],
+    queryFn: getManagedSession,
+  });
 
-  // Resolve the current selection to (a) what the vault enforces, and (b) how it binds.
-  const resolvedPolicyId =
-    limitChoice === 'default'
-      ? defaultPolicy?.id
-      : limitChoice === 'custom' || limitChoice === 'none'
-        ? undefined
-        : limitChoice;
+  // Only user-created PRIVATE rules are selectable (public spending is the Managed
+  // Session, not a per-instruction rule). Default the pick to the account default if
+  // it is private, else the first private rule.
+  const privateRules = policies.filter((p) => p.form === 'private' || (!p.form && p.isPrivate));
+  const defaultPrivateId =
+    privateRules.find((p) => p.id === getDefaultLimitId())?.id ?? privateRules[0]?.id ?? '';
+  const effectiveRuleId = privateRules.some((p) => p.id === ruleId) ? ruleId : defaultPrivateId;
+  const selectedRule = privateRules.find((p) => p.id === effectiveRuleId);
+  const sessionActive = !!managed?.session && managed.session.expiry * 1000 > Date.now();
 
+  // What the vault will enforce for the next instruction, as a short label.
   const applied: Applied = (() => {
-    if (limitChoice === 'custom')
+    if (lane === 'public') {
       return {
-        label: describeRules(draftToRules(customDraft).rules),
-        isPrivate: customDraft.isPrivate,
+        label: sessionActive
+          ? `Managed Session · ${managed!.session!.budgetRemainingUsdc.toFixed(2)} USDC left`
+          : 'no Managed Session yet',
+        isPrivate: false,
       };
-    if (limitChoice === 'none') return { label: 'within budget only', isPrivate: false };
-    const p: Policy | undefined =
-      limitChoice === 'default' ? defaultPolicy : policies.find((x) => x.id === limitChoice);
-    if (p) return { label: describeSavedLimit(p), isPrivate: p.isPrivate };
-    return { label: 'within budget only', isPrivate: false };
+    }
+    if (selectedRule) return { label: describeSavedLimit(selectedRule), isPrivate: true };
+    return { label: 'no private rule yet', isPrivate: true };
   })();
+  // Whether the current lane is ready to spend (a rule selected, or a live session).
+  const laneReady = lane === 'public' ? sessionActive : !!selectedRule;
 
   const hire = useMutation({
     mutationFn: (p: { title: string; serviceId: string; budget: number; policyId?: string }) =>
@@ -232,6 +323,7 @@ export function CommandChat() {
         status: 'pending',
         plan: {
           kind: 'hire',
+          lane,
           summary: `Hire ${result.service.name} (budget $${result.budget.toFixed(2)})`,
           lines: [{ payee: result.service.name, amount: result.budget, reason: 'service' }],
           limit: appliedLimit,
@@ -253,6 +345,7 @@ export function CommandChat() {
         status: 'pending',
         plan: {
           kind: result.kind,
+          lane,
           summary:
             result.kind === 'pay'
               ? `Pay ${short(lines[0].payee)} $${lines[0].amount.toFixed(2)}`
@@ -285,8 +378,8 @@ export function CommandChat() {
   }
 
   function currentBind(): Bind {
-    if (limitChoice === 'custom') return hasRule(customDraft) ? { draft: customDraft } : {};
-    return { policyId: resolvedPolicyId };
+    // Private binds the selected pinned rule; public spends under the Managed Session.
+    return lane === 'private' ? { policyId: effectiveRuleId || undefined } : {};
   }
 
   function propose() {
@@ -299,6 +392,7 @@ export function CommandChat() {
       if (!payee.trim() || !(amt > 0)) return;
       plan = {
         kind: 'pay',
+        lane,
         summary: `Pay ${short(payee.trim())} $${amt.toFixed(2)}`,
         lines: [{ payee: payee.trim(), amount: amt, reason: reason.trim() || undefined }],
         limit: applied,
@@ -317,6 +411,7 @@ export function CommandChat() {
       const total = valid.reduce((s, l) => s + l.amount, 0);
       plan = {
         kind: 'disburse',
+        lane,
         summary: `Disburse $${total.toFixed(2)} to ${valid.length} recipient${valid.length > 1 ? 's' : ''}`,
         lines: valid,
         limit: applied,
@@ -329,6 +424,7 @@ export function CommandChat() {
       if (!svc || !(bud > 0)) return;
       plan = {
         kind: 'hire',
+        lane,
         summary: `Hire ${svc.name} (budget $${bud.toFixed(2)})`,
         lines: [{ payee: svc.name, amount: bud, reason: 'service' }],
         limit: applied,
@@ -350,43 +446,11 @@ export function CommandChat() {
     setMessages((m) => m.map((x) => (x.role === 'plan' && x.id === id ? { ...x, status } : x)));
   }
 
-  // Turn the plan's binding into a concrete policy id: an existing saved limit, or
-  // a fresh policy created from an ad-hoc custom rule (so custom limits bind too).
-  async function resolveBinding(bind: Bind): Promise<string | undefined> {
-    if (bind.policyId) return bind.policyId;
-    if (bind.draft && hasRule(bind.draft)) {
-      const { rules, isPrivate } = draftToRules(bind.draft);
-      const p = await createPolicy(rules, isPrivate);
-      if (isPrivate) {
-        try {
-          localStorage.setItem(LIMIT_CACHE_PREFIX + p.commitment, JSON.stringify(bind.draft));
-        } catch {
-          // ignore
-        }
-      }
-      qc.invalidateQueries({ queryKey: ['policies'] });
-      return p.id;
-    }
-    return undefined;
-  }
-
-  // The browser-side prover rules behind a plan's binding: an ad-hoc custom draft,
-  // or a saved limit (its device-local draft, else the server rule). Null means no
-  // rule beyond the ceiling the caller derives, so the proof enforces the ceiling only.
-  function bindToBundleRules(bind: Bind): PolicyBundleRules | null {
-    if (bind.draft) return draftToBundleRules(bind.draft);
-    if (bind.policyId) {
-      const p = policies.find((x) => x.id === bind.policyId);
-      return p ? savedLimitBundleRules(p) : null;
-    }
-    return null;
-  }
-
   async function approve(id: number, plan: Plan) {
     setPlanStatus(id, 'approved');
     if (plan.kind === 'hire' && plan.serviceId) {
       try {
-        const policyId = await resolveBinding(plan.bind);
+        const policyId = plan.bind.policyId;
         await hire.mutateAsync({
           title: `Hire ${plan.serviceName}`,
           serviceId: plan.serviceId,
@@ -409,16 +473,10 @@ export function CommandChat() {
       }
       return;
     }
-    // pay / disburse: a real, policy-bounded release from the vault, PROVEN HERE
-    // in the browser (pp/2) exactly like the Disburse page. Your rule never leaves
-    // this device; the server only relays the proof; the chain verifies it before
-    // the bounded delegate releases a cent.
+    // pay / disburse: a real, rule-bounded release from the vault.
     if (plan.kind !== 'pay' && plan.kind !== 'disburse') return;
 
-    // The only precondition the chain would fail on AFTER proving is the balance:
-    // the private path is now KEYLESS (the proof + your pinned rule authorize it, a
-    // fee-payer relayer only submits), so there is nothing to register. Guide on
-    // balance instead of proving-then-failing.
+    // The only precondition the chain would fail on AFTER proving is the balance.
     const planTotal = plan.lines.reduce((s, l) => s + l.amount, 0);
     if (planTotal > (vaultData?.available ?? 0)) {
       push({
@@ -430,43 +488,66 @@ export function CommandChat() {
       return;
     }
 
-    try {
-      // A bound saved limit is proven as its EXACT committed bundle (rules + stable
-      // salt), so the proof reproduces the on-chain pinned commitment the vault
-      // requires. An ad-hoc custom draft (or no binding) is not pinnable and proves
-      // under a fresh salt (fails closed on the pinned-set vault).
-      let pinned: Awaited<ReturnType<typeof resolvePinnedBundle>> = null;
-      if (plan.bind.policyId) {
-        const p = policies.find((x) => x.id === plan.bind.policyId);
-        pinned = p ? await resolvePinnedBundle(p) : null;
-        if (p && !pinned) {
-          push({
-            id: nextId(),
-            role: 'agent',
-            ok: false,
-            text: 'That limit was created on another device and has no backup, so it cannot be proven here. Re-create it on this device, or pick another.',
-          });
-          return;
+    // PUBLIC lane: spend hands-off under the Managed Session (the server signs within
+    // its on-chain scope; no proof, no wallet prompt, instant).
+    if (plan.lane === 'public') {
+      try {
+        push({ id: nextId(), role: 'agent', text: 'Spending under your Managed Session…' });
+        for (const l of plan.lines) {
+          await managedSessionPay(l.payee, l.amount);
         }
+        qc.invalidateQueries({ queryKey: ['tasks'] });
+        qc.invalidateQueries({ queryKey: ['vault'] });
+        qc.invalidateQueries({ queryKey: ['managed-session'] });
+        push({
+          id: nextId(),
+          role: 'agent',
+          ok: true,
+          text: `Sent $${planTotal.toFixed(2)} across ${plan.lines.length} payment${plan.lines.length > 1 ? 's' : ''} under your Managed Session. Watch it settle in Activity.`,
+        });
+      } catch (e) {
+        push({
+          id: nextId(),
+          role: 'agent',
+          ok: false,
+          text: e instanceof Error ? e.message : 'Could not send under the Managed Session.',
+        });
       }
-      const bundleRules = pinned ? null : bindToBundleRules(plan.bind);
-      // R1 is always proven. Use the limit's ceiling if it set one; otherwise the
-      // largest line, so "within budget only" plans still satisfy the per-payment
-      // check without an artificial cap.
-      const maxLine = Math.max(...plan.lines.map((l) => l.amount));
-      const ceiling =
-        bundleRules?.perPaymentCeilingUsdc && bundleRules.perPaymentCeilingUsdc > 0
-          ? bundleRules.perPaymentCeilingUsdc
-          : maxLine;
+      return;
+    }
+
+    // PRIVATE lane: KEYLESS, client-proven release under your pinned rule. The rule
+    // never leaves this device; the proof + the pinned commitment + a fresh nullifier
+    // authorize it on-chain, a fee-payer relayer only submits. One wallet signature,
+    // up front, pinned the rule; nothing signs per payment.
+    try {
+      const p = plan.bind.policyId ? policies.find((x) => x.id === plan.bind.policyId) : undefined;
+      if (!p) {
+        push({
+          id: nextId(),
+          role: 'agent',
+          ok: false,
+          text: 'No private rule selected. Pick one above (or create one on the Rules tab).',
+        });
+        return;
+      }
+      const pinned = await resolvePinnedBundle(p);
+      if (!pinned) {
+        push({
+          id: nextId(),
+          role: 'agent',
+          ok: false,
+          text: 'That rule was created on another device and has no backup, so it cannot be proven here. Re-create it on this device, or pick another.',
+        });
+        return;
+      }
       push({
         id: nextId(),
         role: 'agent',
         text: 'Proving your plan in the browser with zero-knowledge (a few seconds)…',
       });
       const result = await proveAndReleaseBatch({
-        bundle: pinned ?? undefined,
-        ceilingUsdc: pinned ? undefined : ceiling,
-        bundleRules: pinned ? undefined : bundleRules,
+        bundle: pinned,
         recipients: plan.lines.map((l) => ({ payee: l.payee, amount: l.amount })),
       });
       qc.invalidateQueries({ queryKey: ['tasks'] });
@@ -475,7 +556,7 @@ export function CommandChat() {
         id: nextId(),
         role: 'agent',
         ok: true,
-        text: `Proved and sent $${result.total.toFixed(2)} across ${result.legs} payment${result.legs > 1 ? 's' : ''} in ${result.batches} on-chain proof${result.batches > 1 ? 's' : ''}${plan.limit.isPrivate ? ', with your rule kept private' : ''}. The chain verified each proof before releasing; watch it settle in Activity.`,
+        text: `Proved and sent $${result.total.toFixed(2)} across ${result.legs} payment${result.legs > 1 ? 's' : ''} in ${result.batches} on-chain proof${result.batches > 1 ? 's' : ''}, with your rule kept private. The chain verified each proof before releasing; watch it settle in Activity.`,
       });
     } catch (e) {
       push({
@@ -492,7 +573,7 @@ export function CommandChat() {
       <CardHeader
         icon={Sparkles}
         title="Tell your agent what to do"
-        hint="It proposes a plan; you approve; the vault enforces the limit you pick"
+        hint="It proposes a plan; you approve; the vault enforces the rule you pick"
       />
       <div className="flex flex-col p-5">
         {/* Conversation sits ABOVE the composer and auto-scrolls to the newest
@@ -549,50 +630,32 @@ export function CommandChat() {
               className="cc-input mt-1.5 min-h-[5.5rem] w-full resize-none text-base leading-relaxed"
             />
 
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-300">
-                <SlidersHorizontal size={13} className="text-violet-300" /> Enforced limit
-              </span>
-              <select
-                value={limitChoice}
-                onChange={(e) => setLimitChoice(e.target.value)}
-                className="cc-input max-w-[17rem] flex-1 !py-1.5 text-sm"
-                aria-label="Limit the vault enforces for this instruction"
-              >
-                <option value="default">
-                  {defaultPolicy
-                    ? `Default: ${defaultPolicy.name || describeSavedLimit(defaultPolicy)}`
-                    : 'Let the agent decide (or pick a rule)'}
-                </option>
-                {policies.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.form === 'public' || (!p.form && !p.isPrivate) ? 'Public' : 'Private'} ·{' '}
-                    {p.name || describeSavedLimit(p)}
-                  </option>
-                ))}
-                <option value="none">No extra limit (up to vault balance)</option>
-              </select>
-              <Link to="/app/rules" className="text-xs text-violet-300 hover:text-violet-200">
-                Manage limits
-              </Link>
-              <button
-                onClick={askAgent}
-                disabled={!nl.trim() || planMut.isPending}
-                className={`${primaryBtn} ml-auto`}
-              >
-                {planMut.isPending ? 'Thinking…' : 'Plan it'}
-              </button>
+            <div className="mt-3 space-y-2.5">
+              <RuleLanePicker
+                lane={lane}
+                setLane={setLane}
+                ruleId={effectiveRuleId}
+                setRuleId={setRuleId}
+                privateRules={privateRules}
+                sessionActive={sessionActive}
+                managed={managed}
+                applied={applied}
+              />
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] leading-relaxed text-slate-500">
+                  Your words decide <span className="text-slate-300">what</span> to do; the vault
+                  enforces the rule you pick, on-chain, so the agent can&apos;t overspend or pay
+                  outside it. You approve a checked plan first.
+                </p>
+                <button
+                  onClick={askAgent}
+                  disabled={!nl.trim() || planMut.isPending || !laneReady}
+                  className={primaryBtn}
+                >
+                  {planMut.isPending ? 'Thinking…' : 'Plan it'}
+                </button>
+              </div>
             </div>
-
-            <p className="mt-2.5 flex items-start gap-1.5 text-[11px] leading-relaxed text-slate-500">
-              <ShieldCheck size={13} className="mt-0.5 shrink-0 text-violet-300" />
-              <span>
-                Your words decide <span className="text-slate-300">what</span> to do; the vault
-                enforces the limit you pick here, on-chain, so the agent can&apos;t overspend or pay
-                outside it no matter what the text says. You approve a checked plan before anything
-                moves.
-              </span>
-            </p>
           </div>
 
           <div className="mb-2 mt-4 text-[11px] uppercase tracking-wider text-slate-600">
@@ -723,64 +786,22 @@ export function CommandChat() {
                 </div>
               )}
 
-              {/* One clear limit control for this instruction */}
+              {/* The rule the vault enforces for this instruction */}
               <div className="mt-3 border-t border-line pt-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-1.5 text-xs uppercase tracking-wider text-slate-500">
-                    <SlidersHorizontal size={13} className="text-violet-300" /> Limit for this
-                    instruction
-                  </span>
-                  <select
-                    value={limitChoice}
-                    onChange={(e) => setLimitChoice(e.target.value)}
-                    className="min-w-[15rem] flex-1 rounded-lg bg-black/30 px-2 py-1.5 text-sm text-slate-100 outline-none"
-                    aria-label="Limit for this instruction"
-                  >
-                    <option value="default">
-                      {defaultPolicy
-                        ? `Default: ${defaultPolicy.name || describeSavedLimit(defaultPolicy)}`
-                        : 'Let the agent decide (or pick a rule)'}
-                    </option>
-                    {policies.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.form === 'public' || (!p.form && !p.isPrivate) ? 'Public' : 'Private'} ·{' '}
-                        {p.name || describeSavedLimit(p)}
-                      </option>
-                    ))}
-                    <option value="custom">Custom limit for this instruction…</option>
-                    <option value="none">No extra limit (up to vault balance)</option>
-                  </select>
-                  <Link
-                    to="/app/rules"
-                    className="text-xs text-violet-300 hover:text-violet-200"
-                    title="Create and manage reusable limits"
-                  >
-                    Manage limits
-                  </Link>
-                </div>
-
-                {limitChoice === 'custom' && (
-                  <div className="mt-3 rounded-lg bg-black/20 p-3">
-                    <RuleBuilder value={customDraft} onChange={setCustomDraft} />
-                    <p className="mt-3 text-[11px] text-slate-600">
-                      This one-off limit is saved and bound to this task when you approve. To reuse
-                      it later, it will appear in your{' '}
-                      <Link to="/app/rules" className="text-violet-300 hover:text-violet-200">
-                        Limits
-                      </Link>{' '}
-                      tab.
-                    </p>
-                  </div>
-                )}
-
-                <p className="mt-2 text-[11px] text-slate-500">
-                  The vault will enforce: <span className="text-slate-300">{applied.label}</span>
-                  {applied.isPrivate ? ' · rule kept private' : ' · transparent'}.
-                </p>
+                <RuleLanePicker
+                  lane={lane}
+                  setLane={setLane}
+                  ruleId={effectiveRuleId}
+                  setRuleId={setRuleId}
+                  privateRules={privateRules}
+                  sessionActive={sessionActive}
+                  managed={managed}
+                  applied={applied}
+                />
               </div>
 
               <div className="mt-3 flex gap-2">
-                <button onClick={propose} className={primaryBtn}>
+                <button onClick={propose} disabled={!laneReady} className={primaryBtn}>
                   Propose to agent
                 </button>
                 <button onClick={resetComposer} className={controls.secondary}>
@@ -850,7 +871,7 @@ function ChatBubble({
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
           <span>total ${total.toFixed(2)}</span>
           <span className="inline-flex items-center gap-1 text-violet-300">
-            {plan.limit.isPrivate ? <EyeOff size={11} /> : <Eye size={11} />} limit:{' '}
+            {plan.limit.isPrivate ? <EyeOff size={11} /> : <Eye size={11} />} rule:{' '}
             {plan.limit.label}
           </span>
         </div>
@@ -987,7 +1008,7 @@ function FirstRunGuide() {
     {
       done: false,
       label: 'Tell your agent what to do',
-      desc: 'Type an instruction above (or pick a quick action). You approve the plan; the vault enforces the limit you picked.',
+      desc: 'Type an instruction above (or pick a quick action). You approve the plan; the vault enforces the rule you picked.',
       cta: null,
       to: null,
     },
