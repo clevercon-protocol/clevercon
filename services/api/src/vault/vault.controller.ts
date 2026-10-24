@@ -12,7 +12,6 @@ import { z } from 'zod';
 import { VaultService } from './vault.service.js';
 import { QueueService } from '../queue/queue.service.js';
 import { ApiAuthGuard } from '../auth/api-auth.guard.js';
-import { StepUpGuard } from '../auth/step-up.guard.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { parseBody } from '../auth/validate.js';
 import type { AuthUser } from '../auth/types.js';
@@ -81,7 +80,7 @@ const sessionPayBodySchema = z.object({
 
 /** The current session's vault position and on-chain deposit/withdraw. */
 @Controller('vault')
-@UseGuards(ApiAuthGuard) // JWT (console) or x-api-key (agents); deposit/withdraw add StepUpGuard
+@UseGuards(ApiAuthGuard) // JWT (console) or x-api-key (agents)
 export class VaultController {
   constructor(
     private readonly vault: VaultService,
@@ -172,22 +171,26 @@ export class VaultController {
   }
 
   /**
-   * Build an unsigned deposit XDR for the caller's wallet to sign. Requires a
-   * fresh step-up wallet signature (x-stepup header) on top of the access token.
+   * Build an unsigned deposit XDR for the caller's wallet to sign. No step-up: this
+   * only returns an UNSIGNED XDR, and the deposit cannot move a cent until the wallet
+   * signs that exact operation (the contract enforces `user.require_auth()`). The
+   * wallet signature on the real op is the authorization, so a second step-up
+   * signature would be pure friction with no added security (one wallet prompt, not
+   * two).
    */
   @Post('deposit')
-  @UseGuards(StepUpGuard)
   deposit(@CurrentUser() user: AuthUser, @Body() body: unknown) {
     const { amountUsdc } = parseBody(amountSchema, body);
     return this.vault.buildDeposit(user.userId, amountUsdc);
   }
 
   /**
-   * Build an unsigned withdraw XDR for the caller's wallet to sign. Requires a
-   * fresh step-up wallet signature (x-stepup header) on top of the access token.
+   * Build an unsigned withdraw XDR for the caller's wallet to sign. No step-up: same
+   * reasoning as deposit. The withdraw XDR carries `user.require_auth()`, so it is
+   * inert until the wallet signs that exact operation; a leaked access token alone
+   * can build an XDR but never sign or submit a real withdrawal.
    */
   @Post('withdraw')
-  @UseGuards(StepUpGuard)
   withdraw(@CurrentUser() user: AuthUser, @Body() body: unknown) {
     const { amountUsdc } = parseBody(amountSchema, body);
     return this.vault.buildWithdraw(user.userId, amountUsdc);
