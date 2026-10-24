@@ -1083,9 +1083,21 @@ export function RulesManager() {
     },
   });
 
+  // Deleting a rule must also remove its ON-CHAIN authority, not just the server
+  // record: clear it as the global if set, then unpin its commitment so a "deleted"
+  // rule can no longer authorize a spend. Each on-chain step is wallet-signed.
   const del = useMutation({
-    mutationFn: (id: string) => deletePolicy(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['policies'] }),
+    mutationFn: async (p: Policy) => {
+      const commitment = p.commitment.toLowerCase();
+      if (globalPrivate === commitment) await clearGlobalPrivate();
+      if (pinnedSet.has(commitment)) await unpinCommitment(p.commitment);
+      await deletePolicy(p.id);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['policies'] });
+      qc.invalidateQueries({ queryKey: ['pinned-commitments'] });
+      qc.invalidateQueries({ queryKey: ['globals'] });
+    },
   });
   const pin = useMutation({
     mutationFn: (commitment: string) => pinCommitment(commitment),
@@ -1214,6 +1226,17 @@ export function RulesManager() {
         </EmptyState>
       )}
 
+      {formFilter !== 'public' && shown.length > 0 && (
+        <p className="mb-2 flex items-start gap-1.5 text-[11.5px] leading-relaxed text-slate-500">
+          <Globe size={12} className="mt-0.5 shrink-0 text-fuchsia-300/80" />
+          <span>
+            {globalPrivate
+              ? 'The rule with the Global badge is your global-private: AND-applied to every private spend, on top of whatever rule you pick. Use the globe icon to change or clear it.'
+              : 'Make a rule global: the globe icon on any private rule sets it as your global-private, AND-applied to every private spend on top of whatever rule you pick. (The public global is on the Public tab.)'}
+          </span>
+        </p>
+      )}
+
       <div className="grid gap-3 sm:grid-cols-2">
         {shown.map((p) => (
           <RuleCard
@@ -1227,14 +1250,14 @@ export function RulesManager() {
             onEdit={() => openEdit(p)}
             onDuplicate={() => openDuplicate(p)}
             onDelete={() => {
-              if (
-                window.confirm(
-                  `Delete "${p.name || 'this rule'}"? This removes the saved rule; the on-chain commitment stays immutable, and if pinned you should unpin it first.`,
-                )
-              )
-                del.mutate(p.id);
+              const commitment = p.commitment.toLowerCase();
+              const onChain =
+                pinnedSet.has(commitment) || globalPrivate === commitment
+                  ? ' It is live on-chain, so this also unpins it (and clears it as global if set) with a wallet signature, after which it can no longer authorize a spend.'
+                  : '';
+              if (window.confirm(`Delete "${p.name || 'this rule'}"?${onChain}`)) del.mutate(p);
             }}
-            pinBusy={pin.isPending || unpin.isPending}
+            pinBusy={pin.isPending || unpin.isPending || del.isPending}
             isGlobal={globalPrivate === p.commitment.toLowerCase()}
             onMakeGlobal={() => makeGlobal.mutate(p.commitment)}
             onClearGlobal={() => clearGlobal.mutate()}
