@@ -5846,3 +5846,231 @@ fn test_get_session_not_found() {
     let result = test_env.client.try_get_session(&session);
     assert!(matches!(result, Err(Ok(VaultError::SessionNotFound))));
 }
+
+// ── Keyless (proof-authorized) release: the Sovereign private path ──────────────
+
+#[test]
+fn test_release_proved_keyless_happy_path() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    // The user pins the rule once; thereafter NO key authorizes a spend.
+    let c = commitment_of(&s.env, 70);
+    s.client.set_policy_commitment(&s.user, &c);
+
+    let p1 = Address::generate(&s.env);
+    let p2 = Address::generate(&s.env);
+    let payees = soroban_sdk::vec![&s.env, p1.clone(), p2.clone()];
+    let amounts = soroban_sdk::vec![&s.env, 400i128, 300i128];
+    let nullifiers = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 70), nullifier_of(&s.env, 71)];
+    let proof = dummy_groth16_proof(&s.env);
+
+    // Authorized purely by the pinned commitment + proof + fresh nullifiers.
+    let ok = s.client.release_proved_keyless(
+        &s.user,
+        &s.usdc_sac,
+        &c,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+        &None::<crate::GlobalProof>,
+    );
+    assert!(ok);
+    assert_eq!(s.token_client.balance(&p1), 400);
+    assert_eq!(s.token_client.balance(&p2), 300);
+    // Drawn from the user's own vault balance (50_000 deposited in setup).
+    assert_eq!(s.client.get_balance(&s.user, &s.usdc_sac), 49_300);
+    assert_eq!(s.verifier.calls(), 1);
+
+    // Replay of consumed nullifiers is rejected; no double spend.
+    let res = s.client.try_release_proved_keyless(
+        &s.user,
+        &s.usdc_sac,
+        &c,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+        &None::<crate::GlobalProof>,
+    );
+    assert!(res == Err(Ok(VaultError::NullifierAlreadyUsed)));
+}
+
+#[test]
+fn test_release_proved_keyless_rejects_unpinned_commitment() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    // A commitment the user never pinned is rejected before the verifier is called.
+    let c = commitment_of(&s.env, 80);
+    let payees = soroban_sdk::vec![&s.env, Address::generate(&s.env)];
+    let amounts = soroban_sdk::vec![&s.env, 100i128];
+    let nullifiers = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 80)];
+    let proof = dummy_groth16_proof(&s.env);
+
+    let res = s.client.try_release_proved_keyless(
+        &s.user,
+        &s.usdc_sac,
+        &c,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+        &None::<crate::GlobalProof>,
+    );
+    assert!(res == Err(Ok(VaultError::CommitmentNotAuthorized)));
+    assert_eq!(s.verifier.calls(), 0);
+}
+
+#[test]
+fn test_release_proved_keyless_global_private_enforced() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 90);
+    let g = commitment_of(&s.env, 91);
+    s.client.set_policy_commitment(&s.user, &c);
+    s.client.set_global(&s.user, &Lane::Private, &g);
+
+    let payee = Address::generate(&s.env);
+    let payees = soroban_sdk::vec![&s.env, payee.clone()];
+    let amounts = soroban_sdk::vec![&s.env, 200i128];
+    let nullifiers = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 90)];
+    let proof = dummy_groth16_proof(&s.env);
+
+    // With a global-private set, omitting the second proof is rejected.
+    let res = s.client.try_release_proved_keyless(
+        &s.user,
+        &s.usdc_sac,
+        &c,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+        &None::<crate::GlobalProof>,
+    );
+    assert!(res == Err(Ok(VaultError::GlobalProofRequired)));
+
+    // A second proof against the WRONG commitment is rejected.
+    let wrong = crate::GlobalProof {
+        commitment: commitment_of(&s.env, 99),
+        nullifiers: soroban_sdk::vec![&s.env, nullifier_of(&s.env, 95)],
+        reset_r2: false,
+        reset_r7: false,
+        proof: dummy_groth16_proof(&s.env),
+    };
+    let res = s.client.try_release_proved_keyless(
+        &s.user,
+        &s.usdc_sac,
+        &c,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+        &Some(wrong),
+    );
+    assert!(res == Err(Ok(VaultError::GlobalCommitmentMismatch)));
+
+    // The matching second proof satisfies the AND filter and the release succeeds.
+    let gp = crate::GlobalProof {
+        commitment: g.clone(),
+        nullifiers: soroban_sdk::vec![&s.env, nullifier_of(&s.env, 96)],
+        reset_r2: false,
+        reset_r7: false,
+        proof: dummy_groth16_proof(&s.env),
+    };
+    let ok = s.client.release_proved_keyless(
+        &s.user,
+        &s.usdc_sac,
+        &c,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+        &Some(gp),
+    );
+    assert!(ok);
+    assert_eq!(s.token_client.balance(&payee), 200);
+}
+
+// ── Global-public: cleartext AND-filter on the public (session) path ────────────
+
+#[test]
+fn test_global_public_denies_and_caps() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let good = Address::generate(&test_env.env);
+    let bad = Address::generate(&test_env.env);
+    // The SESSION itself allows both payees and a 900 budget.
+    let allowlist = soroban_sdk::vec![&test_env.env, good.clone(), bad.clone()];
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &900,
+        &1_000,
+        &allowlist,
+    );
+
+    // The user layers a global-public rule on top: deny `bad`, cap 100 per payment.
+    let scope = crate::PublicGlobal {
+        per_payment_max: 100,
+        allowlist: soroban_sdk::vec![&test_env.env],
+        denylist: soroban_sdk::vec![&test_env.env, bad.clone()],
+        expiry: 0,
+    };
+    test_env.client.set_global_public(&user, &scope);
+
+    // A denied payee is rejected even though the SESSION allows it.
+    let res = test_env
+        .client
+        .try_release_payment_session(&session, &bad, &10);
+    assert!(res == Err(Ok(VaultError::GlobalPayeeDenied)));
+
+    // An over-cap amount to an allowed payee is rejected.
+    let res = test_env
+        .client
+        .try_release_payment_session(&session, &good, &101);
+    assert!(res == Err(Ok(VaultError::GlobalCapExceeded)));
+
+    // Within cap, allowed payee: succeeds.
+    test_env
+        .client
+        .release_payment_session(&session, &good, &100);
+    assert_eq!(test_env.token_client.balance(&good), 100);
+
+    // Clearing the global removes the constraint (the session alone governs again).
+    test_env.client.clear_global_public(&user);
+    test_env.client.release_payment_session(&session, &bad, &50);
+    assert_eq!(test_env.token_client.balance(&bad), 50);
+}
