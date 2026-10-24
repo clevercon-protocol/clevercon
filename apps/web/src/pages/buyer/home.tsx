@@ -112,6 +112,10 @@ const short = (a: string) => (a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}
 const AGENT_INTRO =
   "I'm your spending agent. Tell me what to do with your budget, or use a quick action. I'll propose a plan and you approve before anything moves. The vault enforces the rule you pick, so I can never overspend or pay outside it.";
 
+// The agent conversation is persisted here so it survives navigating away and back,
+// and a full reload. Scoped per browser.
+const CHAT_KEY = 'cc:agent:chat';
+
 /**
  * The lane toggle + rule selector shared by the NL composer and the quick-action
  * composer. Private (default) is a ZK-proven, keyless spend under a pinned rule you
@@ -211,18 +215,43 @@ function RuleLanePicker({
 
 export function CommandChat() {
   const qc = useQueryClient();
-  const idRef = useRef(2);
+  // The conversation persists across navigation and reloads (it was resetting on
+  // every remount). Stored per browser; cleared explicitly via "Clear".
+  const [messages, setMessages] = useState<Msg[]>(() => {
+    try {
+      const raw = localStorage.getItem(CHAT_KEY);
+      const parsed = raw ? (JSON.parse(raw) as Msg[]) : null;
+      if (parsed && parsed.length) return parsed;
+    } catch {
+      // ignore a corrupt cache
+    }
+    return [{ id: 1, role: 'agent', text: AGENT_INTRO }];
+  });
+  // Next id continues past the highest restored id so ids never collide.
+  const idRef = useRef(messages.reduce((m, x) => Math.max(m, x.id), 1) + 1);
   const nextId = () => idRef.current++;
-  const [messages, setMessages] = useState<Msg[]>([{ id: 1, role: 'agent', text: AGENT_INTRO }]);
   // Keep the conversation scrolled to the newest message (it sits above the composer).
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
+  // Persist on every change so leaving and returning keeps the history intact.
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_KEY, JSON.stringify(messages.slice(-200)));
+    } catch {
+      // ignore quota / serialization issues
+    }
+  }, [messages]);
   function clearChat() {
     idRef.current = 2;
     setMessages([{ id: 1, role: 'agent', text: AGENT_INTRO }]);
+    try {
+      localStorage.removeItem(CHAT_KEY);
+    } catch {
+      // ignore
+    }
   }
 
   const [action, setAction] = useState<'pay' | 'disburse' | 'hire' | null>(null);
