@@ -115,6 +115,7 @@ function draftChips(d: Draft): string[] {
   if (d.rollingCap) chips.push(`$${d.rollingCap} ${WINDOWS[d.rollingWindow].label}`);
   if (d.velocityCount) chips.push(`≤ ${d.velocityCount} ${WINDOWS[d.velocityWindow].label}`);
   chips.push(d.allowlist.length ? `${d.allowlist.length} approved payee(s)` : 'any payee in caps');
+  if (d.denylist?.length) chips.push(`${d.denylist.length} blocked payee(s)`);
   return chips;
 }
 
@@ -415,6 +416,46 @@ export function RuleBuilder({ value, onChange }: { value: Draft; onChange: (d: D
           </div>
         )}
       </div>
+
+      {/* R4 deny-list (private only; proven on-chain by the circuit) */}
+      {value.isPrivate && (
+        <div>
+          <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
+            <X size={13} className="text-rose-300" /> Blocked payees (deny-list, up to 4)
+          </span>
+          <textarea
+            value={(value.denylist ?? []).join('\n')}
+            onChange={(e) =>
+              set({
+                denylist: e.target.value
+                  .split(/[\s,]+/)
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+                  .slice(0, 4),
+              })
+            }
+            rows={2}
+            placeholder="G… addresses this rule may never pay (proven on-chain, kept private)"
+            className={`${inputCls} font-mono text-[11px]`}
+          />
+          {(value.denylist ?? []).length > 0 && (
+            <label className="mt-2 block">
+              <span className="mb-1 block text-xs text-slate-400">
+                Block only above (USDC) &middot; blank = block any amount
+              </span>
+              <input
+                value={value.denylistThresholdUsdc ?? ''}
+                onChange={(e) =>
+                  set({ denylistThresholdUsdc: e.target.value.replace(/[^0-9.]/g, '') })
+                }
+                inputMode="decimal"
+                placeholder="0"
+                className={inputCls}
+              />
+            </label>
+          )}
+        </div>
+      )}
 
       {/* Live enforcement badges (form-aware) */}
       {activeClauses.length > 0 && (

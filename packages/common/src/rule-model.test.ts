@@ -156,11 +156,17 @@ describe('ruleToBundleRules', () => {
 });
 
 describe('enforcement map', () => {
-  it('marks the deployed clauses enforced-now and the pending ones committed-pending', () => {
+  it('marks the circuit-proven clauses enforced-now and app facts app-enforced', () => {
+    // The pp/2 circuit proves R1-R8 for the PRIVATE lane (buildPolicyWitness wires
+    // every clause), so these are all enforced on-chain, not pending.
     expect(CLAUSE_ENFORCEMENT.perPaymentMax.status).toBe('enforced-now');
     expect(CLAUSE_ENFORCEMENT.allowlist.status).toBe('enforced-now');
-    expect(CLAUSE_ENFORCEMENT.rollingCap.status).toBe('committed-pending');
-    expect(CLAUSE_ENFORCEMENT.velocity.status).toBe('committed-pending');
+    expect(CLAUSE_ENFORCEMENT.rollingCap.status).toBe('enforced-now');
+    expect(CLAUSE_ENFORCEMENT.velocity.status).toBe('enforced-now');
+    expect(CLAUSE_ENFORCEMENT.denylist.status).toBe('enforced-now');
+    expect(CLAUSE_ENFORCEMENT.calendar.status).toBe('enforced-now');
+    expect(CLAUSE_ENFORCEMENT.categoryCeilings.status).toBe('enforced-now');
+    // Registry-anchored facts are enforced at the app layer, not in the circuit.
     expect(CLAUSE_ENFORCEMENT.providerCriteria.status).toBe('app-enforced');
   });
 

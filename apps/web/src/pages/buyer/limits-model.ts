@@ -30,6 +30,11 @@ export type Draft = {
   // device only (like the rest of the private rule), proven alongside the caps.
   velocityCount: string;
   velocityWindow: keyof typeof WINDOWS;
+  // R4 deny-list: payees that may NOT be paid (above an optional threshold). Up to 4.
+  // Enforced in the PRIVATE lane by the ZK circuit (proven per payment); kept on the
+  // device like the rest of the private rule.
+  denylist?: string[];
+  denylistThresholdUsdc?: string;
   // ── PUBLIC form only (a Managed Session scope: budget + allowlist + expiry) ──
   // A public rule is not a proven clause-rule; it is the scope a bounded session
   // key spends under. These are ignored for private rules.
@@ -164,6 +169,13 @@ export function draftToRule(d: Draft, name = ''): Rule {
         const cap = d.allowlistCaps[a];
         return cap ? { address: a, perPayeeCapUsdc: Number(cap) } : { address: a };
       }),
+    });
+  }
+  if (d.denylist && d.denylist.length) {
+    clauses.push({
+      type: 'denylist',
+      addresses: d.denylist.slice(0, 4),
+      thresholdUsdc: d.denylistThresholdUsdc ? Number(d.denylistThresholdUsdc) : undefined,
     });
   }
   return { name, form: d.isPrivate ? 'private' : 'public', status: 'active', version: 1, clauses };
@@ -344,6 +356,11 @@ export function draftToBundleRules(d: Draft): PolicyBundleRules {
       : undefined,
     maxReleasesPerWindow: velOn ? Number(d.velocityCount) : undefined,
     velocityWindowSecs: velOn ? velSecs : undefined,
+    denylist: d.denylist && d.denylist.length ? d.denylist.slice(0, 4) : undefined,
+    denylistThresholdUsdc:
+      d.denylist && d.denylist.length && d.denylistThresholdUsdc
+        ? Number(d.denylistThresholdUsdc)
+        : undefined,
   };
 }
 

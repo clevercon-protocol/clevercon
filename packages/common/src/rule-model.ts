@@ -125,16 +125,20 @@ export const CLAUSE_ENFORCEMENT: Record<ClauseType, ClauseEnforcement> = {
   // instead, so these clauses are private-only.
   rollingCap: { status: 'enforced-now', modes: ['private'], label: 'Rolling budget' },
   allowlist: { status: 'enforced-now', modes: ['private', 'public'], label: 'Approved payees' },
-  denylist: { status: 'committed-pending', modes: ['private', 'public'], label: 'Blocked payees' },
-  calendar: { status: 'committed-pending', modes: ['private', 'public'], label: 'Calendar window' },
+  // R4 deny-list, R6 calendar, R8 per-category ceilings are ALL enforced on-chain in
+  // the PRIVATE lane: the pp/2 circuit proves them per payment (buildPolicyWitness
+  // wires r4/r6/r8), so the vault's proof check rejects any violating release. They
+  // are private-only; the public/session lane uses its own cleartext scope instead.
+  denylist: { status: 'enforced-now', modes: ['private'], label: 'Blocked payees' },
+  calendar: { status: 'enforced-now', modes: ['private'], label: 'Calendar window' },
   velocity: {
     status: 'enforced-now',
     modes: ['private'],
     label: 'Max payments per window',
   },
   categoryCeilings: {
-    status: 'committed-pending',
-    modes: ['private', 'public'],
+    status: 'enforced-now',
+    modes: ['private'],
     label: 'Per-category caps',
   },
   tier: { status: 'app-enforced', modes: ['private', 'public'], label: 'Allowed tiers' },
