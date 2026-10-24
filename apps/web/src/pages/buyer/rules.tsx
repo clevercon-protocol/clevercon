@@ -30,9 +30,6 @@ import {
   getGlobals,
   setGlobalPrivate,
   clearGlobalPrivate,
-  setGlobalPublic,
-  clearGlobalPublic,
-  type PublicGlobalScope,
 } from '../../lib/vault';
 import { computePolicyCommitment } from '../../lib/prove';
 import { encryptRuleBundle } from '../../lib/rule-backup';
@@ -832,115 +829,6 @@ function RuleCard({
   );
 }
 
-/**
- * The global-public rule: a cleartext AND-filter the vault checks on every public
- * (Managed Session) spend, on top of the session's own scope. A master per-payment
- * cap + denylist + expiry that can only tighten. Wallet-signed set/clear.
- */
-function PublicGlobalEditor({ current }: { current: PublicGlobalScope | null }) {
-  const qc = useQueryClient();
-  const [cap, setCap] = useState('');
-  const [deny, setDeny] = useState('');
-  const [expiryHours, setExpiryHours] = useState('');
-  useEffect(() => {
-    setCap(current && current.perPaymentMaxUsdc > 0 ? String(current.perPaymentMaxUsdc) : '');
-    setDeny(current ? current.denylist.join('\n') : '');
-    setExpiryHours(
-      current && current.expiry > 0
-        ? String(Math.max(0, Math.round((current.expiry * 1000 - Date.now()) / 3_600_000)))
-        : '',
-    );
-  }, [current]);
-
-  const set = useMutation({
-    mutationFn: () => {
-      const denylist = deny
-        .split(/[\s,]+/)
-        .map((a) => a.trim())
-        .filter(Boolean);
-      for (const a of denylist) {
-        if (!isStellarAddr(a)) throw new Error(`Not a valid address: ${a}`);
-      }
-      const hours = Number(expiryHours);
-      const scope: PublicGlobalScope = {
-        perPaymentMaxUsdc: Number(cap) > 0 ? Number(cap) : 0,
-        allowlist: [],
-        denylist,
-        expiry: hours > 0 ? Math.floor(Date.now() / 1000) + Math.round(hours * 3600) : 0,
-      };
-      return setGlobalPublic(scope);
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['globals'] }),
-  });
-  const clear = useMutation({
-    mutationFn: () => clearGlobalPublic(),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['globals'] }),
-  });
-
-  return (
-    <div className="mt-3 rounded-xl border border-fuchsia-500/20 bg-fuchsia-500/[0.04] p-3">
-      <div className="flex items-center gap-1.5 text-[12px] font-medium text-fuchsia-200">
-        <Globe size={13} /> Global-public rule {current ? '(active)' : '(none)'}
-      </div>
-      <p className="mt-1 text-[11.5px] leading-relaxed text-slate-400">
-        A cleartext filter AND-applied to every public (Managed Session) spend, on top of the
-        session scope. It can only tighten.
-      </p>
-      <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
-        <label className="block">
-          <span className="mb-1 block text-xs text-slate-400">
-            Per-payment cap (USDC, 0 = none)
-          </span>
-          <input
-            value={cap}
-            onChange={(e) => setCap(e.target.value.replace(/[^0-9.]/g, ''))}
-            inputMode="decimal"
-            placeholder="e.g. 25"
-            className={inputCls}
-          />
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-xs text-slate-400">Expires in (hours, 0 = never)</span>
-          <input
-            value={expiryHours}
-            onChange={(e) => setExpiryHours(e.target.value.replace(/[^0-9]/g, ''))}
-            inputMode="numeric"
-            placeholder="e.g. 168"
-            className={inputCls}
-          />
-        </label>
-      </div>
-      <label className="mt-2.5 block">
-        <span className="mb-1 block text-xs text-slate-400">Denylist (one address per line)</span>
-        <textarea
-          value={deny}
-          onChange={(e) => setDeny(e.target.value)}
-          rows={2}
-          placeholder="G… addresses that public spends may never pay"
-          className={`${inputCls} font-mono text-[11px]`}
-        />
-      </label>
-      <div className="mt-2.5 flex items-center justify-end gap-2">
-        {current && (
-          <button
-            onClick={() => clear.mutate()}
-            disabled={clear.isPending}
-            className={controls.secondary + ' !px-3 !py-1.5'}
-          >
-            {clear.isPending ? 'Clearing…' : 'Clear'}
-          </button>
-        )}
-        <button onClick={() => set.mutate()} disabled={set.isPending} className={primaryBtn}>
-          {set.isPending ? 'Signing…' : current ? 'Update global' : 'Set global'}
-        </button>
-      </div>
-      {(set.error || clear.error) && (
-        <p className="mt-2 text-sm text-red-400">{errMsg(set.error || clear.error)}</p>
-      )}
-    </div>
-  );
-}
-
 // ── The Rules manager ───────────────────────────────────────────────────────
 export function RulesManager() {
   const qc = useQueryClient();
@@ -1212,7 +1100,6 @@ export function RulesManager() {
               </div>
             </div>
           )}
-          <PublicGlobalEditor current={globals?.publicScope ?? null} />
         </div>
       )}
 
