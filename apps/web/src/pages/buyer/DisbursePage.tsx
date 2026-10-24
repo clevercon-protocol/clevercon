@@ -17,7 +17,6 @@ import { getVault, getDelegate } from '../../lib/vault';
 import { describeSavedLimit, savedLimitBundleRules, resolvePinnedBundle } from './limits-model';
 import {
   proveAndReleaseBatch,
-  pollBatchJobs,
   PROOF_WIDTH,
   MAX_RECIPIENTS,
   type BatchOutcome,
@@ -37,7 +36,7 @@ const loadDraft = (): { ceiling: string; lines: Line[] } | null => {
 };
 
 type Line = { payee: string; amount: string };
-type Result = { jobIds: string[]; total: number; legs: number; batches: number };
+type Result = { txHashes: string[]; total: number; legs: number; batches: number };
 type Phase = 'idle' | 'proving' | 'relaying' | 'done';
 
 /**
@@ -151,11 +150,16 @@ export function DisbursePage() {
       } catch {
         // ignore
       }
-      // Now confirm the REAL outcome on-chain before claiming success.
-      setConfirming(true);
-      const outcome = await pollBatchJobs(data.jobIds, { onProgress: setSettle });
-      setSettle(outcome);
+      // The keyless path settles synchronously: each group's tx hash is already
+      // confirmed on-chain by the time the request returns, so the outcome is final.
       setConfirming(false);
+      setSettle({
+        settled: data.txHashes.length,
+        failed: 0,
+        unconfirmed: 0,
+        txHashes: data.txHashes,
+        reasons: [],
+      });
     },
     onError: () => {
       setPhase('idle');

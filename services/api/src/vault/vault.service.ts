@@ -180,6 +180,39 @@ export class VaultService {
     return { txHash };
   }
 
+  /**
+   * Submit a KEYLESS, proof-authorized private release for the caller. The user's
+   * address comes from their authenticated session (never the request body), so a
+   * caller can only ever spend from their OWN vault; the proof + the user's pinned
+   * commitment gate it on-chain regardless. No delegate, no per-payment signature:
+   * the relayer only pays the fee. Returns the on-chain tx hash.
+   */
+  async releaseKeyless(
+    userId: string,
+    params: {
+      commitmentHex: string;
+      payees: string[];
+      amountsStroops: bigint[];
+      nullifiers: Buffer[];
+      validAfter: bigint;
+      validBefore: bigint;
+      resetR2: boolean;
+      resetR7: boolean;
+      proof: { a: Buffer; b: Buffer; c: Buffer };
+      global?: {
+        commitmentHex: string;
+        nullifiers: Buffer[];
+        resetR2: boolean;
+        resetR7: boolean;
+        proof: { a: Buffer; b: Buffer; c: Buffer };
+      } | null;
+    },
+  ): Promise<{ txHash: string }> {
+    const user = await this.primaryAddress(userId);
+    const txHash = await this.contract.releaseProvedKeyless({ user, ...params });
+    return { txHash };
+  }
+
   /** Build the wallet-signed revoke_session XDR (kills the managed session on-chain). */
   async buildRevokeSession(userId: string) {
     const address = await this.primaryAddress(userId);

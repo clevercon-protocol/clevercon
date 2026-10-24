@@ -56,6 +56,13 @@ export const envSchema = z.object({
   // Platform dispute-resolver secret (S...). Must also be registered on the vault
   // via set_dispute_resolver. Enables POST /disputes/:id/resolve.
   DISPUTE_RESOLVER_SECRET: z.string().optional(),
+  // Keyless-release fee-payer secret (S...). The vault's release_proved_keyless
+  // takes NO require_auth: the ZK proof + the user's pinned commitment + a fresh
+  // nullifier ARE the authorization, so this account only pays the tx fee and
+  // submits. It can neither learn a rule nor move a cent outside the proof, so it
+  // is pure plumbing (the plan's "disposable relayer"). Falls back to
+  // VAULT_ADMIN_KEY when unset. A dedicated relayer (+ channel accounts) at scale.
+  RELAYER_SECRET_KEY: z.string().optional(),
   // At-rest encryption key for per-user delegate secrets (32-byte hex or base64;
   // KMS in production). When set, the platform can provision per-user spending
   // delegates and automatic settlement is enabled; when unset, tasks run

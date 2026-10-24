@@ -163,7 +163,6 @@ export function CommandChat() {
   const services = servicePage?.items ?? [];
   const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
   const { data: vaultData } = useQuery({ queryKey: ['vault'], queryFn: getVault });
-  const { data: delegateData } = useQuery({ queryKey: ['delegate'], queryFn: getDelegate });
   const defaultPolicy = policies.find((p) => p.id === getDefaultLimitId());
 
   // Resolve the current selection to (a) what the vault enforces, and (b) how it binds.
@@ -416,19 +415,11 @@ export function CommandChat() {
     // the bounded delegate releases a cent.
     if (plan.kind !== 'pay' && plan.kind !== 'disburse') return;
 
-    // Preconditions the chain would otherwise fail on AFTER proving: the settlement
-    // relayer must be registered (it submits your proof; it can't forge or alter it)
-    // and the vault must hold enough. Guide instead of proving-then-failing.
+    // The only precondition the chain would fail on AFTER proving is the balance:
+    // the private path is now KEYLESS (the proof + your pinned rule authorize it, a
+    // fee-payer relayer only submits), so there is nothing to register. Guide on
+    // balance instead of proving-then-failing.
     const planTotal = plan.lines.reduce((s, l) => s + l.amount, 0);
-    if (!delegateData?.registered) {
-      push({
-        id: nextId(),
-        role: 'agent',
-        ok: false,
-        text: 'Your settlement relayer isn’t registered yet. Open the Vault tab and register it once (a single signature), then approve this again. The relayer only submits your proof; it never holds funds or picks your rule.',
-      });
-      return;
-    }
     if (planTotal > (vaultData?.available ?? 0)) {
       push({
         id: nextId(),

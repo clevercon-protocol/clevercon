@@ -42,6 +42,31 @@ const batchReleaseSchema = z.object({
   proof: z.object({ a: hex, b: hex, c: hex }),
 });
 
+// A pp/2 KEYLESS batch release: the client proved locally and POSTs this; the API
+// submits release_proved_keyless via a fee-payer relayer (NO delegate). The user is
+// taken from the session, not the body. `global` is the second proof the vault
+// requires when a global-private rule is set; omit it otherwise. No task fields: the
+// keyless path draws from the user's balance directly.
+const globalProofSchema = z.object({
+  commitment: hex,
+  nullifiers: z.array(hex).min(1).max(4),
+  resetR2: z.boolean(),
+  resetR7: z.boolean(),
+  proof: z.object({ a: hex, b: hex, c: hex }),
+});
+const batchReleaseKeylessSchema = z.object({
+  payees: z.array(z.string().min(1)).min(1).max(4),
+  amounts: z.array(z.string().min(1)).min(1).max(4),
+  nullifiers: z.array(hex).min(1).max(4),
+  validAfter: z.string().min(1),
+  validBefore: z.string().min(1),
+  commitment: hex,
+  resetR2: z.boolean(),
+  resetR7: z.boolean(),
+  proof: z.object({ a: hex, b: hex, c: hex }),
+  global: globalProofSchema.nullish(),
+});
+
 // Managed Sessions (server + public): the owner authorizes a bounded scope for
 // their server-held delegate/session key (budget + payee allowlist + expiry).
 const sessionEnableSchema = z.object({
@@ -236,6 +261,51 @@ export class VaultController {
       proof: req.proof,
     });
     return { jobId, status: 'queued' };
+  }
+
+  /**
+   * pp/2 KEYLESS release (the plan's Sovereign private path). The caller proved
+   * their private rule client-side and POSTs the proof + payouts; the vault's
+   * release_proved_keyless takes NO require_auth, so the proof + the user's pinned
+   * commitment + a fresh nullifier authorize it. The API submits it via a fee-payer
+   * relayer that holds no power over funds and never sees the rule. No delegate, no
+   * per-user registration, no per-payment signature. Synchronous: returns the real
+   * tx hash. When a global-private is set, `global` carries the required 2nd proof.
+   */
+  @Post('batch-release-keyless')
+  async batchReleaseKeyless(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const req = parseBody(batchReleaseKeylessSchema, body);
+    if (req.payees.length !== req.amounts.length || req.payees.length !== req.nullifiers.length) {
+      throw new BadRequestException('payees, amounts, and nullifiers must be equal length');
+    }
+    if (req.global && req.global.nullifiers.length !== req.payees.length) {
+      throw new BadRequestException('global nullifiers must match the payee count');
+    }
+    const toProof = (p: { a: string; b: string; c: string }) => ({
+      a: Buffer.from(p.a, 'hex'),
+      b: Buffer.from(p.b, 'hex'),
+      c: Buffer.from(p.c, 'hex'),
+    });
+    return this.vault.releaseKeyless(user.userId, {
+      commitmentHex: req.commitment,
+      payees: req.payees,
+      amountsStroops: req.amounts.map((a) => BigInt(a)),
+      nullifiers: req.nullifiers.map((n) => Buffer.from(n, 'hex')),
+      validAfter: BigInt(req.validAfter),
+      validBefore: BigInt(req.validBefore),
+      resetR2: req.resetR2,
+      resetR7: req.resetR7,
+      proof: toProof(req.proof),
+      global: req.global
+        ? {
+            commitmentHex: req.global.commitment,
+            nullifiers: req.global.nullifiers.map((n) => Buffer.from(n, 'hex')),
+            resetR2: req.global.resetR2,
+            resetR7: req.global.resetR7,
+            proof: toProof(req.global.proof),
+          }
+        : null,
+    });
   }
 
   /**

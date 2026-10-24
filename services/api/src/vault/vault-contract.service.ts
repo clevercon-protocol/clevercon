@@ -22,6 +22,43 @@ function usdcToStroops(usdc: number): bigint {
   return BigInt(Math.round(usdc * STROOPS_PER_USDC));
 }
 
+/** Encode a Groth16Proof{a,b,c} as its contract struct ScVal (same as the batch path). */
+function groth16ProofScVal(proof: { a: Buffer; b: Buffer; c: Buffer }): xdr.ScVal {
+  return nativeToScVal(
+    { a: proof.a, b: proof.b, c: proof.c },
+    { type: { a: ['symbol', 'bytes'], b: ['symbol', 'bytes'], c: ['symbol', 'bytes'] } },
+  );
+}
+
+/**
+ * Encode a GlobalProof struct ScVal (the second proof for a global-private). Struct
+ * fields are an ScMap sorted by symbol key: commitment, nullifiers, proof, reset_r2,
+ * reset_r7.
+ */
+function globalProofScVal(g: {
+  commitmentHex: string;
+  nullifiers: Buffer[];
+  resetR2: boolean;
+  resetR7: boolean;
+  proof: { a: Buffer; b: Buffer; c: Buffer };
+}): xdr.ScVal {
+  const commitment = Buffer.from(g.commitmentHex, 'hex');
+  if (commitment.length !== 32) throw new Error('global commitment must be 32 bytes');
+  return xdr.ScVal.scvMap([
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol('commitment'),
+      val: nativeToScVal(commitment, { type: 'bytes' }),
+    }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol('nullifiers'),
+      val: xdr.ScVal.scvVec(g.nullifiers.map((n) => nativeToScVal(n, { type: 'bytes' }))),
+    }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('proof'), val: groth16ProofScVal(g.proof) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('reset_r2'), val: xdr.ScVal.scvBool(g.resetR2) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('reset_r7'), val: xdr.ScVal.scvBool(g.resetR7) }),
+  ]);
+}
+
 /**
  * CleverVault (AgentVault) Soroban client for the API. Deposits and withdrawals
  * are user-custodied: the API builds an unsigned XDR that the caller signs in
@@ -42,6 +79,7 @@ export class VaultContractService {
   private readonly usdcSac: string;
   private readonly adminKey: string;
   private readonly resolverSecret: string;
+  private readonly relayerKey: string;
   readonly passphrase: string;
   readonly active: boolean;
   /** The deployed vault contract id, or '' when not configured. */
@@ -60,6 +98,11 @@ export class VaultContractService {
     this.usdcSac = config.get('USDC_SAC', { infer: true }) ?? '';
     this.adminKey = config.get('VAULT_ADMIN_KEY', { infer: true }) ?? '';
     this.resolverSecret = config.get('DISPUTE_RESOLVER_SECRET', { infer: true }) ?? '';
+    // Keyless releases submit via a fee-payer that has NO authority over funds
+    // (the proof authorizes). Falls back to the admin account when no dedicated
+    // relayer is configured, so the Sovereign private path works out of the box.
+    this.relayerKey =
+      (config.get('RELAYER_SECRET_KEY', { infer: true }) ?? '') || this.adminKey;
     this.passphrase = config.get('NETWORK_PASSPHRASE', { infer: true });
     this.active = this.contractId.length > 10 && !this.contractId.startsWith('C...');
     if (!this.active) {
@@ -616,6 +659,59 @@ export class VaultContractService {
       nativeToScVal(nullifier, { type: 'bytes' }),
       nativeToScVal(params.proof, { type: 'bytes' }),
     ]);
+    return hash;
+  }
+
+  /**
+   * KEYLESS proof-authorized release (the plan's Sovereign private path). The vault
+   * takes NO require_auth here: the user's on-chain pinned commitment + the ZK proof
+   * (made where the salt lives, on the user's device) + a fresh nullifier ARE the
+   * authorization. The relayer keypair only pays the fee and submits; it cannot learn
+   * the rule, redirect a payee, or replay. No per-user delegate is involved. When a
+   * global-private is set the caller passes the second proof (the vault requires it).
+   */
+  async releaseProvedKeyless(params: {
+    user: string;
+    commitmentHex: string;
+    payees: string[];
+    amountsStroops: bigint[];
+    nullifiers: Buffer[];
+    validAfter: bigint;
+    validBefore: bigint;
+    resetR2: boolean;
+    resetR7: boolean;
+    proof: { a: Buffer; b: Buffer; c: Buffer };
+    global?: {
+      commitmentHex: string;
+      nullifiers: Buffer[];
+      resetR2: boolean;
+      resetR7: boolean;
+      proof: { a: Buffer; b: Buffer; c: Buffer };
+    } | null;
+  }): Promise<string> {
+    this.ensureActive();
+    if (!this.relayerKey) {
+      throw new ServiceUnavailableException('keyless relayer not configured');
+    }
+    const kp = Keypair.fromSecret(this.relayerKey);
+    const commitment = Buffer.from(params.commitmentHex, 'hex');
+    if (commitment.length !== 32)
+      throw new ServiceUnavailableException('commitment must be 32 bytes');
+    const args: xdr.ScVal[] = [
+      new Address(params.user).toScVal(),
+      this.usdcSacScVal(),
+      nativeToScVal(commitment, { type: 'bytes' }),
+      xdr.ScVal.scvVec(params.payees.map((p) => new Address(p).toScVal())),
+      xdr.ScVal.scvVec(params.amountsStroops.map((a) => nativeToScVal(a, { type: 'i128' }))),
+      xdr.ScVal.scvVec(params.nullifiers.map((n) => nativeToScVal(n, { type: 'bytes' }))),
+      nativeToScVal(params.validAfter, { type: 'u64' }),
+      nativeToScVal(params.validBefore, { type: 'u64' }),
+      xdr.ScVal.scvBool(params.resetR2),
+      xdr.ScVal.scvBool(params.resetR7),
+      groth16ProofScVal(params.proof),
+      params.global ? globalProofScVal(params.global) : xdr.ScVal.scvVoid(),
+    ];
+    const { hash } = await this.signAndSubmitAsOrchestrator(kp, 'release_proved_keyless', args);
     return hash;
   }
 

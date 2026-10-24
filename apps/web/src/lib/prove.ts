@@ -35,7 +35,8 @@ export interface ProveRecipient {
   amount: number;
 }
 export interface ProveResult {
-  jobIds: string[];
+  /** On-chain tx hashes, one per proof group. The keyless path settles synchronously. */
+  txHashes: string[];
   total: number;
   legs: number;
   batches: number;
@@ -162,7 +163,7 @@ export async function proveAndReleaseBatch(opts: {
   for (let i = 0; i < active.length; i += PROOF_WIDTH)
     groups.push(active.slice(i, i + PROOF_WIDTH));
 
-  const jobIds: string[] = [];
+  const txHashes: string[] = [];
   let sum = 0;
   for (let g = 0; g < groups.length; g++) {
     onPhase?.('proving', { i: g + 1, n: groups.length });
@@ -192,14 +193,22 @@ export async function proveAndReleaseBatch(opts: {
     const proof = await createBatchProof(policy, releases, ctx, { wasmPath: WASM, zkeyPath: ZKEY });
     const groupStroops = releases.reduce((s, r) => s + BigInt(r.amountStroops), 0n);
     sum += Number(groupStroops) / STROOPS;
+    // The keyless endpoint ignores the task meta (vaultTaskId/planCostUsdc/stepId);
+    // it draws from the user's balance directly, authorized by the proof. We reuse
+    // the same request builder for the proof/nullifier/payee mapping, add `global`
+    // (null until a global-private is set), and POST to the KEYLESS path: no
+    // delegate, no per-payment signature, settled synchronously (returns a tx hash).
     const request = buildBatchReleaseRequest(proof, releases, ctx, {
       vaultTaskId: null,
       planCostUsdc: Number(groupStroops) / STROOPS,
       stepId: (base + g) % 1_000_000,
     });
     onPhase?.('relaying', { i: g + 1, n: groups.length });
-    const resp = await apiPost<{ jobId: string }>('/vault/batch-release-proved', request);
-    jobIds.push(resp.jobId);
+    const resp = await apiPost<{ txHash: string }>('/vault/batch-release-keyless', {
+      ...request,
+      global: null,
+    });
+    txHashes.push(resp.txHash);
     // Advance the local accumulator for the next group using the PROVEN reset flags
     // (exactly how the vault rolls it on each settled batch).
     accum.runningSpend = String((proof.resetR2 ? 0n : BigInt(accum.runningSpend)) + groupStroops);
@@ -208,7 +217,7 @@ export async function proveAndReleaseBatch(opts: {
     if (proof.resetR7) accum.anchorR7 = validAfter;
   }
   onPhase?.('done');
-  return { jobIds, total: sum, legs: active.length, batches: groups.length };
+  return { txHashes, total: sum, legs: active.length, batches: groups.length };
 }
 
 interface BatchJobStatus {
