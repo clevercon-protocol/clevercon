@@ -5517,100 +5517,293 @@ fn fund_user(test_env: &TestEnv, amount: i128) -> Address {
     user
 }
 
+// A public rule with every clause disabled (0 / empty); tests set the ones they need.
+fn empty_public_rule(env: &Env) -> crate::PublicRule {
+    crate::PublicRule {
+        per_payment_max: 0,
+        per_payment_min: 0,
+        rolling_cap: 0,
+        rolling_window_secs: 0,
+        velocity_max: 0,
+        velocity_window_secs: 0,
+        allowlist: soroban_sdk::vec![env],
+        denylist: soroban_sdk::vec![env],
+        denylist_threshold: 0,
+        calendar_start: 0,
+        calendar_end: 0,
+    }
+}
+
+fn rid(env: &Env, seed: u8) -> BytesN<32> {
+    BytesN::from_array(env, &[seed; 32])
+}
+
 #[test]
-fn test_session_register_and_release() {
+fn test_session_cap_register_and_release() {
+    // A server-held key bounded by a total spend cap + expiry (no allowlist/rule).
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let user = fund_user(&test_env, 1000);
     let session = Address::generate(&test_env.env);
     let payee = Address::generate(&test_env.env);
-    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
 
     test_env.client.register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &500,
-        &1_000,
-        &allowlist,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
     );
 
-    // The session's scope is readable on-chain.
     let info = test_env.client.get_session(&session);
     assert_eq!(info.user, user);
-    assert_eq!(info.budget_remaining, 500);
+    assert_eq!(info.spend_cap, 500);
     assert_eq!(info.spent, 0);
+    assert_eq!(info.release_count, 0);
+    assert!(info.server_held);
 
-    // The session key authorizes a release to an allowlisted payee.
+    // A cap-only key can pay ANY payee up to the cap.
     test_env
         .client
         .release_payment_session(&session, &payee, &200);
-
-    assert_eq!(test_env.token_client.balance(&payee), 200); // no fee configured
-    assert_eq!(test_env.client.get_balance(&user, &test_env.usdc_sac), 800);
+    assert_eq!(test_env.token_client.balance(&payee), 200);
     let info = test_env.client.get_session(&session);
-    assert_eq!(info.budget_remaining, 300);
     assert_eq!(info.spent, 200);
+    assert_eq!(info.release_count, 1);
+
+    // Cumulative cap: 200 + 301 > 500 is rejected; nothing moves.
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &301);
+    assert!(r == Err(Ok(VaultError::SessionBudgetExceeded)));
+    assert_eq!(test_env.token_client.balance(&payee), 200);
+    assert_eq!(test_env.client.get_session(&session).spent, 200);
 }
 
 #[test]
-fn test_session_budget_accumulates_and_caps() {
+fn test_session_pause_unpause() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let user = fund_user(&test_env, 1000);
     let session = Address::generate(&test_env.env);
     let payee = Address::generate(&test_env.env);
-    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
     test_env.client.register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &500,
-        &1_000,
-        &allowlist,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
     );
 
-    // Two releases draw down the SAME budget cumulatively.
+    test_env.client.set_session_paused(&user, &session, &true);
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &10);
+    assert!(r == Err(Ok(VaultError::SessionPaused)));
+
+    // Unpause and it spends again.
+    test_env.client.set_session_paused(&user, &session, &false);
     test_env
         .client
-        .release_payment_session(&session, &payee, &300);
+        .release_payment_session(&session, &payee, &10);
+    assert_eq!(test_env.token_client.balance(&payee), 10);
+}
+
+#[test]
+fn test_session_update_extends_cap_and_expiry() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &100i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &100);
+    // Over the old cap now.
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &1);
+    assert!(r == Err(Ok(VaultError::SessionBudgetExceeded)));
+
+    // Raise the cap to 300 and extend expiry.
+    test_env
+        .client
+        .update_session(&user, &session, &2_000u64, &300i128);
     test_env
         .client
         .release_payment_session(&session, &payee, &150);
-    assert_eq!(test_env.client.get_session(&session).budget_remaining, 50);
-
-    // A third that would exceed the remaining 50 is rejected; nothing moves.
-    let result = test_env
+    assert_eq!(test_env.client.get_session(&session).spent, 250);
+    // Cannot lower the cap below what's already spent.
+    let r = test_env
         .client
-        .try_release_payment_session(&session, &payee, &51);
-    assert!(result == Err(Ok(VaultError::SessionBudgetExceeded)));
-    assert_eq!(test_env.token_client.balance(&payee), 450);
-    assert_eq!(test_env.client.get_session(&session).budget_remaining, 50);
+        .try_update_session(&user, &session, &0u64, &200i128);
+    assert!(r == Err(Ok(VaultError::InvalidPublicParams)));
 }
 
 #[test]
-fn test_session_payee_not_allowed() {
+fn test_session_rule_bound_allowlist() {
+    // A local (owner-held) key runs under a named public rule with an allowlist.
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let user = fund_user(&test_env, 1000);
-    let session = Address::generate(&test_env.env);
     let payee = Address::generate(&test_env.env);
     let stranger = Address::generate(&test_env.env);
-    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
+
+    let r_id = rid(&test_env.env, 7);
+    let mut rule = empty_public_rule(&test_env.env);
+    rule.per_payment_max = 300;
+    rule.allowlist = soroban_sdk::vec![
+        &test_env.env,
+        crate::PublicPayee {
+            addr: payee.clone(),
+            cap: 0
+        }
+    ];
+    test_env.client.set_public_rule(&user, &r_id, &rule);
+
+    let session = Address::generate(&test_env.env);
+    // Local key: no expiry, no cap, bounded by the rule.
     test_env.client.register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &500,
-        &1_000,
-        &allowlist,
+        &0u64,
+        &0i128,
+        &Some(r_id.clone()),
+        &false,
     );
 
-    let result = test_env
+    // Allowlisted payee within the per-payment max works.
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &250);
+    assert_eq!(test_env.token_client.balance(&payee), 250);
+
+    // Off-allowlist payee is rejected.
+    let r = test_env
         .client
         .try_release_payment_session(&session, &stranger, &10);
-    assert!(result == Err(Ok(VaultError::PayeeNotAllowed)));
-    assert_eq!(test_env.token_client.balance(&stranger), 0);
+    assert!(r == Err(Ok(VaultError::PayeeNotAllowed)));
+    // Over the per-payment max is rejected.
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &301);
+    assert!(r == Err(Ok(VaultError::GlobalCapExceeded)));
+}
+
+#[test]
+fn test_session_rule_rolling_cap_and_velocity() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 10_000);
+    let payee = Address::generate(&test_env.env);
+
+    let r_id = rid(&test_env.env, 8);
+    let mut rule = empty_public_rule(&test_env.env);
+    rule.rolling_cap = 500; // 500 per 1000s window
+    rule.rolling_window_secs = 1000;
+    rule.velocity_max = 2; // at most 2 per 1000s
+    rule.velocity_window_secs = 1000;
+    test_env.client.set_public_rule(&user, &r_id, &rule);
+
+    let session = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &0u64,
+        &0i128,
+        &Some(r_id.clone()),
+        &false,
+    );
+
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &200);
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &200);
+    // Third release hits the velocity cap (2 per window).
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &50);
+    assert!(r == Err(Ok(VaultError::VelocityExceeded)));
+
+    // Usage is observable.
+    let usage = test_env.client.get_public_usage(&user, &r_id).unwrap();
+    assert_eq!(usage.window_spent, 400);
+    assert_eq!(usage.window_count, 2);
+    assert_eq!(usage.lifetime_count, 2);
+
+    // After the window elapses, it resets; but a single 600 still trips the rolling cap.
+    test_env.env.ledger().set_timestamp(2_000);
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &600);
+    assert!(r == Err(Ok(VaultError::RollingCapExceeded)));
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &400);
+    assert_eq!(
+        test_env
+            .client
+            .get_public_usage(&user, &r_id)
+            .unwrap()
+            .window_spent,
+        400
+    );
+}
+
+#[test]
+fn test_session_global_public_and_filter() {
+    // A cap-only key, plus an account global-public rule that AND-tightens: a deny.
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let good = Address::generate(&test_env.env);
+    let bad = Address::generate(&test_env.env);
+
+    let g_id = rid(&test_env.env, 9);
+    let mut g = empty_public_rule(&test_env.env);
+    g.denylist = soroban_sdk::vec![&test_env.env, bad.clone()];
+    test_env.client.set_public_rule(&user, &g_id, &g);
+    test_env.client.set_global_public(&user, &g_id);
+    assert_eq!(test_env.client.get_global_public(&user), Some(g_id.clone()));
+
+    let session = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+
+    // The denied payee is blocked by the global even though the key itself allows any.
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &bad, &10);
+    assert!(r == Err(Ok(VaultError::GlobalPayeeDenied)));
+    // A non-denied payee works.
+    test_env
+        .client
+        .release_payment_session(&session, &good, &10);
+    assert_eq!(test_env.token_client.balance(&good), 10);
 }
 
 #[test]
@@ -5620,17 +5813,15 @@ fn test_session_expired() {
     let user = fund_user(&test_env, 1000);
     let session = Address::generate(&test_env.env);
     let payee = Address::generate(&test_env.env);
-    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
     test_env.client.register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &500,
-        &1_000,
-        &allowlist,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
     );
-
-    // Advance the ledger past the session's hard expiry.
     test_env.env.ledger().set_timestamp(1_001);
     let result = test_env
         .client
@@ -5645,24 +5836,20 @@ fn test_session_revoke_blocks_release() {
     let user = fund_user(&test_env, 1000);
     let session = Address::generate(&test_env.env);
     let payee = Address::generate(&test_env.env);
-    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
     test_env.client.register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &500,
-        &1_000,
-        &allowlist,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
     );
-
     test_env.client.revoke_session(&user, &session);
-
-    // The key authorizes nothing after revocation.
     let result = test_env
         .client
         .try_release_payment_session(&session, &payee, &10);
     assert!(result == Err(Ok(VaultError::SessionNotFound)));
-    // And the scope view is gone.
     let view = test_env.client.try_get_session(&session);
     assert!(matches!(view, Err(Ok(VaultError::SessionNotFound))));
 }
@@ -5674,17 +5861,15 @@ fn test_session_revoke_only_owner() {
     let user = fund_user(&test_env, 1000);
     let other = Address::generate(&test_env.env);
     let session = Address::generate(&test_env.env);
-    let payee = Address::generate(&test_env.env);
-    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
     test_env.client.register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &500,
-        &1_000,
-        &allowlist,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
     );
-
     let result = test_env.client.try_revoke_session(&other, &session);
     assert!(result == Err(Ok(VaultError::NotYourSession)));
 }
@@ -5695,42 +5880,42 @@ fn test_session_register_invalid_params() {
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let user = fund_user(&test_env, 1000);
     let session = Address::generate(&test_env.env);
-    let payee = Address::generate(&test_env.env);
-    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
-    let empty: soroban_sdk::Vec<Address> = soroban_sdk::vec![&test_env.env];
 
-    // Non-positive budget.
+    // Unbounded: neither a cap nor a rule.
     let r = test_env.client.try_register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &0,
-        &1_000,
-        &allowlist,
+        &1_000u64,
+        &0i128,
+        &None::<BytesN<32>>,
+        &false,
     );
-    assert!(r == Err(Ok(VaultError::InvalidSessionParams)));
+    assert!(r == Err(Ok(VaultError::SessionUnbounded)));
 
-    // Expiry not in the future (ledger time is 0).
+    // Server-held key with no future expiry (ledger time is 0).
     let r = test_env.client.try_register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &500,
-        &0,
-        &allowlist,
+        &0u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
     );
-    assert!(r == Err(Ok(VaultError::InvalidSessionParams)));
+    assert!(r == Err(Ok(VaultError::InvalidPublicParams)));
 
-    // Empty allowlist.
+    // Local key naming a rule that does not exist.
     let r = test_env.client.try_register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &500,
-        &1_000,
-        &empty,
+        &0u64,
+        &0i128,
+        &Some(rid(&test_env.env, 3)),
+        &false,
     );
-    assert!(r == Err(Ok(VaultError::InvalidSessionParams)));
+    assert!(r == Err(Ok(VaultError::PublicRuleNotFound)));
 }
 
 #[test]
@@ -5739,32 +5924,29 @@ fn test_session_register_duplicate() {
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let user = fund_user(&test_env, 1000);
     let session = Address::generate(&test_env.env);
-    let payee = Address::generate(&test_env.env);
-    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
     test_env.client.register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &500,
-        &1_000,
-        &allowlist,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
     );
-
     let r = test_env.client.try_register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &100,
-        &2_000,
-        &allowlist,
+        &2_000u64,
+        &100i128,
+        &None::<BytesN<32>>,
+        &true,
     );
     assert!(r == Err(Ok(VaultError::SessionAlreadyExists)));
 }
 
 #[test]
 fn test_session_respects_locked_balance() {
-    // A session can spend only the UNLOCKED balance: funds reserved for an active
-    // task stay off-limits, exactly as withdraw enforces.
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let user = fund_user(&test_env, 1000);
@@ -5781,23 +5963,19 @@ fn test_session_respects_locked_balance() {
 
     let session = Address::generate(&test_env.env);
     let payee = Address::generate(&test_env.env);
-    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
-    // Budget is generous (500) but the available balance is only 100.
     test_env.client.register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &500,
-        &1_000,
-        &allowlist,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
     );
-
     let result = test_env
         .client
         .try_release_payment_session(&session, &payee, &101);
     assert!(result == Err(Ok(VaultError::InsufficientAvailable)));
-
-    // The unlocked 100 is spendable.
     test_env
         .client
         .release_payment_session(&session, &payee, &100);
@@ -5809,7 +5987,6 @@ fn test_session_release_applies_fee() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let recipient = Address::generate(&test_env.env);
-    // 10% fee (1000 bps).
     test_env
         .client
         .set_fee(&test_env.admin, &1000, &Some(recipient.clone()));
@@ -5817,24 +5994,20 @@ fn test_session_release_applies_fee() {
     let user = fund_user(&test_env, 2000);
     let session = Address::generate(&test_env.env);
     let payee = Address::generate(&test_env.env);
-    let allowlist = soroban_sdk::vec![&test_env.env, payee.clone()];
     test_env.client.register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &1000,
-        &1_000,
-        &allowlist,
+        &1_000u64,
+        &1000i128,
+        &None::<BytesN<32>>,
+        &true,
     );
-
     test_env
         .client
         .release_payment_session(&session, &payee, &1000);
-
-    // Payee gets amount - 10%; the fee accrues to the protocol.
     assert_eq!(test_env.token_client.balance(&payee), 900);
     assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 100);
-    // The owner's balance is debited the full amount (fee included).
     assert_eq!(test_env.client.get_balance(&user, &test_env.usdc_sac), 1000);
 }
 
@@ -6028,48 +6201,46 @@ fn test_global_public_denies_and_caps() {
     let test_env = setup_test();
     test_env.client.init(&test_env.admin, &test_env.usdc_sac);
     let user = fund_user(&test_env, 1000);
-    let session = Address::generate(&test_env.env);
     let good = Address::generate(&test_env.env);
     let bad = Address::generate(&test_env.env);
-    // The SESSION itself allows both payees and a 900 budget.
-    let allowlist = soroban_sdk::vec![&test_env.env, good.clone(), bad.clone()];
+
+    // A cap-only server key (would pay anyone up to 900).
+    let session = Address::generate(&test_env.env);
     test_env.client.register_session(
         &user,
         &session,
         &test_env.usdc_sac,
-        &900,
-        &1_000,
-        &allowlist,
+        &1_000u64,
+        &900i128,
+        &None::<BytesN<32>>,
+        &true,
     );
 
-    // The user layers a global-public rule on top: deny `bad`, cap 100 per payment.
-    let scope = crate::PublicGlobal {
-        per_payment_max: 100,
-        allowlist: soroban_sdk::vec![&test_env.env],
-        denylist: soroban_sdk::vec![&test_env.env, bad.clone()],
-        expiry: 0,
-    };
-    test_env.client.set_global_public(&user, &scope);
+    // The user marks a public rule global: deny `bad`, cap 100 per payment.
+    let g_id = rid(&test_env.env, 11);
+    let mut g = empty_public_rule(&test_env.env);
+    g.per_payment_max = 100;
+    g.denylist = soroban_sdk::vec![&test_env.env, bad.clone()];
+    test_env.client.set_public_rule(&user, &g_id, &g);
+    test_env.client.set_global_public(&user, &g_id);
 
-    // A denied payee is rejected even though the SESSION allows it.
+    // A denied payee is rejected even though the key itself allows any.
     let res = test_env
         .client
         .try_release_payment_session(&session, &bad, &10);
     assert!(res == Err(Ok(VaultError::GlobalPayeeDenied)));
-
-    // An over-cap amount to an allowed payee is rejected.
+    // Over the global's per-payment cap is rejected.
     let res = test_env
         .client
         .try_release_payment_session(&session, &good, &101);
     assert!(res == Err(Ok(VaultError::GlobalCapExceeded)));
-
-    // Within cap, allowed payee: succeeds.
+    // Within cap, non-denied payee: succeeds.
     test_env
         .client
         .release_payment_session(&session, &good, &100);
     assert_eq!(test_env.token_client.balance(&good), 100);
 
-    // Clearing the global removes the constraint (the session alone governs again).
+    // Clearing the global removes the constraint (the key's cap alone governs again).
     test_env.client.clear_global_public(&user);
     test_env.client.release_payment_session(&session, &bad, &50);
     assert_eq!(test_env.token_client.balance(&bad), 50);

@@ -274,31 +274,67 @@ pub struct GlobalProof {
     pub proof: Groth16Proof,
 }
 
-/// The user's global-public rule: a cleartext scope AND-checked on every public
-/// (session) spend. A filter, not an authorizer, so a session is still required;
-/// it can only tighten. Each field is independently optional: an empty allowlist
-/// means "no allowlist constraint", a zero `per_payment_max` means "no cap", a zero
-/// `expiry` means "never expires". Deny is evaluated first.
+/// One approved payee on a public rule's allowlist, with an optional tighter
+/// per-payee cap (R5). `cap` of 0 means only the rule's `per_payment_max` applies.
 #[contracttype]
 #[derive(Clone)]
-pub struct PublicGlobal {
-    /// Max per-payment amount in stroops; 0 = no cap.
-    pub per_payment_max: i128,
-    /// If non-empty, the ONLY payees a public spend may pay.
-    pub allowlist: Vec<Address>,
-    /// Payees always rejected (evaluated before the allowlist).
-    pub denylist: Vec<Address>,
-    /// Hard expiry as ledger time; 0 = never expires.
-    pub expiry: u64,
+pub struct PublicPayee {
+    pub addr: Address,
+    pub cap: i128,
 }
 
-/// Emitted when a user sets (or replaces) their global-public rule.
+/// A PUBLIC rule: the same clause vocabulary as a private rule, but stored CLEARTEXT
+/// on-chain and checked directly by the vault on every session (fast-lane) spend, with
+/// no proof. Each field is independently optional (a 0 / empty value disables that
+/// clause). The vault enforces all of it, so a session key can never spend outside it.
+#[contracttype]
+#[derive(Clone)]
+pub struct PublicRule {
+    /// R1 ceiling: max per payment (stroops); 0 = no cap.
+    pub per_payment_max: i128,
+    /// R1 floor: min per payment (stroops); 0 = no floor.
+    pub per_payment_min: i128,
+    /// R2 rolling cap over `rolling_window_secs` (stroops); 0 = no rolling cap.
+    pub rolling_cap: i128,
+    pub rolling_window_secs: u64,
+    /// R7 velocity: max releases over `velocity_window_secs`; 0 = no velocity cap.
+    pub velocity_max: u32,
+    pub velocity_window_secs: u64,
+    /// R3 allowlist (+ R5 per-payee cap). Empty = any payee allowed.
+    pub allowlist: Vec<PublicPayee>,
+    /// R4 deny-list: these payees are blocked when `amount > denylist_threshold`
+    /// (threshold 0 = blocked for any amount).
+    pub denylist: Vec<Address>,
+    pub denylist_threshold: i128,
+    /// R6 calendar: a release's ledger time must fall in [start, end]; 0 = no window.
+    pub calendar_start: u64,
+    pub calendar_end: u64,
+}
+
+/// Emitted when a user sets (or replaces) a named public rule.
+#[contractevent]
+pub struct PublicRuleSetEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub rule_id: BytesN<32>,
+}
+
+/// Emitted when a user clears a named public rule.
+#[contractevent]
+pub struct PublicRuleClearedEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub rule_id: BytesN<32>,
+}
+
+/// Emitted when a user marks one of their public rules as the account global-public.
 #[contractevent]
 pub struct GlobalPublicSetEvent {
     #[topic]
     pub user: Address,
-    pub per_payment_max: i128,
-    pub expiry: u64,
+    pub rule_id: BytesN<32>,
 }
 
 /// Emitted when a user clears their global-public rule.
@@ -349,8 +385,8 @@ pub struct SessionRegisteredEvent {
     #[topic]
     pub session: Address,
     pub asset: Address,
-    pub budget: i128,
     pub expiry: u64,
+    pub server_held: bool,
 }
 
 /// Emitted when a session key is revoked (`revoke_session`): it can authorize
@@ -375,7 +411,7 @@ pub struct ReleaseSessionEvent {
     pub payee: Address,
     pub asset: Address,
     pub amount: i128,
-    pub budget_remaining: i128,
+    pub rule_id: BytesN<32>,
 }
 
 #[contracterror]
@@ -472,13 +508,31 @@ pub enum VaultError {
     /// The global proof's commitment does not match the user's pinned global-private
     /// commitment.
     GlobalCommitmentMismatch = 49,
-    /// A public spend's payee is denied by the user's global-public rule (on the
-    /// denylist, or absent from a non-empty allowlist).
+    /// A public spend's payee is denied by the public rule (on the deny-list, or
+    /// absent from a non-empty allowlist).
     GlobalPayeeDenied = 50,
-    /// A public spend exceeds the per-payment cap of the user's global-public rule.
+    /// A public spend exceeds the public rule's per-payment (or per-payee) cap.
     GlobalCapExceeded = 51,
-    /// The user's global-public rule has expired.
+    /// The session key itself has expired.
     GlobalExpired = 52,
+    /// The session key is paused; unpause it to spend again.
+    SessionPaused = 53,
+    /// The public rule a session runs under (or the account global) does not exist.
+    PublicRuleNotFound = 54,
+    /// A public spend is below the public rule's per-payment minimum.
+    BelowMinPayment = 55,
+    /// A public spend would exceed the public rule's rolling cap over its window.
+    RollingCapExceeded = 56,
+    /// A public spend would exceed the public rule's velocity (count per window).
+    VelocityExceeded = 57,
+    /// A public spend's ledger time is outside the public rule's calendar window.
+    OutsideCalendar = 58,
+    /// `register_session` was given a non-future expiry (server-held keys must be
+    /// time-boxed), or `set_public_rule` had invalid clause params.
+    InvalidPublicParams = 59,
+    /// A session key must be bounded by a spend cap and/or a named rule; it had
+    /// neither, so it could never spend.
+    SessionUnbounded = 60,
 }
 
 /// A spend lane: `Private` (proof-enforced, hidden rule) or `Public` (session
@@ -574,11 +628,18 @@ pub enum DataKey {
     /// per lane; set and cleared only by the user's own signature. The PRIVATE
     /// lane's global is enforced in `release_proved_keyless` via a second proof.
     GlobalCommitment(Address, Lane),
-    /// The user's optional global-public rule: a cleartext scope AND-checked on
-    /// every public (session) spend in `release_payment_session`. The public lane
-    /// publishes its rule, so unlike the private global this is a plain on-chain
-    /// check (no proof). Zero or one per user; set/cleared by the user's signature.
-    GlobalPublicScope(Address),
+    /// A named cleartext PUBLIC rule: `(user, rule_id) → PublicRule`. The full clause
+    /// vocabulary, checked directly by the vault on every session spend (no proof).
+    /// A local (owner-held) session key spends under a named rule; a server-held key
+    /// spends under whichever rule is the account global-public.
+    PublicRule(Address, BytesN<32>),
+    /// Which of the user's public rules is the active account global-public:
+    /// `user → rule_id`. Required before any server-held session key can spend.
+    PublicGlobalId(Address),
+    /// Live usage for a public rule: `(user, rule_id) → PublicUsage` (rolling-cap R2
+    /// + velocity R7 windows + lifetime totals). The public lane has no proof, so the
+    /// vault rolls these windows itself on each session spend.
+    PublicAccum(Address, BytesN<32>),
     /// A bounded Fast-lane (public) session key and its on-chain scope:
     /// `session_pubkey → SessionInfo`. Authorized once by the user, enforced on
     /// every `release_payment_session`, revocable instantly. The only non-proof
@@ -603,22 +664,43 @@ pub struct CommitmentAccumulator {
     pub window_count: u64,
 }
 
-/// A bounded Fast-lane (public mode) session key, authorized once by the user and
-/// enforced on-chain on every spend. `budget_remaining` is the spend cap left in
-/// stroops (decremented per release, never refilled); `expiry` is a hard
-/// ledger-time cutoff; `allowlist` is the exact set of payees the key may pay.
-/// `spent` is lifetime drawdown, for analytics. Revocable instantly. This is the
-/// cleartext public counterpart to a private pinned commitment: a key spends under
-/// it directly (no per-payment proof), so its scope is deliberately tight.
+/// A Fast-lane (public mode) session key. Authorized once by the user; pausable,
+/// editable, and revocable any time. A key is bounded two ways, and at least one must
+/// be set: a `spend_cap` (total it may ever spend under this key) and/or a named
+/// `rule_id` (a cleartext public rule the vault enforces per spend). A server-held
+/// key (platform/Managed Sessions) is the simple cap+expiry form; a local key runs
+/// under a rule. If the account also has an active global-public rule, it is AND-
+/// enforced on top. `expiry` is a hard cutoff (0 = none; required for server keys).
+/// `spent` + `release_count` are live usage, readable for observability.
 #[contracttype]
 #[derive(Clone)]
 pub struct SessionInfo {
     pub user: Address,
     pub asset: Address,
-    pub budget_remaining: i128,
     pub expiry: u64,
-    pub allowlist: Vec<Address>,
+    pub spend_cap: i128,
+    pub rule_id: Option<BytesN<32>>,
+    pub server_held: bool,
+    pub paused: bool,
     pub spent: i128,
+    pub release_count: u32,
+}
+
+/// Live usage for a public rule, so an owner can see how much of each window is
+/// used/left and how many times the rule has authorized a spend. The vault rolls the
+/// R2 (spend) and R7 (count) windows itself since the public lane has no proof.
+#[contracttype]
+#[derive(Clone)]
+pub struct PublicUsage {
+    /// R2 rolling window: start anchor + spend in the current window.
+    pub anchor_r2: u64,
+    pub window_spent: i128,
+    /// R7 velocity window: start anchor + release count in the current window.
+    pub anchor_r7: u64,
+    pub window_count: u32,
+    /// Lifetime totals (never reset), for observability.
+    pub lifetime_spent: i128,
+    pub lifetime_count: u32,
 }
 
 /// Asset-specific balances and history for a user.
@@ -1085,22 +1167,49 @@ impl AgentVault {
     /// until `expiry`. The budget is a CAP, not an escrow: it is not locked from the
     /// balance, so each release also checks the live available balance. One session
     /// per key; revoke + re-register (or use a new key) to change scope.
+    /// Register a Fast-lane session key, bounded by a `spend_cap` (total it may ever
+    /// spend; 0 = none) and/or a named public `rule_id` (full clause enforcement;
+    /// None = none). At least one must be set. `server_held` marks a platform key and
+    /// requires a future `expiry` (time-boxed). Server keys are the simple cap+expiry
+    /// form (rule_id None); local keys run under a rule. A global-public, if set, is
+    /// AND-enforced on top.
     pub fn register_session(
         env: Env,
         user: Address,
         session: Address,
         asset: Address,
-        budget: i128,
         expiry: u64,
-        allowlist: Vec<Address>,
+        spend_cap: i128,
+        rule_id: Option<BytesN<32>>,
+        server_held: bool,
     ) -> Result<(), VaultError> {
         user.require_auth();
         Self::require_not_paused(&env)?;
-        if budget <= 0 || expiry <= env.ledger().timestamp() {
-            return Err(VaultError::InvalidSessionParams);
+        if spend_cap < 0 {
+            return Err(VaultError::InvalidPublicParams);
         }
-        if allowlist.is_empty() || allowlist.len() > MAX_SESSION_ALLOWLIST {
-            return Err(VaultError::InvalidSessionParams);
+        // A key must be bounded by a cap and/or a rule, else it could spend unbounded.
+        if spend_cap == 0 && rule_id.is_none() {
+            return Err(VaultError::SessionUnbounded);
+        }
+        // Server-held keys must be time-boxed AND capped (the platform holds them);
+        // local keys may be open-ended (0 expiry) because the owner holds the key.
+        if server_held {
+            if expiry <= env.ledger().timestamp() || spend_cap <= 0 {
+                return Err(VaultError::InvalidPublicParams);
+            }
+        } else if expiry != 0 && expiry <= env.ledger().timestamp() {
+            return Err(VaultError::InvalidPublicParams);
+        }
+        // A named rule must exist before a key can run under it.
+        if let Some(ref rid) = rule_id {
+            if !env
+                .storage()
+                .persistent()
+                .has(&DataKey::PublicRule(user.clone(), rid.clone()))
+            {
+                return Err(VaultError::PublicRuleNotFound);
+            }
         }
         if !Self::is_supported_asset(env.clone(), asset.clone()) {
             return Err(VaultError::AssetNotSupported);
@@ -1122,10 +1231,13 @@ impl AgentVault {
         let info = SessionInfo {
             user: user.clone(),
             asset: asset.clone(),
-            budget_remaining: budget,
             expiry,
-            allowlist,
+            spend_cap,
+            rule_id,
+            server_held,
+            paused: false,
             spent: 0,
+            release_count: 0,
         };
         env.storage().persistent().set(&session_key, &info);
         Self::extend_persistent_ttl(&env, &session_key);
@@ -1134,10 +1246,77 @@ impl AgentVault {
             user,
             session,
             asset,
-            budget,
             expiry,
+            server_held,
         }
         .publish(&env);
+        Ok(())
+    }
+
+    /// Pause a session key (temporarily powerless) or unpause it. Only the owner, by
+    /// wallet signature. A paused key's spends fail with `SessionPaused`.
+    pub fn set_session_paused(
+        env: Env,
+        user: Address,
+        session: Address,
+        paused: bool,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        let session_key = DataKey::Session(session.clone());
+        let mut info: SessionInfo = env
+            .storage()
+            .persistent()
+            .get(&session_key)
+            .ok_or(VaultError::SessionNotFound)?;
+        if info.user != user {
+            return Err(VaultError::NotYourSession);
+        }
+        info.paused = paused;
+        env.storage().persistent().set(&session_key, &info);
+        Self::extend_persistent_ttl(&env, &session_key);
+        Self::extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Edit a session key's bounds: extend the expiry and/or raise the total spend
+    /// cap. Only the owner. New values must not shrink below what is already used, and
+    /// a server-held key stays capped + time-boxed. Pass 0 to leave a field unchanged.
+    pub fn update_session(
+        env: Env,
+        user: Address,
+        session: Address,
+        new_expiry: u64,
+        new_spend_cap: i128,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        let session_key = DataKey::Session(session.clone());
+        let mut info: SessionInfo = env
+            .storage()
+            .persistent()
+            .get(&session_key)
+            .ok_or(VaultError::SessionNotFound)?;
+        if info.user != user {
+            return Err(VaultError::NotYourSession);
+        }
+        if new_expiry != 0 {
+            if new_expiry <= env.ledger().timestamp() {
+                return Err(VaultError::InvalidPublicParams);
+            }
+            info.expiry = new_expiry;
+        }
+        if new_spend_cap != 0 {
+            // Cannot set the cap below what has already been spent.
+            if new_spend_cap < info.spent {
+                return Err(VaultError::InvalidPublicParams);
+            }
+            info.spend_cap = new_spend_cap;
+        }
+        if info.server_held && (info.spend_cap <= 0 || info.expiry <= env.ledger().timestamp()) {
+            return Err(VaultError::InvalidPublicParams);
+        }
+        env.storage().persistent().set(&session_key, &info);
+        Self::extend_persistent_ttl(&env, &session_key);
+        Self::extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -1160,11 +1339,11 @@ impl AgentVault {
         Ok(())
     }
 
-    /// Pay an allowlisted payee from the session owner's balance, authorized by the
-    /// SESSION KEY itself (`session.require_auth()`) - no proof, no owner signature.
-    /// This is the public/Fast release. The on-chain scope (expiry, allowlist,
-    /// budget) is enforced here and fails closed, so the spend is bounded regardless
-    /// of who holds the key. The protocol fee applies, as on the proof-gated path.
+    /// Pay a payee from the session owner's balance, authorized by the SESSION KEY
+    /// itself (`session.require_auth()`) - no proof, no owner signature. This is the
+    /// public/Fast release. The key's spend cap, the named rule it runs under, and the
+    /// account global-public (if any) are all enforced here and fail closed, so the
+    /// spend is bounded regardless of who holds the key.
     pub fn release_payment_session(
         env: Env,
         session: Address,
@@ -1185,37 +1364,59 @@ impl AgentVault {
             .ok_or(VaultError::SessionNotFound)?;
         Self::extend_persistent_ttl(&env, &session_key);
 
-        if env.ledger().timestamp() > info.expiry {
+        if info.paused {
+            return Err(VaultError::SessionPaused);
+        }
+        let now = env.ledger().timestamp();
+        if info.expiry != 0 && now > info.expiry {
             return Err(VaultError::SessionExpired);
         }
-        if !info.allowlist.iter().any(|p| p == payee) {
-            return Err(VaultError::PayeeNotAllowed);
-        }
-        if amount > info.budget_remaining {
-            return Err(VaultError::SessionBudgetExceeded);
+
+        // The key's own total spend cap (0 = none).
+        if info.spend_cap > 0 {
+            let projected = info
+                .spent
+                .checked_add(amount)
+                .ok_or(VaultError::InvalidAmount)?;
+            if projected > info.spend_cap {
+                return Err(VaultError::SessionBudgetExceeded);
+            }
         }
 
-        // Global-public (AND filter): a cleartext account-wide rule the user set,
-        // checked on every public spend ON TOP OF the session's own scope. It can
-        // only tighten. Deny is evaluated first for a clear early reject.
-        if let Some(g) = env
+        // The named public rule this key runs under (local keys), checked + its usage
+        // window rolled. None for a plain cap-only server key.
+        let rule_roll: Option<(DataKey, PublicUsage)> = match &info.rule_id {
+            Some(rid) => {
+                let rule: PublicRule = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::PublicRule(info.user.clone(), rid.clone()))
+                    .ok_or(VaultError::PublicRuleNotFound)?;
+                Some(Self::check_public_rule(
+                    &env, &info.user, rid, &rule, &payee, amount, now,
+                )?)
+            }
+            None => None,
+        };
+
+        // The account global-public rule (AND filter), if set and not the same rule.
+        let global_roll: Option<(DataKey, PublicUsage)> = match env
             .storage()
             .persistent()
-            .get::<_, PublicGlobal>(&DataKey::GlobalPublicScope(info.user.clone()))
+            .get::<_, BytesN<32>>(&DataKey::PublicGlobalId(info.user.clone()))
         {
-            if g.expiry != 0 && env.ledger().timestamp() > g.expiry {
-                return Err(VaultError::GlobalExpired);
+            Some(gid) if info.rule_id.as_ref() != Some(&gid) => {
+                let grule: PublicRule = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::PublicRule(info.user.clone(), gid.clone()))
+                    .ok_or(VaultError::PublicRuleNotFound)?;
+                Some(Self::check_public_rule(
+                    &env, &info.user, &gid, &grule, &payee, amount, now,
+                )?)
             }
-            if g.denylist.iter().any(|p| p == payee) {
-                return Err(VaultError::GlobalPayeeDenied);
-            }
-            if !g.allowlist.is_empty() && !g.allowlist.iter().any(|p| p == payee) {
-                return Err(VaultError::GlobalPayeeDenied);
-            }
-            if g.per_payment_max > 0 && amount > g.per_payment_max {
-                return Err(VaultError::GlobalCapExceeded);
-            }
-        }
+            _ => None,
+        };
 
         let asset_key = DataKey::UserAsset(info.user.clone(), info.asset.clone());
         let mut asset_account: UserAssetAccount = env
@@ -1236,8 +1437,16 @@ impl AgentVault {
         // ── EFFECTS (checks-effects-interactions): commit every bound BEFORE the
         // external transfer, so a re-entrant token observes the debited state and a
         // second release in the same call stack cannot double-spend. ──
-        info.budget_remaining -= amount;
+        if let Some((k, u)) = &rule_roll {
+            env.storage().persistent().set(k, u);
+            Self::extend_persistent_ttl(&env, k);
+        }
+        if let Some((k, u)) = &global_roll {
+            env.storage().persistent().set(k, u);
+            Self::extend_persistent_ttl(&env, k);
+        }
         info.spent += amount;
+        info.release_count += 1;
         env.storage().persistent().set(&session_key, &info);
         Self::extend_persistent_ttl(&env, &session_key);
 
@@ -1269,23 +1478,124 @@ impl AgentVault {
         let token_client = token::Client::new(&env, &info.asset);
         token_client.transfer(&env.current_contract_address(), &payee, &payee_payout);
 
+        let event_rule_id = info
+            .rule_id
+            .clone()
+            .unwrap_or_else(|| BytesN::from_array(&env, &[0u8; 32]));
         ReleaseSessionEvent {
             user: info.user.clone(),
             session,
             payee,
             asset: info.asset.clone(),
             amount,
-            budget_remaining: info.budget_remaining,
+            rule_id: event_rule_id,
         }
         .publish(&env);
         log!(
             &env,
-            "release_payment_session user={} amount={} budget_remaining={}",
+            "release_payment_session user={} amount={} spent={}",
             info.user,
             amount,
-            info.budget_remaining
+            info.spent
         );
         Ok(())
+    }
+
+    /// Check a public rule's cleartext clauses for one release and return its rolled
+    /// usage (to store in EFFECTS by the caller). Reads the usage + validates; writes
+    /// nothing. Deny is evaluated first for a clear early reject.
+    fn check_public_rule(
+        env: &Env,
+        user: &Address,
+        rule_id: &BytesN<32>,
+        rule: &PublicRule,
+        payee: &Address,
+        amount: i128,
+        now: u64,
+    ) -> Result<(DataKey, PublicUsage), VaultError> {
+        // R4 deny-list: blocked when amount > threshold (0 = any amount).
+        if rule.denylist.iter().any(|p| &p == payee) && amount > rule.denylist_threshold {
+            return Err(VaultError::GlobalPayeeDenied);
+        }
+        // R3 allowlist (+ R5 per-payee cap). Empty = any payee.
+        if !rule.allowlist.is_empty() {
+            let mut cap: i128 = -1;
+            for e in rule.allowlist.iter() {
+                if &e.addr == payee {
+                    cap = e.cap;
+                    break;
+                }
+            }
+            if cap < 0 {
+                return Err(VaultError::PayeeNotAllowed);
+            }
+            if cap > 0 && amount > cap {
+                return Err(VaultError::GlobalCapExceeded);
+            }
+        }
+        // R1 per-payment max / min.
+        if rule.per_payment_max > 0 && amount > rule.per_payment_max {
+            return Err(VaultError::GlobalCapExceeded);
+        }
+        if rule.per_payment_min > 0 && amount < rule.per_payment_min {
+            return Err(VaultError::BelowMinPayment);
+        }
+        // R6 calendar window.
+        if rule.calendar_end != 0 && (now < rule.calendar_start || now > rule.calendar_end) {
+            return Err(VaultError::OutsideCalendar);
+        }
+
+        // R2 rolling cap + R7 velocity: the vault rolls the windows itself. "Never
+        // used" is `lifetime_count == 0` (NOT `anchor == 0`, since a real ledger time
+        // can legitimately be 0); on first use the window simply starts at `now`.
+        let usage_key = DataKey::PublicAccum(user.clone(), rule_id.clone());
+        let mut usage: PublicUsage =
+            env.storage()
+                .persistent()
+                .get(&usage_key)
+                .unwrap_or(PublicUsage {
+                    anchor_r2: 0,
+                    window_spent: 0,
+                    anchor_r7: 0,
+                    window_count: 0,
+                    lifetime_spent: 0,
+                    lifetime_count: 0,
+                });
+        let fresh = usage.lifetime_count == 0;
+        if rule.rolling_cap > 0 {
+            if fresh {
+                usage.anchor_r2 = now;
+            } else if now >= usage.anchor_r2.saturating_add(rule.rolling_window_secs) {
+                usage.window_spent = 0;
+                usage.anchor_r2 = now;
+            }
+            let new_spent = usage
+                .window_spent
+                .checked_add(amount)
+                .ok_or(VaultError::InvalidAmount)?;
+            if new_spent > rule.rolling_cap {
+                return Err(VaultError::RollingCapExceeded);
+            }
+            usage.window_spent = new_spent;
+        }
+        if rule.velocity_max > 0 {
+            if fresh {
+                usage.anchor_r7 = now;
+            } else if now >= usage.anchor_r7.saturating_add(rule.velocity_window_secs) {
+                usage.window_count = 0;
+                usage.anchor_r7 = now;
+            }
+            if usage.window_count + 1 > rule.velocity_max {
+                return Err(VaultError::VelocityExceeded);
+            }
+            usage.window_count += 1;
+        }
+        usage.lifetime_spent = usage
+            .lifetime_spent
+            .checked_add(amount)
+            .ok_or(VaultError::InvalidAmount)?;
+        usage.lifetime_count += 1;
+        Ok((usage_key, usage))
     }
 
     /// View a session's current scope + remaining budget. `SessionNotFound` if the
@@ -3106,39 +3416,92 @@ impl AgentVault {
             .get(&DataKey::GlobalCommitment(user, lane))
     }
 
-    /// Set (or replace) the user's global-public rule: a cleartext AND-filter checked
-    /// on every public (session) spend. Only tightens, never loosens. Authorized by
-    /// the user's signature, like every other scope change.
-    pub fn set_global_public(
+    /// Store (or replace) a named cleartext PUBLIC rule: the full clause vocabulary,
+    /// enforced directly by the vault on every session spend that runs under it.
+    /// Wallet-signed.
+    pub fn set_public_rule(
         env: Env,
         user: Address,
-        scope: PublicGlobal,
+        rule_id: BytesN<32>,
+        rule: PublicRule,
     ) -> Result<(), VaultError> {
         user.require_auth();
-        if scope.per_payment_max < 0 {
-            return Err(VaultError::InvalidAmount);
-        }
-        if scope.allowlist.len() > MAX_SESSION_ALLOWLIST
-            || scope.denylist.len() > MAX_SESSION_ALLOWLIST
+        if rule.per_payment_max < 0
+            || rule.per_payment_min < 0
+            || rule.rolling_cap < 0
+            || rule.denylist_threshold < 0
         {
-            return Err(VaultError::InvalidSessionParams);
+            return Err(VaultError::InvalidPublicParams);
         }
-        let key = DataKey::GlobalPublicScope(user.clone());
-        GlobalPublicSetEvent {
-            user: user.clone(),
-            per_payment_max: scope.per_payment_max,
-            expiry: scope.expiry,
+        if rule.allowlist.len() > MAX_SESSION_ALLOWLIST
+            || rule.denylist.len() > MAX_SESSION_ALLOWLIST
+        {
+            return Err(VaultError::InvalidPublicParams);
         }
-        .publish(&env);
-        env.storage().persistent().set(&key, &scope);
+        let key = DataKey::PublicRule(user.clone(), rule_id.clone());
+        env.storage().persistent().set(&key, &rule);
         Self::extend_persistent_ttl(&env, &key);
+        PublicRuleSetEvent { user, rule_id }.publish(&env);
         Ok(())
     }
 
-    /// Clear the user's global-public rule. Idempotent: a no-op if none set.
+    /// Remove a named public rule. If it is the account global-public, the global
+    /// pointer is cleared too. Idempotent.
+    pub fn clear_public_rule(
+        env: Env,
+        user: Address,
+        rule_id: BytesN<32>,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        let key = DataKey::PublicRule(user.clone(), rule_id.clone());
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+            let gkey = DataKey::PublicGlobalId(user.clone());
+            if let Some(gid) = env.storage().persistent().get::<_, BytesN<32>>(&gkey) {
+                if gid == rule_id {
+                    env.storage().persistent().remove(&gkey);
+                    GlobalPublicClearedEvent { user: user.clone() }.publish(&env);
+                }
+            }
+            PublicRuleClearedEvent { user, rule_id }.publish(&env);
+        }
+        Ok(())
+    }
+
+    /// Returns a named public rule, if it exists.
+    pub fn get_public_rule(env: Env, user: Address, rule_id: BytesN<32>) -> Option<PublicRule> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PublicRule(user, rule_id))
+    }
+
+    /// Mark one of the user's public rules as the account global-public (AND-applied
+    /// to every public spend, on top of the key's own rule/cap). The rule must exist.
+    /// Optional: nothing requires a global. Wallet-signed.
+    pub fn set_global_public(
+        env: Env,
+        user: Address,
+        rule_id: BytesN<32>,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::PublicRule(user.clone(), rule_id.clone()))
+        {
+            return Err(VaultError::PublicRuleNotFound);
+        }
+        let key = DataKey::PublicGlobalId(user.clone());
+        env.storage().persistent().set(&key, &rule_id);
+        Self::extend_persistent_ttl(&env, &key);
+        GlobalPublicSetEvent { user, rule_id }.publish(&env);
+        Ok(())
+    }
+
+    /// Clear the account global-public pointer. Idempotent: a no-op if none set.
     pub fn clear_global_public(env: Env, user: Address) -> Result<(), VaultError> {
         user.require_auth();
-        let key = DataKey::GlobalPublicScope(user.clone());
+        let key = DataKey::PublicGlobalId(user.clone());
         if env.storage().persistent().has(&key) {
             env.storage().persistent().remove(&key);
             GlobalPublicClearedEvent { user }.publish(&env);
@@ -3146,11 +3509,20 @@ impl AgentVault {
         Ok(())
     }
 
-    /// Returns the user's global-public rule, if one is set.
-    pub fn get_global_public(env: Env, user: Address) -> Option<PublicGlobal> {
+    /// Returns the rule_id of the account global-public rule, if one is set.
+    pub fn get_global_public(env: Env, user: Address) -> Option<BytesN<32>> {
         env.storage()
             .persistent()
-            .get(&DataKey::GlobalPublicScope(user))
+            .get(&DataKey::PublicGlobalId(user))
+    }
+
+    /// Live usage for a public rule (rolling-window spend/count + lifetime totals),
+    /// so an owner can see how much of each window is used/left and how many times the
+    /// rule has authorized a spend.
+    pub fn get_public_usage(env: Env, user: Address, rule_id: BytesN<32>) -> Option<PublicUsage> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PublicAccum(user, rule_id))
     }
 
     /// Returns the configured policy-verifier contract, or `None` if the
