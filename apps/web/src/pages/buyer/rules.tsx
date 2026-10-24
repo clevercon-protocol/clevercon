@@ -19,6 +19,7 @@ import {
   Lock,
   Check,
   Globe,
+  KeyRound,
 } from 'lucide-react';
 import { getPolicies, createPolicy, deletePolicy, type Policy } from '../../lib/policies';
 import {
@@ -46,6 +47,7 @@ import {
   cacheLocalSalt,
   describeDraft,
   describeSavedLimit,
+  resolvePinnedBundle,
   getDefaultLimitId,
   setDefaultLimitId,
   LIMIT_CACHE_PREFIX,
@@ -619,7 +621,7 @@ function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void })
       <div className="flex items-start gap-2.5 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] p-3">
         <ShieldCheck size={16} className="mt-0.5 shrink-0 text-emerald-300" />
         <p className="text-[12.5px] leading-relaxed text-slate-300">
-          Private rule created. To let an agent spend under it, provision the bundle below into your
+          To let an agent spend under this private rule, provision the bundle below into your
           agent&apos;s SDK or MCP config. The <span className="text-violet-300">salt</span> is the
           secret that lets the agent prove; it is also backed up encrypted under your wallet, so you
           can recover it by reconnecting on any device. Keep it private.
@@ -669,6 +671,8 @@ function RuleCard({
   onMakeGlobal,
   onClearGlobal,
   globalBusy,
+  onReveal,
+  revealBusy,
 }: {
   p: Policy;
   isDefault: boolean;
@@ -684,6 +688,8 @@ function RuleCard({
   onMakeGlobal: () => void;
   onClearGlobal: () => void;
   globalBusy: boolean;
+  onReveal: () => void;
+  revealBusy: boolean;
 }) {
   const priv = p.form ? p.form === 'private' : p.isPrivate;
   const form: RuleForm = priv ? 'private' : 'public';
@@ -838,6 +844,17 @@ function RuleCard({
               className={`rounded-md p-1.5 hover:bg-white/[0.06] disabled:opacity-40 ${isGlobal ? 'text-fuchsia-300' : 'text-slate-500 hover:text-fuchsia-300'}`}
             >
               <Globe size={14} />
+            </button>
+          )}
+          {priv && (
+            <button
+              onClick={onReveal}
+              disabled={revealBusy}
+              title="Reveal the salt + agent bundle (read from this device or your wallet-encrypted backup; never from the server)"
+              aria-label="Reveal salt and agent bundle"
+              className="rounded-md p-1.5 text-slate-500 hover:bg-white/[0.06] hover:text-violet-300 disabled:opacity-40"
+            >
+              <KeyRound size={14} />
             </button>
           )}
           <button
@@ -1028,6 +1045,29 @@ export function RulesManager() {
       qc.invalidateQueries({ queryKey: ['globals'] });
     },
   });
+  // View a private rule's salt + agent bundle any time, not only at creation. Resolved
+  // CLIENT-SIDE from this device's cache, or by decrypting the wallet-encrypted backup
+  // with your wallet. The server never sees the salt or clauses in cleartext.
+  const revealRule = useMutation({
+    mutationFn: async (p: Policy) => {
+      const bundle = await resolvePinnedBundle(p);
+      if (!bundle) {
+        throw new Error(
+          'This rule has no copy on this device and no readable backup. Reconnect the wallet that created it, or re-create it here.',
+        );
+      }
+      return { commitment: p.commitment, ...bundle };
+    },
+    onSuccess: (b) => {
+      setReveal({
+        kind: 'private',
+        commitment: b.commitment,
+        salt: b.salt,
+        bundleJson: JSON.stringify({ rules: b.rules, salt: b.salt }, null, 2),
+      });
+      setOpen(true);
+    },
+  });
   const pin = useMutation({
     mutationFn: (commitment: string) => pinCommitment(commitment),
     onSuccess: () => {
@@ -1197,6 +1237,8 @@ export function RulesManager() {
               (makeGlobal.isPending && makeGlobal.variables === p.commitment) ||
               (clearGlobal.isPending && globalPrivate === p.commitment.toLowerCase())
             }
+            onReveal={() => revealRule.mutate(p)}
+            revealBusy={revealRule.isPending && revealRule.variables?.id === p.id}
           />
         ))}
       </div>
@@ -1205,6 +1247,7 @@ export function RulesManager() {
         <p className="mt-3 text-sm text-red-400">{errMsg(pin.error || unpin.error)}</p>
       )}
       {del.error && <p className="mt-3 text-sm text-red-400">{errMsg(del.error)}</p>}
+      {revealRule.error && <p className="mt-3 text-sm text-red-400">{errMsg(revealRule.error)}</p>}
       {(makeGlobal.error || clearGlobal.error) && (
         <p className="mt-3 text-sm text-red-400">{errMsg(makeGlobal.error || clearGlobal.error)}</p>
       )}
@@ -1215,7 +1258,7 @@ export function RulesManager() {
             reveal
               ? reveal.kind === 'public'
                 ? 'Managed Session active'
-                : 'Private rule created · provision your agent'
+                : 'Private rule · salt & agent bundle'
               : editingId
                 ? 'Edit rule (saves a new version)'
                 : 'New rule'
