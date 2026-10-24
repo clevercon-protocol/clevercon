@@ -13,7 +13,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { getPolicies, type Policy } from '../../lib/policies';
-import { getVault, getDelegate, getGlobals } from '../../lib/vault';
+import { getVault, getGlobals, getPinnedCommitments } from '../../lib/vault';
 import {
   describeSavedLimit,
   savedLimitBundleRules,
@@ -69,9 +69,19 @@ export function DisbursePage() {
   const [settle, setSettle] = useState<BatchOutcome | null>(null);
   const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
   const { data: vault } = useQuery({ queryKey: ['vault'], queryFn: getVault });
-  const { data: delegate } = useQuery({ queryKey: ['delegate'], queryFn: getDelegate });
+  const { data: pinnedList = [] } = useQuery({
+    queryKey: ['pinned-commitments'],
+    queryFn: getPinnedCommitments,
+  });
+  const pinnedSet = new Set(pinnedList.map((c) => c.toLowerCase()));
   const available = vault?.available ?? 0;
-  const autopayOn = delegate?.registered ?? false;
+  // Only PINNED private rules can prove: an unpinned commitment is rejected on-chain
+  // (CommitmentNotAuthorized). Disbursing requires picking one.
+  const pinnedPrivateRules = policies.filter(
+    (p) =>
+      (p.form === 'private' || (!p.form && p.isPrivate)) &&
+      pinnedSet.has(p.commitment.toLowerCase()),
+  );
 
   // Persist the draft (recipients + ceiling) so it survives navigation.
   useEffect(() => {
@@ -102,17 +112,18 @@ export function DisbursePage() {
     : null;
   const offAllowlist = allowSet ? active.filter((l) => !allowSet.has(l.payee.trim())) : [];
 
-  // Preconditions the chain would otherwise fail on: you can only spend what's in
-  // the vault, and a release needs the bounded delegate (autopay) authorized. Block
-  // and guide BEFORE proving, instead of proving and then silently failing on-chain.
+  // Preconditions the chain would otherwise fail on: a pinned private rule must be
+  // selected (nothing proves without one), and you can only spend what's in the vault.
+  // The private path is KEYLESS, so there is no delegate/relayer to register. Block and
+  // guide BEFORE proving, instead of proving and then failing on-chain.
   const insufficient = total > available && active.length > 0;
-  const blocker: null | 'autopay' | 'balance' = !autopayOn
-    ? 'autopay'
+  const blocker: null | 'rule' | 'balance' = !selectedPolicy
+    ? 'rule'
     : insufficient
       ? 'balance'
       : null;
   const canSubmit =
-    Number(ceiling) > 0 && active.length > 0 && offAllowlist.length === 0 && blocker === null;
+    !!selectedPolicy && Number(ceiling) > 0 && active.length > 0 && offAllowlist.length === 0;
 
   const disburse = useMutation<Result>({
     mutationFn: async () => {
@@ -257,41 +268,49 @@ export function DisbursePage() {
               if (canSubmit && !busy) disburse.mutate();
             }}
           >
-            {policies.length > 0 && (
-              <div>
-                <label className="text-[11px] font-medium uppercase tracking-[0.1em] text-slate-500">
-                  Start from a saved limit (optional)
-                </label>
+            <div>
+              <label className="text-[11px] font-medium uppercase tracking-[0.1em] text-slate-500">
+                Private rule to enforce (required)
+              </label>
+              {pinnedPrivateRules.length > 0 ? (
                 <select
-                  defaultValue=""
+                  value={selectedPolicy?.id ?? ''}
                   onChange={(e) => {
-                    const p = policies.find((x) => x.id === e.target.value) ?? null;
+                    const p = pinnedPrivateRules.find((x) => x.id === e.target.value) ?? null;
                     const b = p ? savedLimitBundleRules(p) : null;
                     setSelectedPolicy(p);
                     setSavedBundle(b);
                     if (b?.perPaymentCeilingUsdc) setCeiling(String(b.perPaymentCeilingUsdc));
                   }}
                   className="cc-input mt-1.5 text-sm"
-                  aria-label="Start from a saved limit"
+                  aria-label="Private rule to enforce"
                 >
-                  <option value="">No saved limit · ceiling only…</option>
-                  {policies.map((p) => {
+                  <option value="">Pick a pinned private rule…</option>
+                  {pinnedPrivateRules.map((p) => {
                     const readable = !!savedLimitBundleRules(p);
                     return (
-                      <option key={p.id} value={p.id} disabled={!readable}>
-                        {describeSavedLimit(p)}
+                      <option key={p.id} value={p.id}>
+                        {p.name || describeSavedLimit(p)}
                         {!readable ? ' · created on another device' : ''}
                       </option>
                     );
                   })}
                 </select>
-                <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
-                  Proves the whole limit on-chain in your browser: the ceiling plus the saved
-                  limit&apos;s approved-payee allowlist, rolling cap, and deny-list. Nothing about
-                  the rule leaves this device; only the proof is relayed.
+              ) : (
+                <p className="mt-1.5 text-[12px] text-amber-300/90">
+                  No pinned private rule yet.{' '}
+                  <Link to="/app/rules" className="font-medium underline hover:text-amber-200">
+                    Create one and pin it
+                  </Link>{' '}
+                  first, then come back to disburse under it.
                 </p>
-              </div>
-            )}
+              )}
+              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+                The whole rule is proven on-chain in your browser: the per-payment ceiling plus its
+                approved-payee allowlist, rolling cap, and deny-list. Nothing about the rule leaves
+                this device; only the proof is relayed, keyless.
+              </p>
+            </div>
 
             <div>
               <label className="text-[11px] font-medium uppercase tracking-[0.1em] text-slate-500">
@@ -418,14 +437,13 @@ export function DisbursePage() {
                 {busy ? `Proving…` : 'Prove & disburse'}
               </button>
             </div>
-            {blocker === 'autopay' && (
+            {blocker === 'rule' && (
               <p className="text-sm text-amber-300">
-                Your settlement relayer isn&apos;t registered yet.{' '}
-                <Link to="/app/vault" className="font-medium underline hover:text-amber-200">
-                  Register the relayer
+                Pick a pinned private rule above to disburse under. If you have none,{' '}
+                <Link to="/app/rules" className="font-medium underline hover:text-amber-200">
+                  create and pin one
                 </Link>{' '}
-                once so it can submit your proofs, then come back. It holds no funds and cannot
-                forge a proof.
+                first. Nothing proves or moves without an enforceable rule.
               </p>
             )}
             {blocker === 'balance' && (
