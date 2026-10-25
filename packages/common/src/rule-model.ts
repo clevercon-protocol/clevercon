@@ -119,21 +119,22 @@ export const CLAUSE_ENFORCEMENT: Record<ClauseType, ClauseEnforcement> = {
     modes: ['private', 'public'],
     label: 'Min per payment',
   },
-  // R2 rolling cap + R7 velocity are enforced on-chain in the PRIVATE lane via the
-  // pp/2 proof's per-commitment tumbling-window accumulators (they hold across
-  // tasks). The public/session lane bounds spend with its own on-chain budget
-  // instead, so these clauses are private-only.
-  rollingCap: { status: 'enforced-now', modes: ['private'], label: 'Rolling budget' },
+  // R2 rolling cap + R7 velocity are enforced on-chain in BOTH lanes: the PRIVATE
+  // lane proves them via the pp/2 proof's per-commitment tumbling-window
+  // accumulators; the PUBLIC lane stores the cap/count + window on-chain in the clear
+  // and the vault rolls the window itself on each session release.
+  rollingCap: { status: 'enforced-now', modes: ['private', 'public'], label: 'Rolling budget' },
   allowlist: { status: 'enforced-now', modes: ['private', 'public'], label: 'Approved payees' },
-  // R4 deny-list, R6 calendar, R8 per-category ceilings are ALL enforced on-chain in
-  // the PRIVATE lane: the pp/2 circuit proves them per payment (buildPolicyWitness
-  // wires r4/r6/r8), so the vault's proof check rejects any violating release. They
-  // are private-only; the public/session lane uses its own cleartext scope instead.
-  denylist: { status: 'enforced-now', modes: ['private'], label: 'Blocked payees' },
-  calendar: { status: 'enforced-now', modes: ['private'], label: 'Calendar window' },
+  // R4 deny-list + R6 calendar are enforced on-chain in BOTH lanes: the PRIVATE lane
+  // proves them per payment (buildPolicyWitness wires r4/r6/r8); the PUBLIC lane
+  // carries them cleartext in the on-chain PublicRule and the vault checks them
+  // directly. R8 per-category ceilings stay private-only (no category axis on the
+  // cleartext public rule).
+  denylist: { status: 'enforced-now', modes: ['private', 'public'], label: 'Blocked payees' },
+  calendar: { status: 'enforced-now', modes: ['private', 'public'], label: 'Calendar window' },
   velocity: {
     status: 'enforced-now',
-    modes: ['private'],
+    modes: ['private', 'public'],
     label: 'Max payments per window',
   },
   categoryCeilings: {

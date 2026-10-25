@@ -36,7 +36,28 @@ export type Draft = {
   // PUBLIC lane the vault checks it in the clear. Available in both forms.
   denylist?: string[];
   denylistThresholdUsdc?: string;
+  // R6 calendar window: a release's validity must sit inside [start, end]. Stored as
+  // `datetime-local` strings on the device; mapped to unix seconds for the vault
+  // (public: calendarStart/End) and the circuit (private: calendarWindows[0]). Both
+  // blank = no calendar constraint. Enforced on-chain in both lanes.
+  calendarStart?: string;
+  calendarEnd?: string;
 };
+
+/** A local datetime string ("YYYY-MM-DDTHH:mm") to unix seconds; 0 when blank/invalid. */
+export function localToUnix(s?: string): number {
+  if (!s) return 0;
+  const t = Date.parse(s);
+  return Number.isNaN(t) ? 0 : Math.floor(t / 1000);
+}
+
+/** Unix seconds back to a `datetime-local` value ("YYYY-MM-DDTHH:mm"); '' when 0. */
+export function unixToLocal(secs: number): string {
+  if (!secs) return '';
+  const d = new Date(secs * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 export const emptyDraft = (): Draft => ({
   isPrivate: true,
@@ -172,6 +193,11 @@ export function draftToRule(d: Draft, name = ''): Rule {
       thresholdUsdc: d.denylistThresholdUsdc ? Number(d.denylistThresholdUsdc) : undefined,
     });
   }
+  const calStart = localToUnix(d.calendarStart);
+  const calEnd = localToUnix(d.calendarEnd);
+  if (calStart && calEnd) {
+    clauses.push({ type: 'calendar', windows: [{ startUnix: calStart, endUnix: calEnd }] });
+  }
   return { name, form: d.isPrivate ? 'private' : 'public', status: 'active', version: 1, clauses };
 }
 
@@ -203,6 +229,8 @@ export function describeDraft(d: Draft): string {
   if (d.rollingCap) parts.push(`max $${d.rollingCap} ${WINDOWS[d.rollingWindow].label}`);
   if (d.velocityCount)
     parts.push(`max ${d.velocityCount} payment(s) ${WINDOWS[d.velocityWindow].label}`);
+  if (localToUnix(d.calendarStart) && localToUnix(d.calendarEnd))
+    parts.push('within a date window');
   parts.push(
     d.allowlist.length ? `only ${d.allowlist.length} allowed payee(s)` : 'any payee within caps',
   );
@@ -355,6 +383,10 @@ export function draftToBundleRules(d: Draft): PolicyBundleRules {
       d.denylist && d.denylist.length && d.denylistThresholdUsdc
         ? Number(d.denylistThresholdUsdc)
         : undefined,
+    calendarWindows:
+      localToUnix(d.calendarStart) && localToUnix(d.calendarEnd)
+        ? [{ startUnix: localToUnix(d.calendarStart), endUnix: localToUnix(d.calendarEnd) }]
+        : undefined,
   };
 }
 
@@ -388,8 +420,8 @@ export function draftToPublicRule(d: Draft): PublicRule {
       d.denylist && d.denylist.length && d.denylistThresholdUsdc
         ? Number(d.denylistThresholdUsdc)
         : 0,
-    calendarStart: 0,
-    calendarEnd: 0,
+    calendarStart: localToUnix(d.calendarStart),
+    calendarEnd: localToUnix(d.calendarEnd),
   };
 }
 
@@ -413,6 +445,8 @@ export function publicRuleToDraft(r: PublicRule): Draft {
     velocityWindow: r.velocityMax ? windowKey(r.velocityWindowSecs) : 'week',
     denylist: r.denylist,
     denylistThresholdUsdc: r.denylistThresholdUsdc ? String(r.denylistThresholdUsdc) : '',
+    calendarStart: unixToLocal(r.calendarStart),
+    calendarEnd: unixToLocal(r.calendarEnd),
   };
 }
 

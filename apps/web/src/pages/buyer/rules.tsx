@@ -52,6 +52,7 @@ import {
   draftToRule,
   draftToPublicRule,
   publicRuleToDraft,
+  localToUnix,
   cacheLocalSalt,
   describeDraft,
   describeSavedLimit,
@@ -133,6 +134,7 @@ function draftChips(d: Draft): string[] {
   if (d.velocityCount) chips.push(`≤ ${d.velocityCount} ${WINDOWS[d.velocityWindow].label}`);
   chips.push(d.allowlist.length ? `${d.allowlist.length} approved payee(s)` : 'any payee in caps');
   if (d.denylist?.length) chips.push(`${d.denylist.length} blocked payee(s)`);
+  if (localToUnix(d.calendarStart) && localToUnix(d.calendarEnd)) chips.push('date window');
   return chips;
 }
 
@@ -448,6 +450,44 @@ export function RuleBuilder({ value, onChange }: { value: Draft; onChange: (d: D
           )}
         </div>
       }
+
+      {/* R6 calendar window (both lanes: proven by the circuit in private, checked in
+          the clear in public). A release must fall inside [start, end]. */}
+      <div>
+        <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
+          <CalendarClock size={13} className="text-amber-300" /> Allowed date window (optional)
+        </span>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 block text-[10px] uppercase tracking-wide text-slate-600">
+              From
+            </span>
+            <input
+              type="datetime-local"
+              value={value.calendarStart ?? ''}
+              onChange={(e) => set({ calendarStart: e.target.value })}
+              className={inputCls}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] uppercase tracking-wide text-slate-600">
+              Until
+            </span>
+            <input
+              type="datetime-local"
+              value={value.calendarEnd ?? ''}
+              onChange={(e) => set({ calendarEnd: e.target.value })}
+              className={inputCls}
+            />
+          </label>
+        </div>
+        {(value.calendarStart || value.calendarEnd) &&
+          !(localToUnix(value.calendarStart) && localToUnix(value.calendarEnd)) && (
+            <p className="mt-1 text-[11px] text-amber-300/80">
+              Set both a start and an end for the window to take effect.
+            </p>
+          )}
+      </div>
 
       {/* Live enforcement badges (form-aware) */}
       {activeClauses.length > 0 && (
