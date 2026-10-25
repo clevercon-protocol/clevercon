@@ -1,4 +1,5 @@
 import type { PolicyRules } from '../../lib/policies';
+import type { PublicRule } from '../../lib/vault';
 import type { PolicyBundleRules } from '@clevercon/agent-sdk/prover';
 import { type Rule, type ClauseType, CLAUSE_ENFORCEMENT } from '@clevercon/common/rule-model';
 import { decryptRuleBundle, type RuleBundle } from '../../lib/rule-backup';
@@ -31,15 +32,10 @@ export type Draft = {
   velocityCount: string;
   velocityWindow: keyof typeof WINDOWS;
   // R4 deny-list: payees that may NOT be paid (above an optional threshold). Up to 4.
-  // Enforced in the PRIVATE lane by the ZK circuit (proven per payment); kept on the
-  // device like the rest of the private rule.
+  // Enforced in the PRIVATE lane by the ZK circuit (proven per payment); in the
+  // PUBLIC lane the vault checks it in the clear. Available in both forms.
   denylist?: string[];
   denylistThresholdUsdc?: string;
-  // ── PUBLIC form only (a Managed Session scope: budget + allowlist + expiry) ──
-  // A public rule is not a proven clause-rule; it is the scope a bounded session
-  // key spends under. These are ignored for private rules.
-  publicBudget?: string;
-  publicExpiryHours?: string;
 };
 
 export const emptyDraft = (): Draft => ({
@@ -51,8 +47,6 @@ export const emptyDraft = (): Draft => ({
   allowlistCaps: {},
   velocityCount: '',
   velocityWindow: 'week',
-  publicBudget: '',
-  publicExpiryHours: '24',
 });
 
 // Application presets: the real jobs people use CleverCon for. Each is a ready
@@ -361,6 +355,64 @@ export function draftToBundleRules(d: Draft): PolicyBundleRules {
       d.denylist && d.denylist.length && d.denylistThresholdUsdc
         ? Number(d.denylistThresholdUsdc)
         : undefined,
+  };
+}
+
+/**
+ * Map a device-local {@link Draft} onto the cleartext PUBLIC rule the vault stores
+ * and enforces directly on each session spend (no proof). This is the full clause
+ * vocabulary in the clear: per-payment max/min, rolling cap + window, velocity +
+ * window, allowlist with per-payee caps, deny-list + threshold, and (reserved)
+ * calendar window. 0 / empty means "no constraint on that axis". A public rule is
+ * transparent by design, so unlike a private rule there is no salt or commitment to
+ * keep: the id is just a handle, and the clauses live on-chain in plain sight.
+ */
+export function draftToPublicRule(d: Draft): PublicRule {
+  const rollSecs = WINDOWS[d.rollingWindow].secs ?? 0;
+  const velSecs = WINDOWS[d.velocityWindow].secs ?? 0;
+  const rollOn = !!(d.rollingCap && rollSecs);
+  const velOn = !!(d.velocityCount && velSecs);
+  return {
+    perPaymentMaxUsdc: d.perPaymentCeiling ? Number(d.perPaymentCeiling) : 0,
+    perPaymentMinUsdc: d.perPaymentFloor ? Number(d.perPaymentFloor) : 0,
+    rollingCapUsdc: rollOn ? Number(d.rollingCap) : 0,
+    rollingWindowSecs: rollOn ? rollSecs : 0,
+    velocityMax: velOn ? Number(d.velocityCount) : 0,
+    velocityWindowSecs: velOn ? velSecs : 0,
+    allowlist: d.allowlist.map((a) => {
+      const cap = d.allowlistCaps[a];
+      return { addr: a, capUsdc: cap ? Number(cap) : 0 };
+    }),
+    denylist: d.denylist && d.denylist.length ? d.denylist.slice(0, 4) : [],
+    denylistThresholdUsdc:
+      d.denylist && d.denylist.length && d.denylistThresholdUsdc
+        ? Number(d.denylistThresholdUsdc)
+        : 0,
+    calendarStart: 0,
+    calendarEnd: 0,
+  };
+}
+
+/** Map a stored cleartext {@link PublicRule} back onto a device {@link Draft} (for editing). */
+export function publicRuleToDraft(r: PublicRule): Draft {
+  const windowKey = (secs: number): keyof typeof WINDOWS => {
+    const hit = Object.entries(WINDOWS).find(([, w]) => w.secs === secs);
+    return (hit?.[0] as keyof typeof WINDOWS) ?? 'none';
+  };
+  const allowlistCaps: Record<string, string> = {};
+  for (const p of r.allowlist) if (p.capUsdc) allowlistCaps[p.addr] = String(p.capUsdc);
+  return {
+    isPrivate: false,
+    perPaymentCeiling: r.perPaymentMaxUsdc ? String(r.perPaymentMaxUsdc) : '',
+    perPaymentFloor: r.perPaymentMinUsdc ? String(r.perPaymentMinUsdc) : '',
+    rollingCap: r.rollingCapUsdc ? String(r.rollingCapUsdc) : '',
+    rollingWindow: r.rollingCapUsdc ? windowKey(r.rollingWindowSecs) : 'week',
+    allowlist: r.allowlist.map((p) => p.addr),
+    allowlistCaps,
+    velocityCount: r.velocityMax ? String(r.velocityMax) : '',
+    velocityWindow: r.velocityMax ? windowKey(r.velocityWindowSecs) : 'week',
+    denylist: r.denylist,
+    denylistThresholdUsdc: r.denylistThresholdUsdc ? String(r.denylistThresholdUsdc) : '',
   };
 }
 

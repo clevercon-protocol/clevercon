@@ -44,6 +44,8 @@ import {
   getManagedSession,
   enableManagedSession,
   revokeManagedSession,
+  pauseManagedSession,
+  updateManagedSession,
 } from '../../lib/vault';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import { getConnectedAddress } from '../../lib/wallet';
@@ -1433,81 +1435,184 @@ export function AgentWalletCard() {
  */
 export function ManagedSessionCard() {
   const qc = useQueryClient();
-  const [budget, setBudget] = useState('');
-  const [allowlist, setAllowlist] = useState('');
+  const [cap, setCap] = useState('');
   const [hours, setHours] = useState('24');
+  const [editing, setEditing] = useState(false);
+  const [addCap, setAddCap] = useState('');
+  const [addHours, setAddHours] = useState('');
   const { data } = useQuery({ queryKey: ['managed-session'], queryFn: getManagedSession });
   const active = data?.session ?? null;
-
-  const payees = allowlist
-    .split(/[\s,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['managed-session'] });
 
   const enable = useMutation({
-    mutationFn: () =>
-      enableManagedSession(Number(budget), payees, Math.round(Number(hours) * 3600)),
+    mutationFn: () => enableManagedSession(Number(cap), Math.round(Number(hours) * 3600)),
     onSuccess: () => {
-      setBudget('');
-      setAllowlist('');
-      qc.invalidateQueries({ queryKey: ['managed-session'] });
+      setCap('');
+      invalidate();
     },
   });
   const revoke = useMutation({
     mutationFn: () => revokeManagedSession(),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['managed-session'] }),
+    onSuccess: invalidate,
+  });
+  const pause = useMutation({
+    mutationFn: (paused: boolean) => pauseManagedSession(paused),
+    onSuccess: invalidate,
+  });
+  const edit = useMutation({
+    // Raise the cap by `addCap` and/or extend the expiry by `addHours` from now.
+    // 0 leaves a field unchanged on-chain; the cap can never drop below spent.
+    mutationFn: () => {
+      const newCap = addCap ? (active?.spendCapUsdc ?? 0) + Number(addCap) : 0;
+      const extendSecs = addHours ? Math.round(Number(addHours) * 3600) : 0;
+      return updateManagedSession(extendSecs, newCap);
+    },
+    onSuccess: () => {
+      setEditing(false);
+      setAddCap('');
+      setAddHours('');
+      invalidate();
+    },
   });
 
   if (isDemo()) return null;
 
-  const canEnable =
-    Number(budget) > 0 && payees.length > 0 && Number(hours) > 0 && !enable.isPending;
+  const canEnable = Number(cap) > 0 && Number(hours) > 0 && !enable.isPending;
+  const expired = !!active && active.expiry * 1000 <= Date.now();
+  const busy = pause.isPending || edit.isPending || revoke.isPending;
 
   return (
     <Card className="p-0">
       <CardHeader
         icon={Zap}
-        title="Managed Sessions (hands-off spending)"
-        hint="A bounded, revocable key the platform signs with, so your agent spends without you present. Every limit is enforced on-chain."
+        title="Managed Session (hands-off spending)"
+        hint="A bounded, revocable key the platform signs with, so your agent spends without you present. The cap and expiry are enforced on-chain."
       />
       <div className="p-5 pt-4">
         <p className="text-sm text-slate-400">
-          The public (&ldquo;Fast&rdquo;) lane: authorize a scope once with your wallet &ndash; a
-          total budget, an allowlist of payees, and an expiry &ndash; and the platform spends within
-          it hands-off. The vault enforces every limit on-chain, so even we can never pay anyone off
-          your allowlist, exceed the budget, or spend past expiry. Revoke any time.
+          The public (&ldquo;Fast&rdquo;) lane: authorize a server key once with your wallet &ndash;
+          just a total spend cap and an expiry &ndash; and the platform spends within it hands-off
+          (it can pay any payee up to the cap). The vault enforces the cap and expiry on-chain, so
+          even we can never exceed them or spend past expiry. Pause, extend, or revoke any time. To
+          add clause limits (per-payment max, allowlist, deny-list) on top, create a public rule on
+          the Rules tab and mark it global.
         </p>
 
         {active ? (
           <div className="mt-4 space-y-2 rounded-xl bg-white/[0.04] p-4">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-slate-400">Budget remaining</span>
+              <span className="text-slate-400">Cap remaining</span>
               <span className="font-medium text-emerald-300">
-                {active.budgetRemainingUsdc.toFixed(2)} USDC
+                {active.remainingUsdc.toFixed(2)} USDC
               </span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-slate-400">Spent so far</span>
-              <span className="text-slate-300">{active.spentUsdc.toFixed(2)} USDC</span>
+              <span className="text-slate-300">
+                {active.spentUsdc.toFixed(2)} / {active.spendCapUsdc.toFixed(2)} USDC
+              </span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-slate-400">Payees allowed</span>
-              <span className="text-slate-300">{active.allowlist.length}</span>
+              <span className="text-slate-400">Payments made</span>
+              <span className="text-slate-300">{active.releaseCount}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-slate-400">Status</span>
+              <span
+                className={
+                  active.paused ? 'text-amber-300' : expired ? 'text-red-300' : 'text-emerald-300'
+                }
+              >
+                {active.paused ? 'Paused' : expired ? 'Expired' : 'Active'}
+              </span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-slate-400">Expires</span>
-              <span className="text-slate-300">
+              <span className={expired ? 'text-red-300' : 'text-slate-300'}>
                 {new Date(active.expiry * 1000).toLocaleString()}
               </span>
             </div>
-            <button
-              onClick={() => !revoke.isPending && revoke.mutate()}
-              disabled={revoke.isPending}
-              className="mt-2 w-full rounded-lg border border-red-500/30 px-3 py-2 text-sm text-red-300 hover:bg-red-500/10 disabled:opacity-50"
-            >
-              {revoke.isPending ? 'Revoking…' : 'Revoke session'}
-            </button>
-            {revoke.error && <p className="text-sm text-red-400">{readError(revoke.error)}</p>}
+
+            {editing ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if ((addCap || addHours) && !edit.isPending) edit.mutate();
+                }}
+                className="mt-2 space-y-2 border-t border-white/[0.06] pt-3"
+              >
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-slate-500">Raise cap by (USDC)</span>
+                    <input
+                      value={addCap}
+                      onChange={(e) => setAddCap(e.target.value.replace(/[^0-9.]/g, ''))}
+                      inputMode="decimal"
+                      placeholder="0"
+                      className={inputCls}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-slate-500">Extend by (hours)</span>
+                    <input
+                      value={addHours}
+                      onChange={(e) => setAddHours(e.target.value.replace(/[^0-9]/g, ''))}
+                      inputMode="numeric"
+                      placeholder="0"
+                      className={inputCls}
+                    />
+                  </label>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditing(false)}
+                    className={controls.secondary + ' flex-1'}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={(!addCap && !addHours) || edit.isPending}
+                    className={primaryBtn + ' flex-1'}
+                  >
+                    {edit.isPending ? 'Saving…' : 'Save changes'}
+                  </button>
+                </div>
+                {edit.error && <p className="text-sm text-red-400">{readError(edit.error)}</p>}
+                <p className="text-[11px] text-slate-600">
+                  One wallet signature. The cap only goes up; it can never drop below what has
+                  already been spent.
+                </p>
+              </form>
+            ) : (
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                <button
+                  onClick={() => !busy && pause.mutate(!active.paused)}
+                  disabled={busy}
+                  className="rounded-lg border border-white/10 px-3 py-2 text-sm text-slate-200 hover:bg-white/[0.06] disabled:opacity-50"
+                >
+                  {pause.isPending ? '…' : active.paused ? 'Unpause' : 'Pause'}
+                </button>
+                <button
+                  onClick={() => setEditing(true)}
+                  disabled={busy}
+                  className="rounded-lg border border-white/10 px-3 py-2 text-sm text-slate-200 hover:bg-white/[0.06] disabled:opacity-50"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => !busy && revoke.mutate()}
+                  disabled={busy}
+                  className="rounded-lg border border-red-500/30 px-3 py-2 text-sm text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                >
+                  {revoke.isPending ? 'Revoking…' : 'Revoke'}
+                </button>
+              </div>
+            )}
+            {(revoke.error || pause.error) && (
+              <p className="text-sm text-red-400">{readError(revoke.error || pause.error)}</p>
+            )}
           </div>
         ) : (
           <form
@@ -1519,10 +1624,10 @@ export function ManagedSessionCard() {
           >
             <div className="grid grid-cols-2 gap-2">
               <label className="block">
-                <span className="mb-1 block text-xs text-slate-500">Total budget (USDC)</span>
+                <span className="mb-1 block text-xs text-slate-500">Total spend cap (USDC)</span>
                 <input
-                  value={budget}
-                  onChange={(e) => setBudget(e.target.value)}
+                  value={cap}
+                  onChange={(e) => setCap(e.target.value.replace(/[^0-9.]/g, ''))}
                   inputMode="decimal"
                   placeholder="50"
                   className={inputCls}
@@ -1532,34 +1637,19 @@ export function ManagedSessionCard() {
                 <span className="mb-1 block text-xs text-slate-500">Expires in (hours)</span>
                 <input
                   value={hours}
-                  onChange={(e) => setHours(e.target.value)}
+                  onChange={(e) => setHours(e.target.value.replace(/[^0-9]/g, ''))}
                   inputMode="numeric"
                   placeholder="24"
                   className={inputCls}
                 />
               </label>
             </div>
-            <label className="block">
-              <span className="mb-1 block text-xs text-slate-500">
-                Payee allowlist (one G… address per line)
-              </span>
-              <textarea
-                value={allowlist}
-                onChange={(e) => setAllowlist(e.target.value)}
-                rows={3}
-                placeholder={'GABC…\nGDEF…'}
-                className={inputCls + ' font-mono text-xs'}
-              />
-            </label>
             <button type="submit" disabled={!canEnable} className={primaryBtn + ' w-full'}>
-              {enable.isPending ? 'Authorizing…' : 'Enable Managed Sessions'}
+              {enable.isPending ? 'Authorizing…' : 'Enable Managed Session'}
             </button>
             {enable.error && <p className="text-sm text-red-400">{readError(enable.error)}</p>}
             <p className="text-[11px] text-slate-600">
-              You will sign once in your wallet to authorize the scope on-chain.
-              {payees.length > 0
-                ? ` ${payees.length} payee${payees.length === 1 ? '' : 's'} on the allowlist.`
-                : ''}
+              You will sign once in your wallet to authorize the cap and expiry on-chain.
             </p>
           </form>
         )}

@@ -27,10 +27,16 @@ import {
   unpinCommitment,
   getPinnedCommitments,
   getManagedSession,
-  enableManagedSession,
   getGlobals,
   setGlobalPrivate,
   clearGlobalPrivate,
+  setPublicRule,
+  clearPublicRule,
+  getPublicRule,
+  getCommitmentAccumulator,
+  setGlobalPublic,
+  clearGlobalPublic,
+  type PublicUsage,
 } from '../../lib/vault';
 import { computePolicyCommitment } from '../../lib/prove';
 import { encryptRuleBundle } from '../../lib/rule-backup';
@@ -44,6 +50,8 @@ import {
   draftToRules,
   draftToBundleRules,
   draftToRule,
+  draftToPublicRule,
+  publicRuleToDraft,
   cacheLocalSalt,
   describeDraft,
   describeSavedLimit,
@@ -54,6 +62,13 @@ import {
   TEMPLATES,
   type Draft,
 } from './limits-model';
+
+/** A fresh 32-byte rule id (hex) that addresses a public rule on-chain and in configs. */
+function newRuleId(): string {
+  const b = new Uint8Array(32);
+  crypto.getRandomValues(b);
+  return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+}
 
 const inputCls = controls.field;
 const primaryBtn = controls.primary;
@@ -162,7 +177,7 @@ export function RuleBuilder({ value, onChange }: { value: Draft; onChange: (d: D
                 v: false,
                 icon: Eye,
                 title: 'Public',
-                blurb: 'Transparent scope a session key spends under.',
+                blurb: 'Transparent rule the vault checks in the clear (no proof).',
               },
             ] as const
           ).map((o) => {
@@ -198,39 +213,39 @@ export function RuleBuilder({ value, onChange }: { value: Draft; onChange: (d: D
         </div>
         {!value.isPrivate && (
           <p className="mt-1.5 text-[11px] leading-relaxed text-sky-300/80">
-            A public rule is a <span className="font-medium">Managed Session</span>: the server
-            signs within this scope hands-off, bounded on-chain by the budget, allowlist, and
-            expiry. Saving it prompts your wallet once to authorize the scope; revoke it any time on
-            the Vault tab. There is one Managed Session per account, so saving replaces the current
-            one.
+            A public rule is stored <span className="font-medium">in the clear</span> on-chain and
+            the vault enforces it directly on each session spend (no proof, no salt). Saving it
+            prompts your wallet once. A server key (Managed Session) is set up on the Vault tab with
+            just a cap and expiry; mark a public rule <span className="font-medium">global</span> to
+            add these clauses on top of every session spend, or reference its id from an SDK/MCP
+            local key.
           </p>
         )}
       </div>
 
-      {/* Templates (private clause-rules only) */}
-      {value.isPrivate && (
-        <div>
-          <span className="mb-1.5 flex items-center gap-1.5 text-xs text-slate-400">
-            <Sparkles size={13} className="text-violet-300" /> Start from a template
-          </span>
-          <div className="flex flex-wrap gap-2">
-            {TEMPLATES.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => onChange({ ...t.make(), isPrivate: true })}
-                title={t.description}
-                className={controls.chip}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
+      {/* Templates: a starting clause set; keeps the form you are editing. */}
+      <div>
+        <span className="mb-1.5 flex items-center gap-1.5 text-xs text-slate-400">
+          <Sparkles size={13} className="text-violet-300" /> Start from a template
+        </span>
+        <div className="flex flex-wrap gap-2">
+          {TEMPLATES.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => onChange({ ...t.make(), isPrivate: value.isPrivate })}
+              title={t.description}
+              className={controls.chip}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
-      )}
+      </div>
 
-      {/* PRIVATE: the proven clause fields. */}
-      {value.isPrivate && (
+      {/* The clause fields (same vocabulary in both lanes; private proves them, public
+          checks them in the clear). */}
+      {
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block">
             <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
@@ -311,37 +326,7 @@ export function RuleBuilder({ value, onChange }: { value: Draft; onChange: (d: D
             </div>
           </label>
         </div>
-      )}
-
-      {/* PUBLIC: the Managed Session scope (budget + expiry; allowlist is shared below). */}
-      {!value.isPrivate && (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block">
-            <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
-              <Gauge size={13} className="text-sky-300" /> Total budget (USDC)
-            </span>
-            <input
-              value={value.publicBudget ?? ''}
-              onChange={(e) => set({ publicBudget: e.target.value.replace(/[^0-9.]/g, '') })}
-              inputMode="decimal"
-              placeholder="e.g. 50 (the session's spend cap)"
-              className={inputCls}
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
-              <CalendarClock size={13} className="text-sky-300" /> Expires in (hours)
-            </span>
-            <input
-              value={value.publicExpiryHours ?? ''}
-              onChange={(e) => set({ publicExpiryHours: e.target.value.replace(/[^0-9]/g, '') })}
-              inputMode="numeric"
-              placeholder="e.g. 24"
-              className={inputCls}
-            />
-          </label>
-        </div>
-      )}
+      }
 
       {/* Allowlist */}
       <div>
@@ -419,8 +404,9 @@ export function RuleBuilder({ value, onChange }: { value: Draft; onChange: (d: D
         )}
       </div>
 
-      {/* R4 deny-list (private only; proven on-chain by the circuit) */}
-      {value.isPrivate && (
+      {/* R4 deny-list (both lanes: proven by the circuit in private, checked in the
+          clear in public) */}
+      {
         <div>
           <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
             <X size={13} className="text-rose-300" /> Blocked payees (deny-list, up to 4)
@@ -437,7 +423,11 @@ export function RuleBuilder({ value, onChange }: { value: Draft; onChange: (d: D
               })
             }
             rows={2}
-            placeholder="G… addresses this rule may never pay (proven on-chain, kept private)"
+            placeholder={
+              value.isPrivate
+                ? 'G… addresses this rule may never pay (proven on-chain, kept private)'
+                : 'G… addresses this rule may never pay (checked on-chain in the clear)'
+            }
             className={`${inputCls} font-mono text-[11px]`}
           />
           {(value.denylist ?? []).length > 0 && (
@@ -457,7 +447,7 @@ export function RuleBuilder({ value, onChange }: { value: Draft; onChange: (d: D
             </label>
           )}
         </div>
-      )}
+      }
 
       {/* Live enforcement badges (form-aware) */}
       {activeClauses.length > 0 && (
@@ -558,56 +548,44 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 
 type Reveal =
   | { kind: 'private'; commitment: string; salt: string; bundleJson: string }
-  | {
-      kind: 'public';
-      sessionPublicKey: string;
-      budgetUsdc: number;
-      payees: number;
-      expiry: number;
-    };
+  | { kind: 'public'; ruleId: string; chips: string[] };
 
 /**
- * Shown once right after a rule is created. Private: the salt (the only secret) +
- * the bundle to paste into an agent's SDK/MCP config (the plan's copy-once salt
- * reveal; the server never holds the salt). Public: the active Managed Session's
- * scope (the server holds the key, so there is no secret to copy).
+ * Shown once right after a rule is created (or via the view action later). Private:
+ * the salt (the only secret) + the bundle to paste into an agent's SDK/MCP config
+ * (the plan's copy-once salt reveal; the server never holds the salt). Public: the
+ * rule id, the handle that addresses this cleartext rule on-chain and in SDK/MCP
+ * configs. A public rule has no secret: its clauses are on-chain in the clear.
  */
 function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void }) {
   if (reveal.kind === 'public') {
+    const configJson = JSON.stringify({ mode: 'public', publicRuleId: reveal.ruleId }, null, 2);
     return (
       <div className="space-y-4">
         <div className="flex items-start gap-2.5 rounded-xl border border-sky-500/25 bg-sky-500/[0.06] p-3">
           <Eye size={16} className="mt-0.5 shrink-0 text-sky-300" />
           <p className="text-[12.5px] leading-relaxed text-slate-300">
-            Managed Session active. The server now signs within this scope hands-off, with no
-            per-payment signature, and the vault enforces it. There is no secret to copy: the key is
-            server-held and bounded on-chain. Spend via your agent or automation, and manage or
-            revoke it any time on the Vault tab.
+            Public rule live. Its clauses are stored on-chain{' '}
+            <span className="text-sky-300">in the clear</span> and the vault enforces them directly
+            on each session spend (no proof). There is no secret to keep. Reference the rule id
+            below from an SDK/MCP local key, or mark the rule{' '}
+            <span className="text-sky-300">global</span> to apply it on top of every spend.
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-2 rounded-xl bg-black/30 p-3 text-[12px]">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-slate-500">Budget</div>
-            <div className="font-medium text-emerald-300">{reveal.budgetUsdc.toFixed(2)} USDC</div>
+        {reveal.chips.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {reveal.chips.map((c, i) => (
+              <span
+                key={i}
+                className="rounded-md bg-white/[0.05] px-2 py-0.5 text-[11.5px] text-slate-300"
+              >
+                {c}
+              </span>
+            ))}
           </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-slate-500">Payees</div>
-            <div className="text-slate-300">{reveal.payees}</div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-slate-500">Expires</div>
-            <div className="text-slate-300">{new Date(reveal.expiry * 1000).toLocaleString()}</div>
-          </div>
-          <div className="min-w-0">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500">Session key</div>
-            <div
-              className="truncate font-mono text-[11px] text-slate-400"
-              title={reveal.sessionPublicKey}
-            >
-              {reveal.sessionPublicKey.slice(0, 8)}…{reveal.sessionPublicKey.slice(-6)}
-            </div>
-          </div>
-        </div>
+        )}
+        <CopyRow label="Rule id · public handle, live on-chain" value={reveal.ruleId} />
+        <CopyRow label="Agent config · { mode, publicRuleId }" value={configJson} />
         <div className="flex justify-end border-t border-white/[0.06] pt-3">
           <button onClick={onDone} className={primaryBtn}>
             Done
@@ -655,6 +633,67 @@ function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void })
   );
 }
 
+// ── Live usage readouts ──────────────────────────────────────────────────────
+function UsageRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-slate-500">{label}</span>
+      <span className="text-slate-300">{value}</span>
+    </div>
+  );
+}
+
+/** A public rule's live on-chain usage (window spend/count + lifetime), read by id. */
+function PublicUsagePanel({ ruleId }: { ruleId: string }) {
+  const { data } = useQuery({
+    queryKey: ['public-rule', ruleId],
+    queryFn: () => getPublicRule(ruleId),
+  });
+  const rule = data?.rule;
+  const u: PublicUsage | null | undefined = data?.usage;
+  if (!rule || !u) return null;
+  const rows: { label: string; value: string }[] = [];
+  if (rule.rollingCapUsdc > 0) {
+    rows.push({
+      label: 'Rolling window',
+      value: `${u.windowSpentUsdc.toFixed(2)} / ${rule.rollingCapUsdc.toFixed(2)} USDC`,
+    });
+  }
+  if (rule.velocityMax > 0) {
+    rows.push({ label: 'Rate this window', value: `${u.windowCount} / ${rule.velocityMax}` });
+  }
+  rows.push({
+    label: 'Lifetime',
+    value: `${u.lifetimeCount} spend(s) · ${u.lifetimeSpentUsdc.toFixed(2)} USDC`,
+  });
+  return (
+    <div className="mt-2.5 space-y-1 rounded-lg bg-black/20 p-2.5 text-[11px]">
+      <div className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">Live usage</div>
+      {rows.map((r) => (
+        <UsageRow key={r.label} {...r} />
+      ))}
+    </div>
+  );
+}
+
+/** A pinned private rule's on-chain window usage (the only totals that are public). */
+function PrivateUsagePanel({ commitment }: { commitment: string }) {
+  const { data } = useQuery({
+    queryKey: ['accum', commitment],
+    queryFn: () => getCommitmentAccumulator(commitment),
+  });
+  if (!data || (data.windowSpentUsdc === 0 && data.windowCount === 0)) return null;
+  return (
+    <div className="mt-2.5 space-y-1 rounded-lg bg-black/20 p-2.5 text-[11px]">
+      <div className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">
+        Live usage · current window
+      </div>
+      <UsageRow label="Spent" value={`${data.windowSpentUsdc.toFixed(2)} USDC`} />
+      <UsageRow label="Payments" value={String(data.windowCount)} />
+    </div>
+  );
+}
+
 // ── A single rule card ──────────────────────────────────────────────────────
 function RuleCard({
   p,
@@ -696,9 +735,15 @@ function RuleCard({
   const draft = cachedDraft(p.commitment);
   const chips = draft ? draftChips(draft) : null;
   const clauses = draft ? draftToRule(draft).clauses : [];
+  // A private rule is usable once pinned; a public rule is live the moment it is
+  // stored on-chain (no pinning), so it is always "live".
+  const live = priv ? pinned : true;
+  // Make-global is available for a private rule once it is pinned (or already
+  // global), and for a public rule any time (public globals are not pinned).
+  const canGlobal = priv ? pinned || isGlobal : true;
 
   return (
-    <Card className={`flex flex-col p-0 ${pinned ? '' : 'opacity-[0.96]'}`}>
+    <Card className={`flex flex-col p-0 ${live ? '' : 'opacity-[0.96]'}`}>
       <div className="flex items-start justify-between gap-3 px-4 pt-4">
         <div className="flex min-w-0 items-center gap-2.5">
           <span
@@ -727,19 +772,28 @@ function RuleCard({
               >
                 {priv ? 'Private' : 'Public'}
               </span>
-              {pinned ? (
+              {priv && pinned && (
                 <span
                   title="Pinned on-chain: this rule is live and can authorize spends."
                   className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-300"
                 >
                   <Anchor size={9} /> Pinned
                 </span>
-              ) : (
+              )}
+              {priv && !pinned && (
                 <span
                   title="Not pinned. Pin this rule on-chain (one wallet signature) before it can authorize a spend."
                   className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300"
                 >
                   Pin to use
+                </span>
+              )}
+              {!priv && (
+                <span
+                  title="Live on-chain in the clear: the vault enforces this rule directly on each session spend."
+                  className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-300"
+                >
+                  <Check size={9} /> Live
                 </span>
               )}
               {isDefault && (
@@ -752,7 +806,11 @@ function RuleCard({
               )}
               {isGlobal && (
                 <span
-                  title="Global-private: this rule is AND-applied to EVERY private spend, on top of whatever rule you pick."
+                  title={
+                    priv
+                      ? 'Global-private: AND-applied to EVERY private spend, on top of whatever rule you pick.'
+                      : 'Global-public: AND-applied to EVERY session spend, on top of the cap.'
+                  }
                   className="inline-flex items-center gap-1 rounded bg-fuchsia-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-fuchsia-300"
                 >
                   <Globe size={9} /> Global
@@ -808,37 +866,50 @@ function RuleCard({
             })}
           </div>
         )}
+
+        {/* Live on-chain usage: public reads by rule id; private reads the pinned
+            commitment's window accumulator (the only totals that are public). */}
+        {!priv && <PublicUsagePanel ruleId={p.commitment} />}
+        {priv && pinned && <PrivateUsagePanel commitment={p.commitment} />}
       </div>
 
       <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] px-4 py-2.5">
-        {pinned ? (
-          <button
-            onClick={onUnpin}
-            disabled={pinBusy}
-            className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11.5px] text-slate-400 hover:bg-white/[0.06] hover:text-slate-200 disabled:opacity-40"
-            title="Unpin on-chain (wallet signs unpin_policy_commitment)"
-          >
-            <Anchor size={13} /> {pinBusy ? 'Unpinning…' : 'Unpin'}
-          </button>
+        {priv ? (
+          pinned ? (
+            <button
+              onClick={onUnpin}
+              disabled={pinBusy}
+              className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11.5px] text-slate-400 hover:bg-white/[0.06] hover:text-slate-200 disabled:opacity-40"
+              title="Unpin on-chain (wallet signs unpin_policy_commitment)"
+            >
+              <Anchor size={13} /> {pinBusy ? 'Unpinning…' : 'Unpin'}
+            </button>
+          ) : (
+            <button
+              onClick={onPin}
+              disabled={pinBusy}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/15 px-2.5 py-1 text-[11.5px] font-medium text-violet-200 hover:bg-violet-500/25 disabled:opacity-40"
+              title="Pin on-chain (wallet signs set_policy_commitment) so this rule can authorize spends"
+            >
+              <Anchor size={13} /> {pinBusy ? 'Pinning…' : 'Pin on-chain'}
+            </button>
+          )
         ) : (
-          <button
-            onClick={onPin}
-            disabled={pinBusy}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/15 px-2.5 py-1 text-[11.5px] font-medium text-violet-200 hover:bg-violet-500/25 disabled:opacity-40"
-            title="Pin on-chain (wallet signs set_policy_commitment) so this rule can authorize spends"
-          >
-            <Anchor size={13} /> {pinBusy ? 'Pinning…' : 'Pin on-chain'}
-          </button>
+          <span className="inline-flex items-center gap-1.5 px-1 text-[11.5px] text-slate-500">
+            <Check size={13} className="text-emerald-300" /> Enforced on-chain
+          </span>
         )}
         <div className="flex shrink-0 items-center gap-1">
-          {priv && (pinned || isGlobal) && (
+          {canGlobal && (
             <button
               onClick={isGlobal ? onClearGlobal : onMakeGlobal}
               disabled={globalBusy}
               title={
                 isGlobal
-                  ? 'Clear as the global-private rule'
-                  : 'Make global: AND-apply this rule to every private spend (wallet signs set_global)'
+                  ? `Clear as the global-${priv ? 'private' : 'public'} rule`
+                  : priv
+                    ? 'Make global: AND-apply this rule to every private spend (wallet signs set_global)'
+                    : 'Make global: AND-apply this rule to every session spend (wallet signs set_global_public)'
               }
               aria-label={isGlobal ? 'Clear global' : 'Make global'}
               className={`rounded-md p-1.5 hover:bg-white/[0.06] disabled:opacity-40 ${isGlobal ? 'text-fuchsia-300' : 'text-slate-500 hover:text-fuchsia-300'}`}
@@ -846,17 +917,19 @@ function RuleCard({
               <Globe size={14} />
             </button>
           )}
-          {priv && (
-            <button
-              onClick={onReveal}
-              disabled={revealBusy}
-              title="Reveal the salt + agent bundle (read from this device or your wallet-encrypted backup; never from the server)"
-              aria-label="Reveal salt and agent bundle"
-              className="rounded-md p-1.5 text-slate-500 hover:bg-white/[0.06] hover:text-violet-300 disabled:opacity-40"
-            >
-              <KeyRound size={14} />
-            </button>
-          )}
+          <button
+            onClick={onReveal}
+            disabled={revealBusy}
+            title={
+              priv
+                ? 'Reveal the salt + agent bundle (read from this device or your wallet-encrypted backup; never from the server)'
+                : 'View the rule id + agent config (the public handle for SDK/MCP local keys)'
+            }
+            aria-label={priv ? 'Reveal salt and agent bundle' : 'View rule id'}
+            className="rounded-md p-1.5 text-slate-500 hover:bg-white/[0.06] hover:text-violet-300 disabled:opacity-40"
+          >
+            <KeyRound size={14} />
+          </button>
           <button
             onClick={onEdit}
             title="Edit (saves a new version)"
@@ -911,21 +984,32 @@ export function RulesManager() {
     queryFn: getPinnedCommitments,
   });
   const pinnedSet = new Set(pinnedList.map((c) => c.toLowerCase()));
-  // Public spending IS a Managed Session (a bounded, server-signed key with a
-  // budget + allowlist + expiry) - the plan's public lane. Surface it here so the
-  // public view shows the real thing, not an orphan "public policy".
+  // A server key (Managed Session) is a cap+expiry key the server signs hands-off;
+  // it is set up and managed on the Vault tab. We read it only to show a compact
+  // pointer in the public view.
   const { data: managed } = useQuery({ queryKey: ['managed-session'], queryFn: getManagedSession });
-  // The account's globals (one per lane). The private global's commitment marks which
-  // card carries the Global badge; AND-applied to every private spend.
+  // The account's globals (one per lane). A rule's commitment (private) or rule id
+  // (public) matching the global marks which card carries the Global badge; the
+  // global is AND-applied to every spend in that lane.
   const { data: globals } = useQuery({ queryKey: ['globals'], queryFn: getGlobals });
   const globalPrivate = globals?.privateCommitment?.toLowerCase() ?? null;
+  const globalPublic = globals?.publicRuleId?.toLowerCase() ?? null;
 
+  // Make-global is per-lane: a private rule sets the global-private (2nd proof on
+  // every private spend); a public rule sets the global-public (cleartext AND-filter
+  // on every session spend). Both are wallet-signed and clear the same query.
   const makeGlobal = useMutation({
-    mutationFn: (commitment: string) => setGlobalPrivate(commitment),
+    mutationFn: (p: Policy) =>
+      (p.form ?? (p.isPrivate ? 'private' : 'public')) === 'private'
+        ? setGlobalPrivate(p.commitment)
+        : setGlobalPublic(p.commitment),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['globals'] }),
   });
   const clearGlobal = useMutation({
-    mutationFn: () => clearGlobalPrivate(),
+    mutationFn: (p: Policy) =>
+      (p.form ?? (p.isPrivate ? 'private' : 'public')) === 'private'
+        ? clearGlobalPrivate()
+        : clearGlobalPublic(),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['globals'] }),
   });
 
@@ -946,11 +1030,19 @@ export function RulesManager() {
   const openEdit = (p: Policy) => {
     save.reset();
     setReveal(null);
+    const priv = (p.form ?? (p.isPrivate ? 'private' : 'public')) === 'private';
     const d = cachedDraft(p.commitment);
-    setDraft(d ?? emptyDraft());
+    // Fall back to the lane's empty draft (so a public rule opens on the public form),
+    // and for a public rule with no local copy, hydrate from the on-chain clauses.
+    setDraft(d ?? { ...emptyDraft(), isPrivate: priv });
     setName(p.name ?? '');
     setEditingId(p.id);
     setOpen(true);
+    if (!d && !priv) {
+      getPublicRule(p.commitment)
+        .then((res) => res.rule && setDraft(publicRuleToDraft(res.rule)))
+        .catch(() => {});
+    }
   };
   const openDuplicate = (p: Policy) => {
     save.reset();
@@ -962,17 +1054,40 @@ export function RulesManager() {
     setEditingId(null);
     setOpen(true);
   };
+  // View a rule's reveal later: private resolves the salt + bundle client-side (via
+  // revealRule); public has no secret, so we show the rule id + config straight from
+  // this device's cached clauses.
+  const openReveal = (p: Policy) => {
+    const priv = (p.form ?? (p.isPrivate ? 'private' : 'public')) === 'private';
+    if (priv) {
+      revealRule.mutate(p);
+      return;
+    }
+    const d = cachedDraft(p.commitment);
+    setReveal({ kind: 'public', ruleId: p.commitment, chips: d ? draftChips(d) : [] });
+    setOpen(true);
+  };
 
   const save = useMutation({
     mutationFn: async () => {
-      // PUBLIC = a Managed Session: authorize the scope (budget + allowlist + expiry)
-      // on-chain with one wallet signature; the server holds the key and spends
-      // within it hands-off.
+      // PUBLIC = a named cleartext rule the vault enforces directly on each session
+      // spend. Generate (or reuse, when editing) a 32-byte rule id, register the full
+      // clause set on-chain with one wallet signature, and keep a server record so it
+      // lists. There is no salt and no pinning: it is live the moment it is stored.
       if (!draft.isPrivate) {
-        const budget = Number(draft.publicBudget);
-        const hours = Number(draft.publicExpiryHours);
-        const res = await enableManagedSession(budget, draft.allowlist, Math.round(hours * 3600));
-        return { kind: 'public' as const, res, budget };
+        const existing = editingId
+          ? policies.find((x) => x.id === editingId)?.commitment
+          : undefined;
+        const ruleId = existing ?? newRuleId();
+        await setPublicRule(ruleId, draftToPublicRule(draft));
+        const { rules } = draftToRules(draft);
+        const policy = await createPolicy(rules, false, {
+          name: name.trim() || undefined,
+          form: 'public',
+          commitment: ruleId,
+          supersedes: editingId ?? undefined,
+        });
+        return { kind: 'public' as const, policy, ruleId };
       }
       // PRIVATE: pin the CANONICAL pp/2 commitment from the full bundle + a stable
       // device salt, and hand the server a wallet-encrypted {rules,salt} backup it
@@ -1002,14 +1117,15 @@ export function RulesManager() {
     },
     onSuccess: (result) => {
       if (result.kind === 'public') {
-        qc.invalidateQueries({ queryKey: ['managed-session'] });
-        setReveal({
-          kind: 'public',
-          sessionPublicKey: result.res.sessionPublicKey,
-          budgetUsdc: result.budget,
-          payees: draft.allowlist.length,
-          expiry: result.res.expiry,
-        });
+        const { policy: p, ruleId } = result;
+        try {
+          localStorage.setItem(localKey(p.commitment), JSON.stringify(draft));
+        } catch {
+          // ignore
+        }
+        qc.invalidateQueries({ queryKey: ['policies'] });
+        qc.invalidateQueries({ queryKey: ['public-rule', ruleId] });
+        setReveal({ kind: 'public', ruleId, chips: draftChips(draft) });
         return;
       }
       const { policy: p, salt } = result;
@@ -1030,13 +1146,20 @@ export function RulesManager() {
   });
 
   // Deleting a rule must also remove its ON-CHAIN authority, not just the server
-  // record: clear it as the global if set, then unpin its commitment so a "deleted"
-  // rule can no longer authorize a spend. Each on-chain step is wallet-signed.
+  // record: clear it as the global if set, then remove it on-chain (unpin the
+  // private commitment / clear the public rule) so a "deleted" rule can no longer
+  // authorize a spend. Each on-chain step is wallet-signed.
   const del = useMutation({
     mutationFn: async (p: Policy) => {
-      const commitment = p.commitment.toLowerCase();
-      if (globalPrivate === commitment) await clearGlobalPrivate();
-      if (pinnedSet.has(commitment)) await unpinCommitment(p.commitment);
+      const id = p.commitment.toLowerCase();
+      const priv = (p.form ?? (p.isPrivate ? 'private' : 'public')) === 'private';
+      if (priv) {
+        if (globalPrivate === id) await clearGlobalPrivate();
+        if (pinnedSet.has(id)) await unpinCommitment(p.commitment);
+      } else {
+        if (globalPublic === id) await clearGlobalPublic();
+        await clearPublicRule(p.commitment);
+      }
       await deletePolicy(p.id);
     },
     onSuccess: () => {
@@ -1084,16 +1207,14 @@ export function RulesManager() {
   const lane = (p: Policy): 'private' | 'public' => p.form ?? (p.isPrivate ? 'private' : 'public');
   const shown =
     formFilter === 'all' ? activePolicies : activePolicies.filter((p) => lane(p) === formFilter);
-  const hasAnyRule = draft.isPrivate
-    ? !!draft.perPaymentCeiling ||
-      !!draft.rollingCap ||
-      !!draft.velocityCount ||
-      draft.allowlist.length > 0
-    : // Public (Managed Session): needs a positive budget, a non-empty allowlist,
-      // and a future expiry.
-      Number(draft.publicBudget) > 0 &&
-      draft.allowlist.length > 0 &&
-      Number(draft.publicExpiryHours) > 0;
+  // A rule (either lane) needs at least one clause set.
+  const hasAnyRule =
+    !!draft.perPaymentCeiling ||
+    !!draft.perPaymentFloor ||
+    !!draft.rollingCap ||
+    !!draft.velocityCount ||
+    draft.allowlist.length > 0 ||
+    (draft.denylist?.length ?? 0) > 0;
 
   return (
     <div>
@@ -1124,23 +1245,26 @@ export function RulesManager() {
         </button>
       </div>
 
-      {/* Public lane = Managed Sessions. Surfaced in the Public (and All) views so
-          the public "rule" is the real bounded session, not an orphan policy. */}
+      {/* Server key (Managed Session) pointer. A server key is cap+expiry only and is
+          set up / paused / edited / revoked on the Vault tab; public RULES below
+          are the clause policy a global or an SDK/MCP local key applies on top. */}
       {formFilter !== 'private' && (
         <div className="mb-4 rounded-2xl border border-sky-500/20 bg-sky-500/[0.04] p-4">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-2.5">
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-500/10 text-sky-300 ring-1 ring-inset ring-sky-500/15">
-                <Eye size={16} />
+                <KeyRound size={16} />
               </span>
               <div>
                 <div className="text-[14px] font-semibold text-white">
-                  Public lane · Managed Session
+                  Server key · Managed Session
                 </div>
                 <p className="mt-0.5 max-w-xl text-[12px] leading-relaxed text-slate-400">
-                  Public spending is a bounded, revocable key the server signs with hands-off, under
-                  an on-chain scope (budget + allowlist + expiry). It is set up and managed on the
-                  Vault tab.
+                  A hands-off key the server signs, bounded on-chain by just a spend cap and an
+                  expiry (it can pay any payee up to the cap). Set it up, pause, edit, or revoke it
+                  on the Vault tab. Mark a public rule below{' '}
+                  <span className="text-sky-300">global</span> to add clause limits on top of every
+                  session spend.
                 </p>
               </div>
             </div>
@@ -1152,20 +1276,24 @@ export function RulesManager() {
             <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-xl bg-black/20 p-3 text-[12px] sm:grid-cols-4">
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-slate-500">
-                  Budget left
+                  Cap remaining
                 </div>
                 <div className="font-medium text-emerald-300">
-                  {managed.session.budgetRemainingUsdc.toFixed(2)} USDC
+                  {managed.session.remainingUsdc.toFixed(2)} USDC
                 </div>
               </div>
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-slate-500">Payees</div>
-                <div className="text-slate-300">{managed.session.allowlist.length}</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">Spent</div>
+                <div className="text-slate-300">{managed.session.spentUsdc.toFixed(2)} USDC</div>
               </div>
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-slate-500">Expires</div>
-                <div className="text-slate-300">
-                  {new Date(managed.session.expiry * 1000).toLocaleDateString()}
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">
+                  {managed.session.paused ? 'Status' : 'Expires'}
+                </div>
+                <div className={managed.session.paused ? 'text-amber-300' : 'text-slate-300'}>
+                  {managed.session.paused
+                    ? 'Paused'
+                    : new Date(managed.session.expiry * 1000).toLocaleDateString()}
                 </div>
               </div>
               <div className="min-w-0">
@@ -1194,53 +1322,60 @@ export function RulesManager() {
         </EmptyState>
       )}
 
-      {formFilter !== 'public' && shown.length > 0 && (
+      {shown.length > 0 && (
         <p className="mb-2 flex items-start gap-1.5 text-[11.5px] leading-relaxed text-slate-500">
           <Globe size={12} className="mt-0.5 shrink-0 text-fuchsia-300/80" />
           <span>
-            {globalPrivate
-              ? 'The rule with the Global badge is your global-private: AND-applied to every private spend, on top of whatever rule you pick. Use the globe icon to change or clear it.'
-              : 'Make a rule global: the globe icon on any PINNED private rule sets it as your global-private. A global must be pinned to be active; it then applies to every private spend, and can even govern on its own when no specific rule is picked. (The public global is on the Public tab.)'}
+            Make a rule global with the globe icon: a{' '}
+            <span className="text-violet-300">private</span> global (any pinned private rule) is
+            AND-applied to every private spend; a <span className="text-sky-300">public</span>{' '}
+            global (any public rule) is AND-applied to every session spend, on top of the server
+            key&apos;s cap. A global is optional, and there is one per lane.
           </span>
         </p>
       )}
 
       <div className="grid gap-3 sm:grid-cols-2">
-        {shown.map((p) => (
-          <RuleCard
-            key={p.id}
-            p={p}
-            isDefault={defaultId === p.id}
-            pinned={pinnedSet.has(p.commitment.toLowerCase())}
-            onDefault={() => toggleDefault(p.id)}
-            onPin={() => pin.mutate(p.commitment)}
-            onUnpin={() => unpin.mutate(p.commitment)}
-            onEdit={() => openEdit(p)}
-            onDuplicate={() => openDuplicate(p)}
-            onDelete={() => {
-              const commitment = p.commitment.toLowerCase();
-              const onChain =
-                pinnedSet.has(commitment) || globalPrivate === commitment
-                  ? ' It is live on-chain, so this also unpins it (and clears it as global if set) with a wallet signature, after which it can no longer authorize a spend.'
-                  : '';
-              if (window.confirm(`Delete "${p.name || 'this rule'}"?${onChain}`)) del.mutate(p);
-            }}
-            pinBusy={
-              (pin.isPending && pin.variables === p.commitment) ||
-              (unpin.isPending && unpin.variables === p.commitment) ||
-              (del.isPending && del.variables?.id === p.id)
-            }
-            isGlobal={globalPrivate === p.commitment.toLowerCase()}
-            onMakeGlobal={() => makeGlobal.mutate(p.commitment)}
-            onClearGlobal={() => clearGlobal.mutate()}
-            globalBusy={
-              (makeGlobal.isPending && makeGlobal.variables === p.commitment) ||
-              (clearGlobal.isPending && globalPrivate === p.commitment.toLowerCase())
-            }
-            onReveal={() => revealRule.mutate(p)}
-            revealBusy={revealRule.isPending && revealRule.variables?.id === p.id}
-          />
-        ))}
+        {shown.map((p) => {
+          const priv = (p.form ?? (p.isPrivate ? 'private' : 'public')) === 'private';
+          const id = p.commitment.toLowerCase();
+          const isGlobal = priv ? globalPrivate === id : globalPublic === id;
+          return (
+            <RuleCard
+              key={p.id}
+              p={p}
+              isDefault={defaultId === p.id}
+              pinned={pinnedSet.has(id)}
+              onDefault={() => toggleDefault(p.id)}
+              onPin={() => pin.mutate(p.commitment)}
+              onUnpin={() => unpin.mutate(p.commitment)}
+              onEdit={() => openEdit(p)}
+              onDuplicate={() => openDuplicate(p)}
+              onDelete={() => {
+                const onChain = priv
+                  ? pinnedSet.has(id) || globalPrivate === id
+                    ? ' It is live on-chain, so this also unpins it (and clears it as global if set) with a wallet signature, after which it can no longer authorize a spend.'
+                    : ''
+                  : ' It is live on-chain, so this also removes the public rule (and clears it as global if set) with a wallet signature.';
+                if (window.confirm(`Delete "${p.name || 'this rule'}"?${onChain}`)) del.mutate(p);
+              }}
+              pinBusy={
+                (pin.isPending && pin.variables === p.commitment) ||
+                (unpin.isPending && unpin.variables === p.commitment) ||
+                (del.isPending && del.variables?.id === p.id)
+              }
+              isGlobal={isGlobal}
+              onMakeGlobal={() => makeGlobal.mutate(p)}
+              onClearGlobal={() => clearGlobal.mutate(p)}
+              globalBusy={
+                (makeGlobal.isPending && makeGlobal.variables?.id === p.id) ||
+                (clearGlobal.isPending && clearGlobal.variables?.id === p.id)
+              }
+              onReveal={() => openReveal(p)}
+              revealBusy={revealRule.isPending && revealRule.variables?.id === p.id}
+            />
+          );
+        })}
       </div>
 
       {(pin.error || unpin.error) && (
@@ -1257,7 +1392,7 @@ export function RulesManager() {
           title={
             reveal
               ? reveal.kind === 'public'
-                ? 'Managed Session active'
+                ? 'Public rule · id & agent config'
                 : 'Private rule · salt & agent bundle'
               : editingId
                 ? 'Edit rule (saves a new version)'

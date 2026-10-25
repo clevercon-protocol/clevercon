@@ -115,24 +115,52 @@ export async function unpinCommitment(commitment: string): Promise<{ txHash: str
   return apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
 }
 
+// ── Public rules (named cleartext rules the vault checks directly) ─────────────
+
+/**
+ * A named cleartext PUBLIC rule: the full clause vocabulary the vault enforces on
+ * every public (session) spend, in the clear (no proof). Each axis is independently
+ * optional, 0 / empty means "no constraint on that axis". Identified by a 32-byte
+ * rule id (hex). The private lane is keyless and never uses these; the public lane
+ * trades zero-knowledge for hands-off speed, so the clauses live on-chain in plain
+ * sight and the vault can roll their windows itself.
+ */
+export interface PublicRule {
+  perPaymentMaxUsdc: number;
+  perPaymentMinUsdc: number;
+  rollingCapUsdc: number;
+  rollingWindowSecs: number;
+  velocityMax: number;
+  velocityWindowSecs: number;
+  allowlist: { addr: string; capUsdc: number }[];
+  denylist: string[];
+  denylistThresholdUsdc: number;
+  calendarStart: number;
+  calendarEnd: number;
+}
+
+/** Live usage for a public rule, so the UI can show used / remaining per axis. */
+export interface PublicUsage {
+  windowSpentUsdc: number;
+  windowCount: number;
+  lifetimeSpentUsdc: number;
+  lifetimeCount: number;
+  anchorR2: number;
+  anchorR7: number;
+}
+
 // ── Global rules (AND-filter applied to every spend in a lane) ─────────────────
 
-export interface PublicGlobalScope {
-  perPaymentMaxUsdc: number;
-  allowlist: string[];
-  denylist: string[];
-  expiry: number;
-}
 export interface GlobalsState {
   /** The global-private rule's commitment (hex), or null if none set. */
   privateCommitment: string | null;
-  /** The cleartext public global scope, or null if none set. */
-  publicScope: PublicGlobalScope | null;
+  /** The public rule id (hex) marked global (AND-enforced on every spend), or null. */
+  publicRuleId: string | null;
 }
 
 /** The user's current globals (one per lane). */
 export async function getGlobals(): Promise<GlobalsState> {
-  if (isDemo()) return { privateCommitment: null, publicScope: null };
+  if (isDemo()) return { privateCommitment: null, publicRuleId: null };
   return apiFetch<GlobalsState>('/vault/globals');
 }
 
@@ -140,6 +168,45 @@ async function signAndSubmitBuild(path: string, body: unknown): Promise<{ txHash
   const built = await apiPost<BuildResp>(path, body);
   const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
   return apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
+}
+
+/**
+ * A private rule's live on-chain usage: the rolling (R2) window spend and velocity
+ * (R7) window count the vault re-derives at settlement, keyed by the rule's pinned
+ * commitment. A rule never used reads back zeros. USDC for spend, a plain count for
+ * velocity. (The clause thresholds stay private; only these running totals are
+ * on-chain, so the owner can see used / remaining without revealing the rule.)
+ */
+export async function getCommitmentAccumulator(
+  commitment: string,
+): Promise<{ windowSpentUsdc: number; windowCount: number }> {
+  if (isDemo()) return { windowSpentUsdc: 0, windowCount: 0 };
+  const a = await apiFetch<{ runningSpend: string; priorCount: string }>(
+    `/vault/accumulator/${commitment}`,
+  );
+  return {
+    windowSpentUsdc: Number(a.runningSpend) / 10_000_000,
+    windowCount: Number(a.priorCount),
+  };
+}
+
+/** Read a named public rule (USDC / seconds) + its live usage, or nulls if unset. */
+export async function getPublicRule(
+  ruleId: string,
+): Promise<{ rule: PublicRule | null; usage: PublicUsage | null }> {
+  if (isDemo()) return { rule: null, usage: null };
+  return apiFetch<{ rule: PublicRule | null; usage: PublicUsage | null }>(
+    `/vault/public-rule/${ruleId}`,
+  );
+}
+
+/** Store (or replace) a named cleartext public rule on-chain (wallet-signed). */
+export function setPublicRule(ruleId: string, rule: PublicRule): Promise<{ txHash: string }> {
+  return signAndSubmitBuild('/vault/public-rule/set', { ruleId, rule });
+}
+/** Remove a named public rule on-chain (wallet-signed). */
+export function clearPublicRule(ruleId: string): Promise<{ txHash: string }> {
+  return signAndSubmitBuild('/vault/public-rule/clear', { ruleId });
 }
 
 /** Make a PRIVATE rule the global-private (applies to every private spend; wallet-signed). */
@@ -150,20 +217,26 @@ export function setGlobalPrivate(commitment: string): Promise<{ txHash: string }
 export function clearGlobalPrivate(): Promise<{ txHash: string }> {
   return signAndSubmitBuild('/vault/global/private/clear', {});
 }
-/** Set the global-public cleartext scope (applies to every public spend; wallet-signed). */
-export function setGlobalPublic(scope: PublicGlobalScope): Promise<{ txHash: string }> {
-  return signAndSubmitBuild('/vault/global/public/set', scope);
+/** Mark a public rule global (AND-enforced on every public spend; wallet-signed). */
+export function setGlobalPublic(ruleId: string): Promise<{ txHash: string }> {
+  return signAndSubmitBuild('/vault/global/public/set', { ruleId });
 }
-/** Clear the global-public scope. */
+/** Clear the global-public rule. */
 export function clearGlobalPublic(): Promise<{ txHash: string }> {
   return signAndSubmitBuild('/vault/global/public/clear', {});
 }
 
 export interface ManagedSessionScope {
-  budgetRemainingUsdc: number;
-  expiry: number;
-  allowlist: string[];
+  /** Total spend cap over the key's life (0 = unbounded by cap, bounded by a rule). */
+  spendCapUsdc: number;
   spentUsdc: number;
+  remainingUsdc: number;
+  expiry: number;
+  /** The public rule id (hex) this key runs under, or null if cap-only. */
+  ruleId: string | null;
+  serverHeld: boolean;
+  paused: boolean;
+  releaseCount: number;
 }
 export interface ManagedSession {
   sessionPublicKey: string | null;
@@ -178,24 +251,41 @@ export async function getManagedSession(): Promise<ManagedSession> {
 
 /**
  * Enable Managed Sessions (server + public lane): authorize the user's server-held
- * delegate as a bounded session key (budget + payee allowlist + hard expiry). The
- * API builds register_session, the wallet signs ONCE, the API submits. Thereafter
- * the server can spend hands-off within the scope and the vault enforces it; revoke
- * instantly with `revokeManagedSession`. This is the dapp's public option (a browser
- * key cannot sign hands-off), replacing Autopay with on-chain limits.
+ * delegate as a bounded session key. A server key is scoped by just a total spend
+ * cap + a hard expiry (no allowlist, no rule): it can pay any payee up to the cap
+ * until it expires. The API builds register_session, the wallet signs ONCE, the API
+ * submits. Thereafter the server spends hands-off within the scope and the vault
+ * enforces it; pause, edit (extend/raise), or revoke at any time. This is the dapp's
+ * public option (a browser key cannot sign hands-off).
  */
 export async function enableManagedSession(
-  budgetUsdc: number,
-  allowlist: string[],
+  spendCapUsdc: number,
   expiresInSeconds: number,
 ): Promise<{ txHash: string; sessionPublicKey: string; expiry: number }> {
   const built = await apiPost<BuildResp & { sessionPublicKey: string; expiry: number }>(
     '/vault/session/enable',
-    { budgetUsdc, allowlist, expiresInSeconds },
+    { spendCapUsdc, expiresInSeconds },
   );
   const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
   const res = await apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
   return { txHash: res.txHash, sessionPublicKey: built.sessionPublicKey, expiry: built.expiry };
+}
+
+/** Pause / unpause the Managed Session key on-chain (wallet-signed). Paused = no spend. */
+export function pauseManagedSession(paused: boolean): Promise<{ txHash: string }> {
+  return signAndSubmitBuild('/vault/session/pause', { paused });
+}
+
+/**
+ * Edit the Managed Session on-chain (wallet-signed): extend the expiry and/or raise
+ * the spend cap. Pass 0 to leave a field unchanged; the cap can never drop below what
+ * has already been spent.
+ */
+export function updateManagedSession(
+  newExpiresInSeconds: number,
+  newSpendCapUsdc: number,
+): Promise<{ txHash: string }> {
+  return signAndSubmitBuild('/vault/session/update', { newExpiresInSeconds, newSpendCapUsdc });
 }
 
 /** Hands-off public-lane spend via the Managed Session (the server signs; no wallet prompt). */

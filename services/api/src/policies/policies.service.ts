@@ -136,17 +136,17 @@ export class PoliciesService {
     const form: RuleForm = params.form ?? (params.isPrivate === false ? 'public' : 'private');
     const isPrivate = form === 'private';
 
-    // The commitment binds the rule. A private rule's commitment is the canonical
-    // pp/2 Poseidon value the CLIENT computed from the rule + its device salt
-    // (docs/private-policies-v2.md section 3): the owner pins it and every
-    // browser disburse proof must reproduce it, so the server stores the client
-    // value verbatim and never holds the rule. A public rule is auditable and
-    // stored cleartext (ruleSummary), so the server derives its commitment as a
-    // SHA-256 of the canonical encoding (the pp/1 binding check). If a private
-    // caller omits the client commitment (legacy), fall back to SHA-256 so
-    // creation still works, though that rule will not be pp/2-pinnable.
+    // The commitment binds the rule, and it is the CLIENT's handle in both lanes:
+    // a private rule's commitment is the canonical pp/2 Poseidon value the client
+    // computed from the rule + its device salt (docs/private-policies-v2.md section
+    // 3), which the owner pins and every disburse proof must reproduce; a public
+    // rule's commitment is the 32-byte rule id the client generated and registered
+    // on-chain via set_public_rule (get_public_rule reads the cleartext clauses by
+    // that id). Either way the server stores the client value verbatim so the dapp
+    // and SDK/MCP can address the exact on-chain rule. Only when a caller omits it
+    // (legacy) do we fall back to a SHA-256 of the canonical encoding.
     let commitment: string;
-    if (isPrivate && params.commitment) {
+    if (params.commitment) {
       if (!/^[0-9a-fA-F]{64}$/.test(params.commitment)) {
         throw new BadRequestException('commitment must be 32-byte hex (64 chars)');
       }

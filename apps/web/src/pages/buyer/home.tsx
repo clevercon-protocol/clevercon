@@ -190,7 +190,7 @@ function RuleLanePicker({
         ) : (
           <span className="text-xs text-slate-400">
             {sessionActive
-              ? `Managed Session · ${managed!.session!.budgetRemainingUsdc.toFixed(2)} USDC left · ${managed!.session!.allowlist.length} payee(s)`
+              ? `Managed Session · ${managed!.session!.remainingUsdc.toFixed(2)} USDC cap left`
               : 'No Managed Session. Set one up on the Vault tab.'}
           </span>
         )}
@@ -320,7 +320,7 @@ export function CommandChat() {
     if (lane === 'public') {
       return {
         label: sessionActive
-          ? `Managed Session · ${managed!.session!.budgetRemainingUsdc.toFixed(2)} USDC left`
+          ? `Managed Session · ${managed!.session!.remainingUsdc.toFixed(2)} USDC cap left`
           : 'no Managed Session yet',
         isPrivate: false,
       };
