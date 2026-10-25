@@ -5567,7 +5567,7 @@ fn test_session_cap_register_and_release() {
     // A cap-only key can pay ANY payee up to the cap.
     test_env
         .client
-        .release_payment_session(&session, &payee, &200);
+        .release_payment_session(&session, &payee, &200, &None);
     assert_eq!(test_env.token_client.balance(&payee), 200);
     let info = test_env.client.get_session(&session);
     assert_eq!(info.spent, 200);
@@ -5576,7 +5576,7 @@ fn test_session_cap_register_and_release() {
     // Cumulative cap: 200 + 301 > 500 is rejected; nothing moves.
     let r = test_env
         .client
-        .try_release_payment_session(&session, &payee, &301);
+        .try_release_payment_session(&session, &payee, &301, &None);
     assert!(r == Err(Ok(VaultError::SessionBudgetExceeded)));
     assert_eq!(test_env.token_client.balance(&payee), 200);
     assert_eq!(test_env.client.get_session(&session).spent, 200);
@@ -5602,14 +5602,14 @@ fn test_session_pause_unpause() {
     test_env.client.set_session_paused(&user, &session, &true);
     let r = test_env
         .client
-        .try_release_payment_session(&session, &payee, &10);
+        .try_release_payment_session(&session, &payee, &10, &None);
     assert!(r == Err(Ok(VaultError::SessionPaused)));
 
     // Unpause and it spends again.
     test_env.client.set_session_paused(&user, &session, &false);
     test_env
         .client
-        .release_payment_session(&session, &payee, &10);
+        .release_payment_session(&session, &payee, &10, &None);
     assert_eq!(test_env.token_client.balance(&payee), 10);
 }
 
@@ -5631,11 +5631,11 @@ fn test_session_update_extends_cap_and_expiry() {
     );
     test_env
         .client
-        .release_payment_session(&session, &payee, &100);
+        .release_payment_session(&session, &payee, &100, &None);
     // Over the old cap now.
     let r = test_env
         .client
-        .try_release_payment_session(&session, &payee, &1);
+        .try_release_payment_session(&session, &payee, &1, &None);
     assert!(r == Err(Ok(VaultError::SessionBudgetExceeded)));
 
     // Raise the cap to 300 and extend expiry.
@@ -5644,7 +5644,7 @@ fn test_session_update_extends_cap_and_expiry() {
         .update_session(&user, &session, &2_000u64, &300i128);
     test_env
         .client
-        .release_payment_session(&session, &payee, &150);
+        .release_payment_session(&session, &payee, &150, &None);
     assert_eq!(test_env.client.get_session(&session).spent, 250);
     // Cannot lower the cap below what's already spent.
     let r = test_env
@@ -5689,18 +5689,18 @@ fn test_session_rule_bound_allowlist() {
     // Allowlisted payee within the per-payment max works.
     test_env
         .client
-        .release_payment_session(&session, &payee, &250);
+        .release_payment_session(&session, &payee, &250, &None);
     assert_eq!(test_env.token_client.balance(&payee), 250);
 
     // Off-allowlist payee is rejected.
     let r = test_env
         .client
-        .try_release_payment_session(&session, &stranger, &10);
+        .try_release_payment_session(&session, &stranger, &10, &None);
     assert!(r == Err(Ok(VaultError::PayeeNotAllowed)));
     // Over the per-payment max is rejected.
     let r = test_env
         .client
-        .try_release_payment_session(&session, &payee, &301);
+        .try_release_payment_session(&session, &payee, &301, &None);
     assert!(r == Err(Ok(VaultError::GlobalCapExceeded)));
 }
 
@@ -5732,14 +5732,14 @@ fn test_session_rule_rolling_cap_and_velocity() {
 
     test_env
         .client
-        .release_payment_session(&session, &payee, &200);
+        .release_payment_session(&session, &payee, &200, &None);
     test_env
         .client
-        .release_payment_session(&session, &payee, &200);
+        .release_payment_session(&session, &payee, &200, &None);
     // Third release hits the velocity cap (2 per window).
     let r = test_env
         .client
-        .try_release_payment_session(&session, &payee, &50);
+        .try_release_payment_session(&session, &payee, &50, &None);
     assert!(r == Err(Ok(VaultError::VelocityExceeded)));
 
     // Usage is observable.
@@ -5752,11 +5752,11 @@ fn test_session_rule_rolling_cap_and_velocity() {
     test_env.env.ledger().set_timestamp(2_000);
     let r = test_env
         .client
-        .try_release_payment_session(&session, &payee, &600);
+        .try_release_payment_session(&session, &payee, &600, &None);
     assert!(r == Err(Ok(VaultError::RollingCapExceeded)));
     test_env
         .client
-        .release_payment_session(&session, &payee, &400);
+        .release_payment_session(&session, &payee, &400, &None);
     assert_eq!(
         test_env
             .client
@@ -5765,6 +5765,61 @@ fn test_session_rule_rolling_cap_and_velocity() {
             .window_spent,
         400
     );
+}
+
+#[test]
+fn test_session_per_call_rule_selection() {
+    // A cap-only server key (no rule bound at registration). A public rule is SELECTED
+    // per release - like a private rule is picked per task - and enforced on top of the
+    // key's own cap. This is the dapp's public lane: session cap + per-task rule.
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let payee = Address::generate(&test_env.env);
+
+    let rid_a = rid(&test_env.env, 11);
+    let mut a = empty_public_rule(&test_env.env);
+    a.per_payment_max = 100;
+    test_env.client.set_public_rule(&user, &rid_a, &a);
+
+    let session = Address::generate(&test_env.env);
+    // A server-held key needs a future expiry + positive cap (rule_id = None here).
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000_000u64,
+        &500i128,
+        &None,
+        &true,
+    );
+
+    // Picking rule A per call: within its per-payment max -> OK; over it -> rejected.
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &100, &Some(rid_a.clone()));
+    let r =
+        test_env
+            .client
+            .try_release_payment_session(&session, &payee, &101, &Some(rid_a.clone()));
+    assert!(r == Err(Ok(VaultError::GlobalCapExceeded)));
+
+    // A non-existent rule id is rejected (a garbage rule cannot bypass enforcement).
+    let missing = rid(&test_env.env, 99);
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &10, &Some(missing));
+    assert!(r == Err(Ok(VaultError::PublicRuleNotFound)));
+
+    // No per-call rule -> only the key's own cap governs (a valid cap-only spend).
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &200, &None);
+
+    // Only the rule-A release is tracked under rule A; the cap-only spend is not.
+    let usage = test_env.client.get_public_usage(&user, &rid_a).unwrap();
+    assert_eq!(usage.lifetime_count, 1);
+    assert_eq!(usage.lifetime_spent, 100);
 }
 
 #[test]
@@ -5797,12 +5852,12 @@ fn test_session_global_public_and_filter() {
     // The denied payee is blocked by the global even though the key itself allows any.
     let r = test_env
         .client
-        .try_release_payment_session(&session, &bad, &10);
+        .try_release_payment_session(&session, &bad, &10, &None);
     assert!(r == Err(Ok(VaultError::GlobalPayeeDenied)));
     // A non-denied payee works.
     test_env
         .client
-        .release_payment_session(&session, &good, &10);
+        .release_payment_session(&session, &good, &10, &None);
     assert_eq!(test_env.token_client.balance(&good), 10);
 }
 
@@ -5825,7 +5880,7 @@ fn test_session_expired() {
     test_env.env.ledger().set_timestamp(1_001);
     let result = test_env
         .client
-        .try_release_payment_session(&session, &payee, &10);
+        .try_release_payment_session(&session, &payee, &10, &None);
     assert!(result == Err(Ok(VaultError::SessionExpired)));
 }
 
@@ -5848,7 +5903,7 @@ fn test_session_revoke_blocks_release() {
     test_env.client.revoke_session(&user, &session);
     let result = test_env
         .client
-        .try_release_payment_session(&session, &payee, &10);
+        .try_release_payment_session(&session, &payee, &10, &None);
     assert!(result == Err(Ok(VaultError::SessionNotFound)));
     let view = test_env.client.try_get_session(&session);
     assert!(matches!(view, Err(Ok(VaultError::SessionNotFound))));
@@ -5974,11 +6029,11 @@ fn test_session_respects_locked_balance() {
     );
     let result = test_env
         .client
-        .try_release_payment_session(&session, &payee, &101);
+        .try_release_payment_session(&session, &payee, &101, &None);
     assert!(result == Err(Ok(VaultError::InsufficientAvailable)));
     test_env
         .client
-        .release_payment_session(&session, &payee, &100);
+        .release_payment_session(&session, &payee, &100, &None);
     assert_eq!(test_env.token_client.balance(&payee), 100);
 }
 
@@ -6005,7 +6060,7 @@ fn test_session_release_applies_fee() {
     );
     test_env
         .client
-        .release_payment_session(&session, &payee, &1000);
+        .release_payment_session(&session, &payee, &1000, &None);
     assert_eq!(test_env.token_client.balance(&payee), 900);
     assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 100);
     assert_eq!(test_env.client.get_balance(&user, &test_env.usdc_sac), 1000);
@@ -6227,21 +6282,23 @@ fn test_global_public_denies_and_caps() {
     // A denied payee is rejected even though the key itself allows any.
     let res = test_env
         .client
-        .try_release_payment_session(&session, &bad, &10);
+        .try_release_payment_session(&session, &bad, &10, &None);
     assert!(res == Err(Ok(VaultError::GlobalPayeeDenied)));
     // Over the global's per-payment cap is rejected.
     let res = test_env
         .client
-        .try_release_payment_session(&session, &good, &101);
+        .try_release_payment_session(&session, &good, &101, &None);
     assert!(res == Err(Ok(VaultError::GlobalCapExceeded)));
     // Within cap, non-denied payee: succeeds.
     test_env
         .client
-        .release_payment_session(&session, &good, &100);
+        .release_payment_session(&session, &good, &100, &None);
     assert_eq!(test_env.token_client.balance(&good), 100);
 
     // Clearing the global removes the constraint (the key's cap alone governs again).
     test_env.client.clear_global_public(&user);
-    test_env.client.release_payment_session(&session, &bad, &50);
+    test_env
+        .client
+        .release_payment_session(&session, &bad, &50, &None);
     assert_eq!(test_env.token_client.balance(&bad), 50);
 }

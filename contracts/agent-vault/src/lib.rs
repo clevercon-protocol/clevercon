@@ -1349,6 +1349,11 @@ impl AgentVault {
         session: Address,
         payee: Address,
         amount: i128,
+        // The public rule to enforce for THIS spend (selected per task, like a private
+        // rule is picked per task). It must be one of the owner's registered public
+        // rules. `None` falls back to the rule bound to the session at registration (if
+        // any); if neither is set, only the key's own cap + expiry bound the spend.
+        rule_id: Option<BytesN<32>>,
     ) -> Result<(), VaultError> {
         session.require_auth();
         Self::require_not_paused(&env)?;
@@ -1383,9 +1388,13 @@ impl AgentVault {
             }
         }
 
-        // The named public rule this key runs under (local keys), checked + its usage
-        // window rolled. None for a plain cap-only server key.
-        let rule_roll: Option<(DataKey, PublicUsage)> = match &info.rule_id {
+        // The effective public rule for this spend: the per-call selection wins (the
+        // dapp/agent picks a rule per task), else the session's bound rule (local keys
+        // fixed at registration), else none (cap-only).
+        let effective_rid: Option<BytesN<32>> = rule_id.or_else(|| info.rule_id.clone());
+
+        // The selected public rule, checked + its usage window rolled.
+        let rule_roll: Option<(DataKey, PublicUsage)> = match &effective_rid {
             Some(rid) => {
                 let rule: PublicRule = env
                     .storage()
@@ -1405,7 +1414,7 @@ impl AgentVault {
             .persistent()
             .get::<_, BytesN<32>>(&DataKey::PublicGlobalId(info.user.clone()))
         {
-            Some(gid) if info.rule_id.as_ref() != Some(&gid) => {
+            Some(gid) if effective_rid.as_ref() != Some(&gid) => {
                 let grule: PublicRule = env
                     .storage()
                     .persistent()
