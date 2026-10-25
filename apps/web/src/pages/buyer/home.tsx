@@ -368,8 +368,11 @@ export function CommandChat() {
     if (enforcedRule) return { label: describeSavedLimit(enforcedRule), isPrivate: true };
     return { label: 'none selected', isPrivate: true };
   })();
-  // Whether the current lane is ready to spend (a rule selected/global active, or a live session).
-  const laneReady = lane === 'public' ? sessionActive : !!enforcedRule;
+  // Whether the current lane is ready to spend. Public mirrors private: a live session
+  // AND a selected public rule (or an active global public rule). Private: a selected
+  // rule (or an active global).
+  const publicReady = sessionActive && (!!pickedPublicRule || !!globals?.publicRuleId);
+  const laneReady = lane === 'public' ? publicReady : !!enforcedRule;
 
   const hire = useMutation({
     mutationFn: (p: { title: string; serviceId: string; budget: number; policyId?: string }) =>
@@ -391,9 +394,12 @@ export function CommandChat() {
   // even the AI planner) runs until a valid, enforceable rule is in place.
   function laneBlockedReason(): string | null {
     if (lane === 'public') {
-      return sessionActive
+      if (!sessionActive) {
+        return 'No active Managed Session. Set one up on the Vault tab before spending in public mode.';
+      }
+      return pickedPublicRule || globals?.publicRuleId
         ? null
-        : 'No active Managed Session. Set one up on the Vault tab before spending in public mode.';
+        : 'No public rule selected. Pick a live public rule above (or mark one global on the Rules tab, which then applies on its own).';
     }
     return enforcedRule
       ? null
