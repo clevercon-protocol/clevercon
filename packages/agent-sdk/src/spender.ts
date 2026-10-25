@@ -35,6 +35,14 @@ export interface SpenderOptions {
    */
   policyBundle?: PolicyBundle;
   /**
+   * The owner's global-private rule bundle `{ rules, salt }`, if one is set on-chain.
+   * When present, disbursePrivate proves a SECOND proof against it (the vault requires
+   * it when a global-private is pinned) and relays both. Falls back to
+   * `CLEVERCON_GLOBAL_POLICY_JSON`. Omit when no global-private is set. This is the
+   * "global salt" an SDK/MCP agent needs to spend while a global rule is active.
+   */
+  globalBundle?: PolicyBundle;
+  /**
    * Circuit artifacts for local proving (paths or URLs). Falls back to
    * `CLEVERCON_PP2_WASM` / `CLEVERCON_PP2_ZKEY`; the poseidon set defaults to the
    * hosted artifacts when the policy needs it (allowlist/deny/calendar/category).
@@ -127,15 +135,19 @@ export interface CleverConClient {
     opts?: { policyId?: string; idempotencyKey?: string },
   ): Promise<Spend>;
   /**
-   * Self-custody PRIVATE disburse (custody:self + mode:private): prove the owner's
-   * policy bundle LOCALLY (Groth16, up to 4 payees) and relay ONLY the proof, so
-   * the server never sees the rule and cannot forge it. The chain verifies the
-   * proof against the owner's on-chain pinned commitment before the vault releases.
-   * Requires `policyBundle` + artifacts (options or env); fail-closed otherwise.
+   * Self-custody PRIVATE disburse (custody:self + mode:private), KEYLESS: prove the
+   * owner's policy bundle LOCALLY (Groth16, up to 4 payees) and relay ONLY the proof.
+   * The vault's release_proved_keyless takes no signature - the proof + the owner's
+   * pinned commitment + a fresh nullifier authorize it - so there is no delegate and
+   * no per-payment key; a fee-payer relayer only pays the network fee and can neither
+   * read nor forge the rule. Synchronous: returns the on-chain tx hash. When a
+   * global-private rule is set, pass `globalBundle` (or `CLEVERCON_GLOBAL_POLICY_JSON`)
+   * and a second proof is relayed automatically. Requires `policyBundle` + artifacts
+   * (options or env); fail-closed otherwise.
    */
   disbursePrivate(
     lines: PaymentLine[],
-  ): Promise<{ jobId: string; totalUsdc: number; legs: number; commitment: string }>;
+  ): Promise<{ txHash: string; totalUsdc: number; legs: number; commitment: string }>;
   /** Hire a registered service (DIRECT pays a chosen serviceId). `idempotencyKey`
    *  makes a retry return the original hire rather than hiring twice. */
   hire(opts: {
@@ -212,6 +224,20 @@ export function createSpender(options: SpenderOptions): CleverConClient {
     return b;
   }
 
+  // Resolve the owner's global-private bundle, if any (option, else
+  // CLEVERCON_GLOBAL_POLICY_JSON). Null when no global-private is set.
+  function resolveGlobalBundle(): PolicyBundle | null {
+    const b = options.globalBundle ?? parseBundleEnv('CLEVERCON_GLOBAL_POLICY_JSON');
+    if (!b) return null;
+    if (!b.rules || !b.salt) throw new Error('global bundle needs { rules, salt }');
+    return b;
+  }
+
+  function parseBundleEnv(key: string): PolicyBundle | null {
+    const raw = env(key);
+    return raw ? (JSON.parse(raw) as PolicyBundle) : null;
+  }
+
   function resolvePrivateArtifacts(): {
     wasmPath: string;
     zkeyPath: string;
@@ -236,36 +262,63 @@ export function createSpender(options: SpenderOptions): CleverConClient {
     disburse: async () => retiredServerPath(),
     disbursePrivate: async (lines) => {
       const bundle = resolveBundle();
+      const globalBundle = resolveGlobalBundle();
       const artifacts = resolvePrivateArtifacts();
       // Lazily pull in the prover (snarkjs/stellar) only when actually proving, so
       // importing createSpender stays dependency-free.
       const { buildPrivateDisbursement, commitmentForBundle } =
         await import('./payments/private-disburse.js');
-      // Read the vault's per-commitment R2/R7 accumulator so the proof binds to the
-      // window state the vault re-derives at settlement (cumulative across tasks).
-      const commitment = await commitmentForBundle(bundle, artifacts);
-      const accumulator = await request<{
+      type Accum = {
         runningSpend: string;
         priorCount: string;
         anchorR2: string;
         anchorR7: string;
-      }>('GET', `/vault/accumulator/${commitment}`);
+      };
+      const payLines = lines.map((l) => ({ payee: l.payee, amount: l.amount }));
+      const readAccum = (c: string) => request<Accum>('GET', `/vault/accumulator/${c}`);
+
+      // Read the vault's per-commitment R2/R7 accumulator so the proof binds to the
+      // window state the vault re-derives at settlement (cumulative across tasks).
+      const commitment = await commitmentForBundle(bundle, artifacts);
       const {
         request: batchRequest,
         totalUsdc,
         commitmentHex,
-      } = await buildPrivateDisbursement(
-        bundle,
-        lines.map((l) => ({ payee: l.payee, amount: l.amount })),
-        artifacts,
-        accumulator,
-      );
-      const resp = await request<{ jobId: string; status: string }>(
-        'POST',
-        '/vault/batch-release-proved',
-        batchRequest,
-      );
-      return { jobId: resp.jobId, totalUsdc, legs: lines.length, commitment: commitmentHex };
+      } = await buildPrivateDisbursement(bundle, payLines, artifacts, await readAccum(commitment));
+
+      // A global-private rule means the vault requires a SECOND proof over the same
+      // payees/amounts against the global commitment (its own window + nullifiers).
+      let global:
+        | {
+            commitment: string;
+            nullifiers: string[];
+            resetR2: boolean;
+            resetR7: boolean;
+            proof: { a: string; b: string; c: string };
+          }
+        | undefined;
+      if (globalBundle) {
+        const gCommitment = await commitmentForBundle(globalBundle, artifacts);
+        const g = await buildPrivateDisbursement(
+          globalBundle,
+          payLines,
+          artifacts,
+          await readAccum(gCommitment),
+        );
+        global = {
+          commitment: g.request.commitment,
+          nullifiers: g.request.nullifiers,
+          resetR2: g.request.resetR2,
+          resetR7: g.request.resetR7,
+          proof: g.request.proof,
+        };
+      }
+
+      const resp = await request<{ txHash: string }>('POST', '/vault/batch-release-keyless', {
+        ...batchRequest,
+        ...(global ? { global } : {}),
+      });
+      return { txHash: resp.txHash, totalUsdc, legs: lines.length, commitment: commitmentHex };
     },
     hire: (opts) =>
       request<Spend>('POST', '/tasks', {

@@ -1,14 +1,18 @@
 /**
- * Session keys: the public ("Fast") spending lane for an agent.
+ * Session keys: the public ("Fast") spending lane for an agent (self + public
+ * custody: the AGENT holds the session key itself).
  *
- * The owner authorizes a bounded session ONCE with their wallet (a per-asset
- * budget, a payee allowlist, and a hard expiry), and the agent then spends with
- * only the SESSION key - no per-payment proof, no owner signature. The scope is
- * enforced on-chain by the vault on every release, so a compromised session key
- * can never pay a non-allowlisted payee, exceed the budget, or spend past expiry,
- * and the owner revokes instantly. This is the self+public custody model: the
- * agent holds the session key itself. (Managed Sessions - server+public - uses the
- * same on-chain primitive with the key held server-side.)
+ * The owner authorizes a bounded session ONCE with their wallet, and the agent then
+ * spends with only the SESSION key - no per-payment proof, no owner signature. A
+ * session is bounded by a total spend cap AND/OR a named public rule id (at least
+ * one): the cap limits the lifetime total, and the public rule (registered on-chain
+ * via the dapp/API, cleartext) adds the full clause set - per-payment max/min,
+ * rolling cap, velocity, allowlist + per-payee cap, deny-list, calendar - which the
+ * vault checks in the clear on every release. A local key may be open-ended (no
+ * expiry) because the owner holds it; a server-held (Managed Session) key, by
+ * contrast, is always time-boxed and capped. The scope is enforced on-chain on every
+ * release, so a compromised session key can never exceed the cap, break the rule, or
+ * spend past expiry, and the owner revokes (or pauses) instantly.
  *
  * All calls go straight to Soroban RPC; sessions need no CleverCon API. The agent
  * keeps a little XLM on the session account to pay its own transaction fees.
@@ -52,12 +56,22 @@ export interface SessionNetwork {
 export interface RegisterSessionOptions extends SessionNetwork {
   /** The owner's wallet secret (self-custody); signs ONCE to authorize the scope. */
   ownerSecret: string;
-  /** Spend cap for the whole session, in USDC. */
-  budgetUsdc: number;
-  /** The exact set of payees this session may pay (1..32 addresses). */
-  allowlist: string[];
-  /** Seconds from now until the session's hard expiry. */
-  expiresInSeconds: number;
+  /**
+   * Total lifetime spend cap in USDC. Optional ONLY if `ruleId` is set (a session
+   * must be bounded by a cap and/or a rule). 0 / omitted = no cap (rule-bounded).
+   */
+  spendCapUsdc?: number;
+  /**
+   * A named public rule id (32-byte hex) this session runs under: the vault checks
+   * its full cleartext clause set on every release. Register the rule first (dapp
+   * Rules tab or POST /vault/public-rule/set). Optional ONLY if `spendCapUsdc` is set.
+   */
+  ruleId?: string;
+  /**
+   * Seconds from now until a hard expiry. Optional for a local key (the owner holds
+   * it): omit / 0 = open-ended, revoke to end it.
+   */
+  expiresInSeconds?: number;
   /** Optional existing session secret to register; otherwise a fresh key is minted. */
   sessionSecret?: string;
 }
@@ -66,20 +80,31 @@ export interface RegisteredSession {
   /** Hold this in the agent: the only credential that can spend under the scope. */
   sessionSecret: string;
   sessionPublicKey: string;
-  budgetUsdc: number;
-  /** Unix-second ledger-time cutoff after which the key is dead. */
+  spendCapUsdc: number;
+  /** The public rule id this key runs under (hex), or null if cap-only. */
+  ruleId: string | null;
+  /** Unix-second ledger-time cutoff after which the key is dead (0 = open-ended). */
   expiry: number;
-  allowlist: string[];
   txHash: string;
 }
 
 export interface SessionScope {
   owner: string;
   asset: string;
-  budgetRemainingUsdc: number;
-  expiry: number;
-  allowlist: string[];
+  /** Total lifetime cap (0 = uncapped, bounded by the rule). */
+  spendCapUsdc: number;
   spentUsdc: number;
+  /** Cap minus spent (0 when uncapped). */
+  remainingUsdc: number;
+  /** Unix-second expiry (0 = open-ended). */
+  expiry: number;
+  /** The public rule id this key runs under (hex), or null if cap-only. */
+  ruleId: string | null;
+  /** True for a platform-held (Managed Session) key; false for a local key. */
+  serverHeld: boolean;
+  paused: boolean;
+  /** Successful releases so far (observability; a rejected release reverts). */
+  releaseCount: number;
 }
 
 export interface SessionSpender {
@@ -97,7 +122,14 @@ const fromStroops = (s: bigint | number): number => Number(s) / UNIT;
 const addr = (pk: string): xdr.ScVal => new Address(pk).toScVal();
 const i128 = (stroops: bigint): xdr.ScVal => nativeToScVal(stroops, { type: 'i128' });
 const u64 = (v: number): xdr.ScVal => nativeToScVal(BigInt(v), { type: 'u64' });
-const addrVec = (pks: string[]): xdr.ScVal => xdr.ScVal.scvVec(pks.map((p) => addr(p)));
+const bool = (b: boolean): xdr.ScVal => xdr.ScVal.scvBool(b);
+/** Encode an Option<BytesN<32>>: None -> Void, Some(id) -> the 32 bytes directly. */
+const optBytes32 = (hex?: string): xdr.ScVal => {
+  if (!hex) return xdr.ScVal.scvVoid();
+  const b = Buffer.from(hex.replace(/^0x/, ''), 'hex');
+  if (b.length !== 32) throw new SessionError('ruleId must be 32-byte hex (64 chars)');
+  return xdr.ScVal.scvBytes(b);
+};
 
 function server(net: SessionNetwork): rpc.Server {
   return new rpc.Server(net.rpcUrl ?? DEFAULT_RPC_URL);
@@ -172,13 +204,21 @@ async function simulateRead(
 }
 
 function decodeScope(raw: any): SessionScope {
+  const cap = fromStroops(raw.spend_cap);
+  const spent = fromStroops(raw.spent);
+  // scValToNative decodes Option<BytesN<32>> as a Buffer/Uint8Array (Some) or null.
+  const rid = raw.rule_id ? Buffer.from(raw.rule_id).toString('hex') : null;
   return {
     owner: raw.user,
     asset: raw.asset,
-    budgetRemainingUsdc: fromStroops(raw.budget_remaining),
+    spendCapUsdc: cap,
+    spentUsdc: spent,
+    remainingUsdc: cap > 0 ? Math.max(0, cap - spent) : 0,
     expiry: Number(raw.expiry),
-    allowlist: raw.allowlist as string[],
-    spentUsdc: fromStroops(raw.spent),
+    ruleId: rid,
+    serverHeld: !!raw.server_held,
+    paused: !!raw.paused,
+    releaseCount: Number(raw.release_count ?? 0),
   };
 }
 
@@ -188,31 +228,37 @@ function decodeScope(raw: any): SessionScope {
  * agent, which then spends with {@link createSessionSpender}.
  */
 export async function registerSession(opts: RegisterSessionOptions): Promise<RegisteredSession> {
-  if (opts.budgetUsdc <= 0) throw new SessionError('budgetUsdc must be positive');
-  if (opts.allowlist.length < 1 || opts.allowlist.length > 32) {
-    throw new SessionError('allowlist must have 1..32 payees');
+  const cap = opts.spendCapUsdc ?? 0;
+  if (cap < 0) throw new SessionError('spendCapUsdc cannot be negative');
+  // A session must be bounded by a cap and/or a named rule, else it is unbounded.
+  if (cap === 0 && !opts.ruleId) {
+    throw new SessionError('a session needs a spendCapUsdc and/or a ruleId');
   }
-  if (opts.expiresInSeconds <= 0) throw new SessionError('expiresInSeconds must be positive');
+  if (opts.expiresInSeconds != null && opts.expiresInSeconds < 0) {
+    throw new SessionError('expiresInSeconds cannot be negative');
+  }
 
   const owner = Keypair.fromSecret(opts.ownerSecret);
   const session = opts.sessionSecret ? Keypair.fromSecret(opts.sessionSecret) : Keypair.random();
-  const expiry = Math.floor(Date.now() / 1000) + opts.expiresInSeconds;
+  // A local key (server_held=false) may be open-ended: 0 = no expiry.
+  const expiry = opts.expiresInSeconds ? Math.floor(Date.now() / 1000) + opts.expiresInSeconds : 0;
 
   const txHash = await invoke(opts, owner, 'register_session', [
     addr(owner.publicKey()),
     addr(session.publicKey()),
     addr(opts.usdcSac),
-    i128(toStroops(opts.budgetUsdc)),
     u64(expiry),
-    addrVec(opts.allowlist),
+    i128(toStroops(cap)),
+    optBytes32(opts.ruleId),
+    bool(false), // self-custody: the agent holds this key locally
   ]);
 
   return {
     sessionSecret: session.secret(),
     sessionPublicKey: session.publicKey(),
-    budgetUsdc: opts.budgetUsdc,
+    spendCapUsdc: cap,
+    ruleId: opts.ruleId ?? null,
     expiry,
-    allowlist: opts.allowlist,
     txHash,
   };
 }
@@ -254,6 +300,45 @@ export async function revokeSession(
   const txHash = await invoke(opts, owner, 'revoke_session', [
     addr(owner.publicKey()),
     addr(opts.sessionPublicKey),
+  ]);
+  return { txHash };
+}
+
+/** Pause / unpause a session (owner-signed). A paused key spends nothing until unpaused. */
+export async function setSessionPaused(
+  opts: SessionNetwork & { ownerSecret: string; sessionPublicKey: string; paused: boolean },
+): Promise<{ txHash: string }> {
+  const owner = Keypair.fromSecret(opts.ownerSecret);
+  const txHash = await invoke(opts, owner, 'set_session_paused', [
+    addr(owner.publicKey()),
+    addr(opts.sessionPublicKey),
+    bool(opts.paused),
+  ]);
+  return { txHash };
+}
+
+/**
+ * Edit a session's bounds (owner-signed): extend the expiry and/or raise the total
+ * spend cap. Pass 0 (or omit) to leave a field unchanged; the cap can never drop
+ * below what has already been spent.
+ */
+export async function updateSession(
+  opts: SessionNetwork & {
+    ownerSecret: string;
+    sessionPublicKey: string;
+    newExpiresInSeconds?: number;
+    newSpendCapUsdc?: number;
+  },
+): Promise<{ txHash: string }> {
+  const owner = Keypair.fromSecret(opts.ownerSecret);
+  const newExpiry = opts.newExpiresInSeconds
+    ? Math.floor(Date.now() / 1000) + opts.newExpiresInSeconds
+    : 0;
+  const txHash = await invoke(opts, owner, 'update_session', [
+    addr(owner.publicKey()),
+    addr(opts.sessionPublicKey),
+    u64(newExpiry),
+    i128(toStroops(opts.newSpendCapUsdc ?? 0)),
   ]);
   return { txHash };
 }

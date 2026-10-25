@@ -56,6 +56,8 @@ export {
   registerSession,
   createSessionSpender,
   revokeSession,
+  setSessionPaused,
+  updateSession,
   getSessionScope,
   SessionError,
 } from './sessions.js';

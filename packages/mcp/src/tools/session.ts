@@ -1,9 +1,11 @@
 /**
  * Session-key (Fast / public lane) tools for an agent: spend with a bounded
  * session key the owner authorized once, with NO per-payment proof. The on-chain
- * scope (spend budget + payee allowlist + hard expiry) is enforced by the vault on
- * every release, so a compromised agent can never pay a non-allowlisted payee,
- * exceed the budget, or spend past expiry; the owner revokes instantly.
+ * scope - a total spend cap and/or a named public rule (per-payment max/min, rolling
+ * cap, velocity, allowlist, deny-list, calendar), plus an optional expiry - is
+ * enforced by the vault on every release, so a compromised agent can never exceed
+ * the cap, break the rule, or spend past expiry; the owner pauses or revokes
+ * instantly.
  *
  * The owner registers + revokes the session elsewhere (dapp / SDK `registerSession`)
  * and provisions the agent out-of-band (never by the model) via env:
@@ -38,13 +40,14 @@ function loadSpender() {
 export const sessionPaySchema = {
   name: 'session_pay',
   description:
-    'Pay an allowlisted address from the vault using your bounded session key (the public "Fast" lane: instant, no per-payment proof). The on-chain scope the owner authorized - spend budget, payee allowlist, and expiry - is enforced by the vault, so this fails closed if the payee is not allowlisted, the budget is exhausted, or the session has expired. Check remaining budget with session_scope first. Requires a provisioned session key.',
+    'Pay an address from the vault using your bounded session key (the public "Fast" lane: instant, no per-payment proof). The on-chain scope the owner authorized - a total spend cap and/or a named public rule, plus an optional expiry - is enforced by the vault, so this fails closed if it would exceed the cap, break the rule (per-payment max/min, rolling cap, velocity, allowlist, deny-list, calendar), or run past expiry. Check what is left with session_scope first. Requires a provisioned session key.',
   inputSchema: {
     type: 'object',
     properties: {
       payee: {
         type: 'string',
-        description: 'Recipient Stellar address (G...); must be on the session allowlist',
+        description:
+          'Recipient Stellar address (G...); must satisfy the session rule if one is set',
       },
       amount: { type: 'number', exclusiveMinimum: 0, description: 'Amount in USDC' },
     },
@@ -74,7 +77,7 @@ export async function sessionPayHandler(args: Record<string, unknown>): Promise<
 export const sessionScopeSchema = {
   name: 'session_scope',
   description:
-    "Read your session key's live on-chain scope: remaining spend budget (USDC), the payee allowlist, and the expiry. Use before session_pay to see what is still spendable and to whom. Requires a provisioned session key.",
+    "Read your session key's live on-chain scope: the total spend cap and amount spent/remaining (USDC), the named public rule id it runs under (if any), whether it is paused, its expiry, and how many payments it has made. Use before session_pay to see what is still spendable. Requires a provisioned session key.",
   inputSchema: { type: 'object', properties: {}, required: [] },
 };
 
