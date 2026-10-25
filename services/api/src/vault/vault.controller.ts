@@ -101,6 +101,8 @@ const sessionPauseSchema = z.object({ paused: z.boolean() });
 const sessionPayBodySchema = z.object({
   payee: z.string().min(1),
   amount: z.number().positive(),
+  // The public rule selected for this spend (per task). Omit for a cap-only spend.
+  ruleId: rid64.optional(),
 });
 
 /** The current session's vault position and on-chain deposit/withdraw. */
@@ -304,8 +306,8 @@ export class VaultController {
   /** Hands-off public-lane spend; bounded by the on-chain session cap (no step-up). */
   @Post('session/pay')
   sessionPay(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    const { payee, amount } = parseBody(sessionPayBodySchema, body);
-    return this.vault.sessionPay(user.userId, payee, amount);
+    const { payee, amount, ruleId } = parseBody(sessionPayBodySchema, body);
+    return this.vault.sessionPay(user.userId, payee, amount, ruleId ?? null);
   }
 
   /** Build the wallet-signed pause/unpause XDR for the caller's Managed Session key. */

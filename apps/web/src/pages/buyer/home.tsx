@@ -128,6 +128,9 @@ function RuleLanePicker({
   ruleId,
   setRuleId,
   privateRules,
+  publicRules,
+  publicRuleId,
+  setPublicRuleId,
   sessionActive,
   managed,
   applied,
@@ -139,6 +142,10 @@ function RuleLanePicker({
   ruleId: string;
   setRuleId: (id: string) => void;
   privateRules: Policy[];
+  /** The owner's public rules, selectable per task for a session spend. */
+  publicRules: Policy[];
+  publicRuleId: string;
+  setPublicRuleId: (id: string) => void;
   sessionActive: boolean;
   managed: ManagedSession | undefined;
   applied: Applied;
@@ -190,13 +197,31 @@ function RuleLanePicker({
               No pinned private rule. Create one and pin it on the Rules tab.
             </span>
           )
+        ) : !sessionActive ? (
+          <span className="text-xs text-amber-300/80">
+            No Managed Session. Set one up on the Vault tab.
+          </span>
+        ) : publicRules.length ? (
+          <select
+            value={publicRuleId}
+            onChange={(e) => setPublicRuleId(e.target.value)}
+            className="cc-input max-w-[17rem] flex-1 !py-1.5 text-sm"
+            aria-label="Public rule enforced for this spend"
+          >
+            <option value="">
+              {publicGlobalActive ? 'None (cap + global rule)' : 'None (cap only)'}
+            </option>
+            {publicRules.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name || describeSavedLimit(p)}
+              </option>
+            ))}
+          </select>
         ) : (
           <span className="text-xs text-slate-400">
-            {sessionActive
-              ? `Managed Session · ${managed!.session!.remainingUsdc.toFixed(2)} USDC cap left${
-                  publicGlobalActive ? ' · a global public rule applies' : ''
-                }`
-              : 'No Managed Session. Set one up on the Vault tab.'}
+            {`Managed Session · ${managed!.session!.remainingUsdc.toFixed(2)} USDC cap left${
+              publicGlobalActive ? ' · a global public rule applies' : ''
+            }`}
           </span>
         )}
         <Link to="/app/rules" className="text-xs text-violet-300 hover:text-violet-200">
@@ -272,9 +297,12 @@ export function CommandChat() {
   // hands-off). Sticky across instructions.
   const [lane, setLane] = useState<'private' | 'public'>('private');
   // The selected PRIVATE rule (a user-created, pinned policy). No 'default'/'none'/
-  // 'custom': only a rule you created ever governs a spend. Public spending is the
-  // single Managed Session, so it needs no per-instruction rule pick.
+  // 'custom': only a rule you created ever governs a spend.
   const [ruleId, setRuleId] = useState<string>('');
+  // The PUBLIC rule selected for this spend (optional, per task): enforced by the
+  // vault on top of the Managed Session's own cap + expiry. Blank = cap-only (plus
+  // any global public rule, which always applies).
+  const [publicRuleId, setPublicRuleId] = useState<string>('');
 
   // Natural-language box: the agent parses it into a plan you then approve.
   const [nl, setNl] = useState('');
@@ -319,6 +347,12 @@ export function CommandChat() {
   const enforcedRule = pickedRule ?? globalPolicy;
   const usingGlobalAsRule = !pickedRule && !!globalPolicy;
   const sessionActive = !!managed?.session && managed.session.expiry * 1000 > Date.now();
+  // Public rules the user can pick for a session spend (any active public rule; the
+  // vault rejects one that is not pinned on-chain with a clear message).
+  const publicRules = policies.filter(
+    (p) => (p.form === 'public' || (!p.form && !p.isPrivate)) && p.status !== 'archived',
+  );
+  const pickedPublicRule = publicRules.find((p) => p.id === publicRuleId);
 
   // What the vault will enforce for the next instruction, as a short label.
   const applied: Applied = (() => {
@@ -578,7 +612,7 @@ export function CommandChat() {
       try {
         push({ id: nextId(), role: 'agent', text: 'Spending under your Managed Session…' });
         for (const l of plan.lines) {
-          await managedSessionPay(l.payee, l.amount);
+          await managedSessionPay(l.payee, l.amount, pickedPublicRule?.commitment);
         }
         qc.invalidateQueries({ queryKey: ['tasks'] });
         qc.invalidateQueries({ queryKey: ['vault'] });
@@ -738,6 +772,9 @@ export function CommandChat() {
                 ruleId={ruleId}
                 setRuleId={setRuleId}
                 privateRules={privateRules}
+                publicRules={publicRules}
+                publicRuleId={publicRuleId}
+                setPublicRuleId={setPublicRuleId}
                 sessionActive={sessionActive}
                 managed={managed}
                 applied={applied}
@@ -897,6 +934,9 @@ export function CommandChat() {
                   ruleId={ruleId}
                   setRuleId={setRuleId}
                   privateRules={privateRules}
+                  publicRules={publicRules}
+                  publicRuleId={publicRuleId}
+                  setPublicRuleId={setPublicRuleId}
                   sessionActive={sessionActive}
                   managed={managed}
                   applied={applied}

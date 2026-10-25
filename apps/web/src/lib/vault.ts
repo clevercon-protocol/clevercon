@@ -288,12 +288,22 @@ export function updateManagedSession(
   return signAndSubmitBuild('/vault/session/update', { newExpiresInSeconds, newSpendCapUsdc });
 }
 
-/** Hands-off public-lane spend via the Managed Session (the server signs; no wallet prompt). */
+/**
+ * Hands-off public-lane spend via the Managed Session (the server signs; no wallet
+ * prompt). Pass `ruleId` to enforce a specific public rule for THIS spend (selected
+ * per task); the vault checks it on top of the session key's own cap + expiry, plus
+ * any global public rule. Omit it for a cap-only spend.
+ */
 export async function managedSessionPay(
   payee: string,
   amount: number,
+  ruleId?: string,
 ): Promise<{ txHash: string }> {
-  return apiPost<{ txHash: string }>('/vault/session/pay', { payee, amount });
+  return apiPost<{ txHash: string }>('/vault/session/pay', {
+    payee,
+    amount,
+    ...(ruleId ? { ruleId } : {}),
+  });
 }
 
 /** Revoke the Managed Session on-chain (wallet-signed); the key can spend nothing after. */

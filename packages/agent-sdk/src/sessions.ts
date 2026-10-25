@@ -110,8 +110,13 @@ export interface SessionScope {
 export interface SessionSpender {
   /** The session's public key (the on-chain authorizer the ledger records). */
   readonly publicKey: string;
-  /** Pay an allowlisted payee from the owner's vault balance, signed by the session key. */
-  pay(payee: string, amountUsdc: number): Promise<{ txHash: string }>;
+  /**
+   * Pay a payee from the owner's vault balance, signed by the session key. Pass
+   * `ruleId` (a 32-byte hex public rule id) to enforce that rule for THIS spend
+   * (selected per task); omit it to fall back to the rule bound to the session at
+   * registration, or cap-only. The key's own cap + expiry always apply.
+   */
+  pay(payee: string, amountUsdc: number, ruleId?: string): Promise<{ txHash: string }>;
   /** Read the session's live on-chain scope + remaining budget. */
   scope(): Promise<SessionScope>;
 }
@@ -274,12 +279,13 @@ export function createSessionSpender(
   const session = Keypair.fromSecret(opts.sessionSecret);
   return {
     publicKey: session.publicKey(),
-    pay: async (payee, amountUsdc) => {
+    pay: async (payee, amountUsdc, ruleId) => {
       if (amountUsdc <= 0) throw new SessionError('amountUsdc must be positive');
       const txHash = await invoke(opts, session, 'release_payment_session', [
         addr(session.publicKey()),
         addr(payee),
         i128(toStroops(amountUsdc)),
+        optBytes32(ruleId),
       ]);
       return { txHash };
     },

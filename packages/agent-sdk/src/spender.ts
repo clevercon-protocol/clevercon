@@ -156,7 +156,7 @@ export interface CleverConClient {
    * the on-chain scope, so it can never exceed the cap, break the global rule, or spend
    * past expiry. Returns the tx hash. Fails if no Managed Session is enabled.
    */
-  sessionPay(payee: string, amount: number): Promise<{ txHash: string }>;
+  sessionPay(payee: string, amount: number, ruleId?: string): Promise<{ txHash: string }>;
   /** The owner's live Managed Session (cap/spent/remaining/expiry/paused), or null. */
   getSession(): Promise<unknown>;
   /** Hire a registered service (DIRECT pays a chosen serviceId). `idempotencyKey`
@@ -331,8 +331,12 @@ export function createSpender(options: SpenderOptions): CleverConClient {
       });
       return { txHash: resp.txHash, totalUsdc, legs: lines.length, commitment: commitmentHex };
     },
-    sessionPay: (payee, amount) =>
-      request<{ txHash: string }>('POST', '/vault/session/pay', { payee, amount }),
+    sessionPay: (payee, amount, ruleId) =>
+      request<{ txHash: string }>('POST', '/vault/session/pay', {
+        payee,
+        amount,
+        ...(ruleId ? { ruleId } : {}),
+      }),
     getSession: () => request<unknown>('GET', '/vault/session'),
     hire: (opts) =>
       request<Spend>('POST', '/tasks', {

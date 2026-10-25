@@ -40,16 +40,20 @@ function loadSpender() {
 export const sessionPaySchema = {
   name: 'session_pay',
   description:
-    'Pay an address from the vault using your bounded session key (the public "Fast" lane: instant, no per-payment proof). The on-chain scope the owner authorized - a total spend cap and/or a named public rule, plus an optional expiry - is enforced by the vault, so this fails closed if it would exceed the cap, break the rule (per-payment max/min, rolling cap, velocity, allowlist, deny-list, calendar), or run past expiry. Check what is left with session_scope first. Requires a provisioned session key.',
+    'Pay an address from the vault using your bounded session key (the public "Fast" lane: instant, no per-payment proof). Optionally select a public rule for THIS spend via ruleId (a 32-byte hex id) - the vault enforces that rule (per-payment max/min, rolling cap, velocity, allowlist, deny-list, calendar) on top of the key\'s own cap + expiry; omit it to use the rule the key was registered under, or cap-only. Fails closed if it would exceed the cap, break the rule, or run past expiry. Check what is left with session_scope first. Requires a provisioned session key.',
   inputSchema: {
     type: 'object',
     properties: {
       payee: {
         type: 'string',
         description:
-          'Recipient Stellar address (G...); must satisfy the session rule if one is set',
+          'Recipient Stellar address (G...); must satisfy the selected rule if one is set',
       },
       amount: { type: 'number', exclusiveMinimum: 0, description: 'Amount in USDC' },
+      ruleId: {
+        type: 'string',
+        description: 'Optional 32-byte hex public rule id to enforce for this spend',
+      },
     },
     required: ['payee', 'amount'],
   },
@@ -57,15 +61,19 @@ export const sessionPaySchema = {
 
 export async function sessionPayHandler(args: Record<string, unknown>): Promise<ToolResult> {
   try {
-    const { payee, amount } = args;
+    const { payee, amount, ruleId } = args;
     if (typeof payee !== 'string' || payee.trim() === '') throw new Error('payee is required');
     if (typeof amount !== 'number' || amount <= 0) throw new Error('amount must be positive');
+    if (ruleId !== undefined && (typeof ruleId !== 'string' || !/^[0-9a-fA-F]{64}$/.test(ruleId))) {
+      throw new Error('ruleId must be a 32-byte hex string (64 chars)');
+    }
     const spender = loadSpender();
-    const res = await spender.pay(payee.trim(), amount);
+    const res = await spender.pay(payee.trim(), amount, ruleId as string | undefined);
     return toolJson({
       sessionPublicKey: spender.publicKey,
       payee: payee.trim(),
       amountUsdc: amount,
+      ruleId: ruleId ?? null,
       ...res,
     });
   } catch (error) {

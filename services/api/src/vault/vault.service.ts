@@ -255,12 +255,12 @@ export class VaultService {
    * caller's delegate/session key. No per-payment wallet signature (that is the
    * point); the vault's on-chain scope is the whole protection.
    */
-  async sessionPay(userId: string, payee: string, amountUsdc: number) {
+  async sessionPay(userId: string, payee: string, amountUsdc: number, ruleIdHex?: string | null) {
     if (amountUsdc <= 0) throw new BadRequestException('amount must be positive');
     if (!StrKey.isValidEd25519PublicKey(payee)) throw new BadRequestException('invalid payee');
     const kp = await this.delegates.keypairFor(userId);
     if (!kp) throw new BadRequestException('No managed session: enable one first');
-    const txHash = await this.contract.releaseViaSession(kp, payee, amountUsdc);
+    const txHash = await this.contract.releaseViaSession(kp, payee, amountUsdc, ruleIdHex ?? null);
     return { txHash };
   }
 

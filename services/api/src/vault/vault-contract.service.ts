@@ -480,12 +480,21 @@ export class VaultContractService {
    * wallet signature is needed. The vault enforces the on-chain scope and fails
    * closed off-allowlist / over-budget / past expiry. Returns the tx hash.
    */
-  async releaseViaSession(delegate: Keypair, payee: string, amountUsdc: number): Promise<string> {
+  async releaseViaSession(
+    delegate: Keypair,
+    payee: string,
+    amountUsdc: number,
+    ruleIdHex?: string | null,
+  ): Promise<string> {
     this.ensureActive();
+    // The public rule selected for THIS spend (per task); Void = none (cap-only, or
+    // fall back to the rule bound to the session at registration).
+    const ruleArg = ruleIdHex ? xdr.ScVal.scvBytes(this.ridBytes(ruleIdHex)) : xdr.ScVal.scvVoid();
     const { hash } = await this.signAndSubmitAsOrchestrator(delegate, 'release_payment_session', [
       new Address(delegate.publicKey()).toScVal(),
       new Address(payee).toScVal(),
       nativeToScVal(usdcToStroops(amountUsdc), { type: 'i128' }),
+      ruleArg,
     ]);
     return hash;
   }
