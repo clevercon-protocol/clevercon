@@ -10,7 +10,6 @@ import {
   Lock,
   Eye,
   Server,
-  Globe,
   ShieldCheck,
 } from 'lucide-react';
 import { isDemo, config } from '../config';
@@ -361,115 +360,278 @@ export function Developer() {
     <section className="space-y-6">
       <PageHeader
         title="Developer portal"
-        subtitle="API keys, usage, webhooks, and step-by-step SDK/MCP docs for both lanes."
+        subtitle="Connect an agent over MCP in two minutes, manage API keys, and wire webhooks."
       />
       <Stats />
       <ApiKeys />
-      <CustodyMatrix />
-      <PrivateLaneGuide />
-      <PublicSelfGuide />
-      <PublicServerGuide />
-      <GlobalsGuide />
-      <ErrorsReceiptsGuide />
+      <McpQuickstart />
+      <McpToolbox />
+      <CustodyReference />
       <WebhooksCard />
-
-      <McpConnectCard />
     </section>
   );
 }
 
-// ── Shared doc primitives ─────────────────────────────────────────────────────
-function GuideCard({
+// ── MCP quickstart (the primary integration path) ─────────────────────────────
+
+/** The extra env a given lane needs, plus the MCP tool(s) it unlocks. */
+const PRIVATE_ENV = [
+  '# Private (keyless): the { rules, salt } you copied from the Rules tab.',
+  '# It never leaves the agent - only the proof is relayed.',
+  'CLEVERCON_POLICY_JSON={"rules":{...},"salt":"..."}',
+  '# circuit artifacts (download once):',
+  'CLEVERCON_PP2_WASM=/path/policy_batch.wasm',
+  'CLEVERCON_PP2_ZKEY=/path/policy_batch_final.zkey',
+  '# only if you marked a private rule global, add its bundle too:',
+  '# CLEVERCON_GLOBAL_POLICY_JSON={"rules":{...},"salt":"..."}',
+].join('\n');
+
+const PUBLIC_ENV = [
+  '# Public (session key): a bounded key the owner authorized once.',
+  '# Hand it to the agent out-of-band - never to the model.',
+  'CLEVERCON_SESSION_SECRET=S...',
+  'CLEVERCON_VAULT_ID=C...',
+  'CLEVERCON_USDC_SAC=C...',
+].join('\n');
+
+function LaneTab({
+  active,
+  onClick,
   icon: Icon,
-  tint,
-  title,
-  subtitle,
-  children,
+  label,
+  sub,
 }: {
+  active: boolean;
+  onClick: () => void;
   icon: typeof Lock;
-  tint: string;
-  title: string;
-  subtitle: string;
-  children: React.ReactNode;
+  label: string;
+  sub: string;
 }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex flex-1 items-start gap-2.5 rounded-xl border p-3 text-left transition-colors ${
+        active
+          ? 'border-violet-500/50 bg-violet-500/[0.08]'
+          : 'border-white/[0.08] bg-white/[0.02] hover:bg-white/[0.04]'
+      }`}
+    >
+      <Icon size={16} className={active ? 'mt-0.5 text-violet-300' : 'mt-0.5 text-slate-500'} />
+      <span>
+        <span className={`block text-sm font-semibold ${active ? 'text-white' : 'text-slate-300'}`}>
+          {label}
+        </span>
+        <span className="mt-0.5 block text-[11px] leading-snug text-slate-500">{sub}</span>
+      </span>
+    </button>
+  );
+}
+
+function ToolPill({ name }: { name: string }) {
+  return (
+    <span className="rounded-md bg-violet-500/10 px-2 py-0.5 font-mono text-[11.5px] text-violet-200">
+      {name}
+    </span>
+  );
+}
+
+/**
+ * The hero: connect an MCP agent, then pick the one lane it spends in. Each lane
+ * shows the exact env to add and the MCP tool it unlocks. MCP-first; the SDK is a
+ * compact reference below for non-MCP agents.
+ */
+function McpQuickstart() {
+  const [lane, setLane] = useState<'private' | 'public'>('private');
+  const cfg = mcpServerConfig(config.apiUrl, 'cc_yourprefix.yoursecret');
   return (
     <div className="rounded-2xl bg-white/[0.04] p-6">
       <div className="flex items-start gap-3">
-        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${tint}`}>
-          <Icon size={17} />
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300">
+          <Terminal size={17} />
         </span>
         <div>
-          <h2 className="font-semibold text-white">{title}</h2>
-          <p className="mt-0.5 text-sm text-slate-400">{subtitle}</p>
+          <h2 className="font-semibold text-white">Connect an agent over MCP</h2>
+          <p className="mt-0.5 text-sm text-slate-400">
+            Give any MCP-capable agent (Claude Desktop, Cursor, your own) a bounded, non-custodial
+            spending account in two minutes.
+          </p>
         </div>
       </div>
-      <div className="mt-4 space-y-3">{children}</div>
+
+      <ol className="mt-4 list-decimal space-y-1 pl-5 text-sm text-slate-300">
+        <li>Create an API key above and copy it into CLEVERCON_API_KEY.</li>
+        <li>
+          Paste this into your MCP client config (Claude Desktop: Settings, Developer, Edit Config).
+        </li>
+        <li>Restart the client. The clevercon tools appear and spend on the rail.</li>
+      </ol>
+      <div className="mt-3">
+        <CopyBlock text={cfg} label="MCP config" />
+      </div>
+
+      <div className="mt-5 border-t border-white/[0.06] pt-4">
+        <div className="text-sm font-medium text-slate-200">Then pick how it spends</div>
+        <p className="mt-0.5 text-[12.5px] text-slate-500">
+          One extra block of env, and your agent can pay. Choose the lane, add the env to the same
+          config, restart.
+        </p>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          <LaneTab
+            active={lane === 'private'}
+            onClick={() => setLane('private')}
+            icon={Lock}
+            label="Private · keyless"
+            sub="The rule stays secret; proven locally per payment."
+          />
+          <LaneTab
+            active={lane === 'public'}
+            onClick={() => setLane('public')}
+            icon={Eye}
+            label="Public · session key"
+            sub="A bounded key; instant, no per-payment proof."
+          />
+        </div>
+
+        {lane === 'private' ? (
+          <div className="mt-4 space-y-3">
+            <p className="text-[12.5px] leading-relaxed text-slate-400">
+              In the dapp, create a <b>Private</b> rule and <b>Pin</b> it, then copy its{' '}
+              <span className="font-mono text-[11.5px] text-violet-300">{'{ rules, salt }'}</span>{' '}
+              bundle (the salt never touches our server). Add it plus the circuit artifacts:
+            </p>
+            <CopyBlock text={PRIVATE_ENV} label="private env" />
+            <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-slate-400">
+              Tool: <ToolPill name="disburse_private" /> pays up to 4 payees in one keyless proof.
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            <p className="text-[12.5px] leading-relaxed text-slate-400">
+              In the dapp, create a <b>Public</b> rule (copy its rule id) and register a session key
+              bounded by a cap and/or that rule (Rules tab, or the SDK{' '}
+              <span className="font-mono text-[11.5px] text-violet-300">registerSession</span>).
+              Hand the agent the session secret:
+            </p>
+            <CopyBlock text={PUBLIC_ENV} label="public env" />
+            <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-slate-400">
+              Tools: <ToolPill name="session_pay" /> <ToolPill name="session_scope" /> pay within
+              the scope, instantly.
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-function Steps({ items }: { items: React.ReactNode[] }) {
+// ── Friendly tool reference ───────────────────────────────────────────────────
+function McpToolbox() {
+  const groups: { label: string; tools: string[] }[] = [
+    { label: 'Spend', tools: ['disburse_private', 'session_pay'] },
+    { label: 'Check', tools: ['session_scope', 'get_budget', 'get_activity'] },
+    { label: 'Rules', tools: ['set_limit', 'list_limits'] },
+    {
+      label: 'Marketplace',
+      tools: [
+        'search_services',
+        'get_service',
+        'hire_agent',
+        'list_tasks',
+        'get_task',
+        'approve_task',
+        'dispute_task',
+      ],
+    },
+  ];
   return (
-    <ol className="list-decimal space-y-1.5 pl-5 text-sm text-slate-300">
-      {items.map((it, i) => (
-        <li key={i}>{it}</li>
-      ))}
-    </ol>
+    <div className="rounded-2xl bg-white/[0.04] p-6">
+      <div className="flex items-start gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.06] text-slate-200">
+          <KeyRound size={17} />
+        </span>
+        <div>
+          <h2 className="font-semibold text-white">What your agent can do</h2>
+          <p className="mt-0.5 text-sm text-slate-400">
+            The tools your agent gets over MCP. Every spend is bounded on-chain by your vault.
+          </p>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {groups.map((g) => (
+          <div key={g.label} className="rounded-xl bg-black/20 p-3">
+            <div className="mb-2 text-[10px] uppercase tracking-wider text-slate-500">
+              {g.label}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {g.tools.map((t) => (
+                <ToolPill key={t} name={t} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
-const CC = (s: string) => <span className="font-mono text-[12px] text-violet-300">{s}</span>;
-
-// ── Custody / mode matrix ─────────────────────────────────────────────────────
-function CustodyMatrix() {
-  const rows: {
-    mode: string;
-    custody: string;
-    how: string;
-    keys: string;
-    tint: string;
-    icon: typeof Lock;
-  }[] = [
+// ── Compact custody reference + SDK fallback ──────────────────────────────────
+function CustodyReference() {
+  const [open, setOpen] = useState(false);
+  const rows: { icon: typeof Lock; tint: string; mode: string; who: string; via: string }[] = [
     {
       icon: Lock,
       tint: 'text-violet-300',
       mode: 'Private',
-      custody: 'Self · keyless',
-      how: 'Prove the rule locally (ZK); relay only the proof. No key, no delegate - the proof + your pinned commitment authorize the release.',
-      keys: 'disbursePrivate() · disburse_private',
+      who: 'Agent (keyless)',
+      via: 'disburse_private · SDK disbursePrivate',
     },
     {
       icon: Eye,
       tint: 'text-sky-300',
       mode: 'Public',
-      custody: 'Self · local key',
-      how: 'Register a session key bounded by a cap and/or a named public rule; the agent holds the key and signs each release itself.',
-      keys: 'registerSession() · createSessionSpender · session_pay',
+      who: 'Agent (session key)',
+      via: 'session_pay · SDK createSessionSpender',
     },
     {
       icon: Server,
       tint: 'text-emerald-300',
       mode: 'Public',
-      custody: 'Platform · Managed Session',
-      how: 'The owner authorizes a server-held key (cap + expiry) in the dapp; a headless agent spends hands-off via the API within that scope.',
-      keys: 'sessionPay() · POST /vault/session/pay',
+      who: 'Platform (Managed Session)',
+      via: 'dapp Vault tab · SDK sessionPay',
     },
   ];
+  const sdk = [
+    "import { createSpender } from '@clevercon/agent-sdk';",
+    'const cc = createSpender({ apiKey: process.env.CLEVERCON_API_KEY! });',
+    '',
+    '// Private, keyless (bundle + artifacts via env, like MCP):',
+    'await cc.disbursePrivate([{ payee: "G...", amount: 5 }]);',
+    '',
+    '// Public, platform-held Managed Session (owner enabled it in the dapp):',
+    'await cc.sessionPay("G...", 5);',
+  ].join('\n');
   return (
-    <GuideCard
-      icon={ShieldCheck}
-      tint="bg-white/[0.06] text-slate-200"
-      title="Build on CleverCon: custody & mode"
-      subtitle="Three ways an agent spends from a vault. Pick by who holds the key and whether the rule is private."
-    >
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[640px] border-collapse text-left text-sm">
+    <div className="rounded-2xl bg-white/[0.04] p-6">
+      <div className="flex items-start gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.06] text-slate-200">
+          <ShieldCheck size={17} />
+        </span>
+        <div>
+          <h2 className="font-semibold text-white">Custody &amp; modes</h2>
+          <p className="mt-0.5 text-sm text-slate-400">
+            Who holds the key in each lane. A global rule is optional (one per lane), AND-applied on
+            top of whatever rule you use.
+          </p>
+        </div>
+      </div>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full min-w-[520px] border-collapse text-left text-sm">
           <thead>
             <tr className="text-[11px] uppercase tracking-wider text-slate-500">
               <th className="py-2 pr-4 font-medium">Mode</th>
-              <th className="py-2 pr-4 font-medium">Custody</th>
-              <th className="py-2 pr-4 font-medium">How it works</th>
-              <th className="py-2 font-medium">Entry point</th>
+              <th className="py-2 pr-4 font-medium">Key holder</th>
+              <th className="py-2 font-medium">How</th>
             </tr>
           </thead>
           <tbody className="align-top">
@@ -480,272 +642,32 @@ function CustodyMatrix() {
                     <r.icon size={14} /> {r.mode}
                   </span>
                 </td>
-                <td className="py-3 pr-4 text-slate-300">{r.custody}</td>
-                <td className="py-3 pr-4 text-slate-400">{r.how}</td>
-                <td className="py-3 font-mono text-[11.5px] text-slate-300">{r.keys}</td>
+                <td className="py-3 pr-4 text-slate-300">{r.who}</td>
+                <td className="py-3 font-mono text-[11.5px] text-slate-400">{r.via}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <p className="text-xs text-slate-500">
-        A global rule is optional in every path (one per lane). Private is the default and the only
-        lane where the rule stays secret; the public lane trades that for hands-off speed, so its
-        rule is on-chain in the clear.
-      </p>
-    </GuideCard>
-  );
-}
 
-// ── Private lane (self, keyless) ──────────────────────────────────────────────
-function PrivateLaneGuide() {
-  const install = 'npm i @clevercon/agent-sdk';
-  const env = [
-    'CLEVERCON_API_KEY=cc_yourprefix.yoursecret',
-    '# the { rules, salt } bundle you copied from the Rules tab (never touches our server):',
-    'CLEVERCON_POLICY_JSON={"rules":{...},"salt":"..."}',
-    '# circuit artifacts (download once):',
-    'CLEVERCON_PP2_WASM=/path/policy_batch.wasm',
-    'CLEVERCON_PP2_ZKEY=/path/policy_batch_final.zkey',
-  ].join('\n');
-  const code = [
-    "import { createSpender } from '@clevercon/agent-sdk';",
-    '',
-    'const cc = createSpender({ apiKey: process.env.CLEVERCON_API_KEY! });',
-    '',
-    '// Proves your private rule locally and relays ONLY the proof (keyless).',
-    'const { txHash, totalUsdc } = await cc.disbursePrivate([',
-    "  { payee: 'G...A', amount: 2 },",
-    "  { payee: 'G...B', amount: 3 },",
-    ']);',
-  ].join('\n');
-  return (
-    <GuideCard
-      icon={Lock}
-      tint="bg-violet-500/10 text-violet-300"
-      title="Private lane · self-custody, keyless"
-      subtitle="The rule never leaves your device. The agent proves it locally; the vault verifies the proof on-chain."
-    >
-      <Steps
-        items={[
-          <>
-            In the dapp, open <b>Rules</b>, create a <b>Private</b> rule, and <b>Pin</b> it on-chain
-            (one wallet signature).
-          </>,
-          <>
-            Use the key icon on the card to reveal the {CC('{ rules, salt }')} bundle, and copy it.
-            The salt is the only secret; it is never sent to our server.
-          </>,
-          <>Install the SDK and provision the bundle + circuit artifacts as env (below).</>,
-          <>
-            Call {CC('disbursePrivate(lines)')} (up to 4 payees per proof). It returns the on-chain
-            tx hash; no delegate and no per-payment signature.
-          </>,
-        ]}
-      />
-      <CopyBlock text={install} label="install" />
-      <CopyBlock text={env} label="private env" />
-      <CopyBlock text={code} label="private snippet" />
-      <p className="text-xs text-slate-500">
-        MCP: provision the same {CC('CLEVERCON_POLICY_JSON')} + artifacts and call the{' '}
-        {CC('disburse_private')} tool. A global-private rule? See Globals below.
-      </p>
-    </GuideCard>
-  );
-}
-
-// ── Public lane (self, local key under a rule) ────────────────────────────────
-function PublicSelfGuide() {
-  const code = [
-    "import { registerSession, createSessionSpender } from '@clevercon/agent-sdk/sessions';",
-    '',
-    'const net = { vaultId: process.env.CLEVERCON_VAULT_ID!, usdcSac: process.env.CLEVERCON_USDC_SAC! };',
-    '',
-    '// Owner authorizes ONCE (wallet secret signs). Bound by a cap AND/OR a public rule id.',
-    'const session = await registerSession({',
-    '  ...net,',
-    '  ownerSecret: process.env.OWNER_SECRET!,',
-    '  spendCapUsdc: 50,',
-    "  ruleId: 'the64hexPublicRuleId', // from the Rules tab (optional if a cap is set)",
-    '  // expiresInSeconds: omit for an open-ended local key',
-    '});',
-    '',
-    '// Hand session.sessionSecret to the agent; it spends with ONLY that key:',
-    'const spender = createSessionSpender({ ...net, sessionSecret: session.sessionSecret });',
-    "await spender.pay('G...', 5);",
-  ].join('\n');
-  return (
-    <GuideCard
-      icon={Eye}
-      tint="bg-sky-500/10 text-sky-300"
-      title="Public lane · self-custody, local session key"
-      subtitle="The agent holds its own session key, bounded on-chain by a cap and/or a named public rule."
-    >
-      <Steps
-        items={[
-          <>
-            In the dapp, open <b>Rules</b>, create a <b>Public</b> rule (its clauses go on-chain in
-            the clear), and copy its <b>rule id</b> from the key icon.
-          </>,
-          <>
-            Call {CC('registerSession')} with the owner wallet secret, a {CC('spendCapUsdc')} and/or
-            that {CC('ruleId')} (at least one). The owner signs once.
-          </>,
-          <>
-            Hand the returned {CC('sessionSecret')} to the agent (via env{' '}
-            {CC('CLEVERCON_SESSION_SECRET')}), never to the model.
-          </>,
-          <>
-            The agent pays with {CC('createSessionSpender(...).pay()')} (MCP: the{' '}
-            {CC('session_pay')} tool). Pause / revoke any time from the dapp or{' '}
-            {CC('setSessionPaused')} / {CC('revokeSession')}.
-          </>,
-        ]}
-      />
-      <CopyBlock text={code} label="public self snippet" />
-    </GuideCard>
-  );
-}
-
-// ── Public lane (platform-held Managed Session) ───────────────────────────────
-function PublicServerGuide() {
-  const code = [
-    "import { createSpender } from '@clevercon/agent-sdk';",
-    '',
-    'const cc = createSpender({ apiKey: process.env.CLEVERCON_API_KEY! });',
-    '',
-    '// The owner enabled a Managed Session (cap + expiry) in the dapp Vault tab.',
-    '// A headless agent spends hands-off within it - the platform signs, you never do:',
-    "await cc.sessionPay('G...', 5);",
-    'const session = await cc.getSession(); // cap / spent / remaining / expiry / paused',
-  ].join('\n');
-  return (
-    <GuideCard
-      icon={Server}
-      tint="bg-emerald-500/10 text-emerald-300"
-      title="Public lane · platform-held Managed Session"
-      subtitle="The simplest hands-off path: the owner sets a cap + expiry once; a headless agent spends via the API."
-    >
-      <Steps
-        items={[
-          <>
-            In the dapp, open <b>Vault</b> and enable a <b>Managed Session</b>: a total spend cap
-            and an expiry (one wallet signature). Pause, extend, or revoke it there any time.
-          </>,
-          <>
-            Optionally mark a public rule <b>global</b> on the Rules tab; the vault AND-enforces it
-            on every session spend on top of the cap.
-          </>,
-          <>
-            The agent (authenticated with your API key) calls {CC('cc.sessionPay(payee, amount)')} -
-            no key handling, no per-payment signature. The vault enforces the cap, expiry, and any
-            global rule.
-          </>,
-        ]}
-      />
-      <CopyBlock text={code} label="public server snippet" />
-    </GuideCard>
-  );
-}
-
-// ── Globals ───────────────────────────────────────────────────────────────────
-function GlobalsGuide() {
-  const env = [
-    '# When a GLOBAL-PRIVATE rule is set, provision its bundle too (the "global salt"):',
-    'CLEVERCON_GLOBAL_POLICY_JSON={"rules":{...},"salt":"..."}',
-  ].join('\n');
-  return (
-    <GuideCard
-      icon={Globe}
-      tint="bg-fuchsia-500/10 text-fuchsia-300"
-      title="Global rules"
-      subtitle="A global is optional and AND-applied to every spend in its lane, on top of the rule you use."
-    >
-      <ul className="list-disc space-y-1.5 pl-5 text-sm text-slate-300">
-        <li>
-          <b>Global-private</b>: mark a pinned private rule global in the dapp. The vault then
-          requires a SECOND proof per spend. Provision the global bundle to the agent as{' '}
-          {CC('CLEVERCON_GLOBAL_POLICY_JSON')} (SDK: {CC('globalBundle')}); {CC('disbursePrivate')}{' '}
-          / {CC('disburse_private')} build and relay the second proof automatically.
-        </li>
-        <li>
-          <b>Global-public</b>: mark a public rule global in the dapp. The vault AND-enforces its
-          cleartext clauses on every session spend. Nothing to provision - it is checked server-side
-          from the rule id, so {CC('sessionPay')} / local-key spends just work within it.
-        </li>
-      </ul>
-      <CopyBlock text={env} label="global env" />
-    </GuideCard>
-  );
-}
-
-// ── Errors & receipts ─────────────────────────────────────────────────────────
-function ErrorsReceiptsGuide() {
-  const err = [
-    '// Every vault call returns a clean, actionable message (never a raw HostError):',
-    '{ "statusCode": 400, "message": "This payment would exceed the rule\\u2019s rolling cap for its window." }',
-    '',
-    '// In the SDK, failures throw CleverConError { status, message }:',
-    'try { await cc.disbursePrivate(lines); }',
-    'catch (e) { if (e instanceof CleverConError) console.error(e.status, e.message); }',
-  ].join('\n');
-  const rec = [
-    'const activity = await cc.getActivity(); // jobs + payments, newest first (incl. keyless releases)',
-  ].join('\n');
-  return (
-    <GuideCard
-      icon={Activity}
-      tint="bg-white/[0.06] text-slate-200"
-      title="Errors & receipts"
-      subtitle="Rejections come back as plain sentences; activity gives you a verifiable ledger."
-    >
-      <p className="text-sm text-slate-400">
-        The vault, API, and SDK translate contract errors into specific messages (cap exceeded,
-        payee denied, below minimum, outside the calendar window, session paused/expired, and so
-        on), so a failed spend never surfaces as gibberish. The SDK raises {CC('CleverConError')}{' '}
-        with the HTTP status.
-      </p>
-      <CopyBlock text={err} label="error shape" />
-      <CopyBlock text={rec} label="receipts" />
-    </GuideCard>
-  );
-}
-
-/** The two-minute MCP quickstart: paste a config, restart, your agent can spend. */
-function McpConnectCard() {
-  const cfg = mcpServerConfig(config.apiUrl, 'cc_yourprefix.yoursecret');
-  return (
-    <div className="rounded-2xl bg-white/[0.04] p-6">
-      <div className="flex items-center gap-2 text-slate-300">
-        <Terminal size={18} className="text-violet-300" />
-        <h2 className="font-semibold">Connect an agent over MCP</h2>
-      </div>
-      <p className="mt-2 text-sm text-slate-400">
-        Give any MCP-capable agent (Claude Desktop, Cursor, your own) a bounded, non-custodial
-        spending account. It can search the directory, hire a service, and track the task, always
-        within your policy.
-      </p>
-      <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-slate-400">
-        <li>Create an API key above and copy it into CLEVERCON_API_KEY.</li>
-        <li>
-          Paste this into your MCP client config (Claude Desktop: Settings, Developer, Edit Config).
-        </li>
-        <li>Restart the client. The clevercon tools appear and spend on the rail.</li>
-      </ol>
-      <div className="mt-3">
-        <CopyBlock text={cfg} label="MCP config" />
-      </div>
-      <p className="mt-2 text-xs text-slate-600">
-        Running from source before the npm publish? Set command to node and point args at the built
-        packages/mcp/dist/server.js path. Full SDK and MCP docs:{' '}
-        <a
-          href="https://github.com/clevercon-protocol/clevercon/tree/main/packages/mcp"
-          className="text-violet-300 hover:text-violet-200"
-        >
-          packages/mcp
-        </a>
-        .
-      </p>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="mt-4 text-[12.5px] font-medium text-violet-300 hover:text-violet-200"
+      >
+        {open ? 'Hide' : 'Prefer code? Use the SDK instead of MCP'}
+      </button>
+      {open && (
+        <div className="mt-3 space-y-2">
+          <CopyBlock text={'npm i @clevercon/agent-sdk'} label="install" />
+          <CopyBlock text={sdk} label="sdk snippet" />
+          <p className="text-[11.5px] text-slate-500">
+            Errors come back as plain sentences (cap exceeded, payee denied, session paused, outside
+            the date window, …) and the SDK raises CleverConError{'{ status, message }'}. Read the
+            ledger with cc.getActivity().
+          </p>
+        </div>
+      )}
     </div>
   );
 }
