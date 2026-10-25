@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Vault as VaultIcon,
   Sparkles,
@@ -27,6 +27,7 @@ import {
   managedSessionPay,
   getGlobals,
   getPinnedCommitments,
+  getPublicRule,
   type ManagedSession,
 } from '../../lib/vault';
 import { getServices } from '../../lib/services';
@@ -347,11 +348,20 @@ export function CommandChat() {
   const enforcedRule = pickedRule ?? globalPolicy;
   const usingGlobalAsRule = !pickedRule && !!globalPolicy;
   const sessionActive = !!managed?.session && managed.session.expiry * 1000 > Date.now();
-  // Public rules the user can pick for a session spend (any active public rule; the
-  // vault rejects one that is not pinned on-chain with a clear message).
-  const publicRules = policies.filter(
+  // Public rules the user can pick for a session spend. Like the private picker shows
+  // only PINNED rules, the public picker shows only rules that are LIVE on-chain (their
+  // clauses are written via set_public_rule), so you can never select one that the
+  // vault would reject. Live-ness is read per rule (get_public_rule).
+  const publicPolicies = policies.filter(
     (p) => (p.form === 'public' || (!p.form && !p.isPrivate)) && p.status !== 'archived',
   );
+  const publicLive = useQueries({
+    queries: publicPolicies.map((p) => ({
+      queryKey: ['public-rule', p.commitment],
+      queryFn: () => getPublicRule(p.commitment),
+    })),
+  });
+  const publicRules = publicPolicies.filter((_, i) => !!publicLive[i]?.data?.rule);
   const pickedPublicRule = publicRules.find((p) => p.id === publicRuleId);
 
   // What the vault will enforce for the next instruction, as a short label.

@@ -490,13 +490,20 @@ export class VaultContractService {
     // The public rule selected for THIS spend (per task); Void = none (cap-only, or
     // fall back to the rule bound to the session at registration).
     const ruleArg = ruleIdHex ? xdr.ScVal.scvBytes(this.ridBytes(ruleIdHex)) : xdr.ScVal.scvVoid();
-    const { hash } = await this.signAndSubmitAsOrchestrator(delegate, 'release_payment_session', [
-      new Address(delegate.publicKey()).toScVal(),
-      new Address(payee).toScVal(),
-      nativeToScVal(usdcToStroops(amountUsdc), { type: 'i128' }),
-      ruleArg,
-    ]);
-    return hash;
+    try {
+      const { hash } = await this.signAndSubmitAsOrchestrator(delegate, 'release_payment_session', [
+        new Address(delegate.publicKey()).toScVal(),
+        new Address(payee).toScVal(),
+        nativeToScVal(usdcToStroops(amountUsdc), { type: 'i128' }),
+        ruleArg,
+      ]);
+      return hash;
+    } catch (e) {
+      // Turn a raw HostError (e.g. PublicRuleNotFound when the selected rule is not
+      // pinned, SessionBudgetExceeded, SessionPaused) into a clean 400 the dapp and
+      // SDK/MCP can show directly, instead of a generic 500.
+      mapContractError(e);
+    }
   }
 
   /**
