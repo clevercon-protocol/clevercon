@@ -148,6 +148,17 @@ export interface CleverConClient {
   disbursePrivate(
     lines: PaymentLine[],
   ): Promise<{ txHash: string; totalUsdc: number; legs: number; commitment: string }>;
+  /**
+   * Public server-custody spend (custody:platform + mode:public): pay a payee via the
+   * owner's Managed Session - a server-held key the OWNER authorized once in the dapp
+   * (a total cap + expiry, plus an optional global public rule the vault AND-enforces).
+   * Hands-off: no per-payment signature and no local key; the platform signs within
+   * the on-chain scope, so it can never exceed the cap, break the global rule, or spend
+   * past expiry. Returns the tx hash. Fails if no Managed Session is enabled.
+   */
+  sessionPay(payee: string, amount: number): Promise<{ txHash: string }>;
+  /** The owner's live Managed Session (cap/spent/remaining/expiry/paused), or null. */
+  getSession(): Promise<unknown>;
   /** Hire a registered service (DIRECT pays a chosen serviceId). `idempotencyKey`
    *  makes a retry return the original hire rather than hiring twice. */
   hire(opts: {
@@ -320,6 +331,9 @@ export function createSpender(options: SpenderOptions): CleverConClient {
       });
       return { txHash: resp.txHash, totalUsdc, legs: lines.length, commitment: commitmentHex };
     },
+    sessionPay: (payee, amount) =>
+      request<{ txHash: string }>('POST', '/vault/session/pay', { payee, amount }),
+    getSession: () => request<unknown>('GET', '/vault/session'),
     hire: (opts) =>
       request<Spend>('POST', '/tasks', {
         title: opts.title,
