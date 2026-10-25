@@ -215,12 +215,12 @@ export function RuleBuilder({ value, onChange }: { value: Draft; onChange: (d: D
         </div>
         {!value.isPrivate && (
           <p className="mt-1.5 text-[11px] leading-relaxed text-sky-300/80">
-            A public rule is stored <span className="font-medium">in the clear</span> on-chain and
-            the vault enforces it directly on each session spend (no proof, no salt). Saving it
-            prompts your wallet once. A server key (Managed Session) is set up on the Vault tab with
-            just a cap and expiry; mark a public rule <span className="font-medium">global</span> to
-            add these clauses on top of every session spend, or reference its id from an SDK/MCP
-            local key.
+            A public rule is stored <span className="font-medium">in the clear</span> (no proof, no
+            salt). Just like a private rule, saving is free (no signature) and you then{' '}
+            <span className="font-medium">Pin it on-chain</span> with one signature to make it live.
+            Once live, use it by marking it <span className="font-medium">global</span> (it applies
+            on top of every Managed Session spend) or by referencing its id from an SDK/MCP session
+            key. The server key itself (cap + expiry) is set up on the Vault tab.
           </p>
         )}
       </div>
@@ -605,11 +605,11 @@ function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void })
         <div className="flex items-start gap-2.5 rounded-xl border border-sky-500/25 bg-sky-500/[0.06] p-3">
           <Eye size={16} className="mt-0.5 shrink-0 text-sky-300" />
           <p className="text-[12.5px] leading-relaxed text-slate-300">
-            Public rule live. Its clauses are stored on-chain{' '}
-            <span className="text-sky-300">in the clear</span> and the vault enforces them directly
-            on each session spend (no proof). There is no secret to keep. Reference the rule id
-            below from an SDK/MCP local key, or mark the rule{' '}
-            <span className="text-sky-300">global</span> to apply it on top of every spend.
+            Public rule saved. Next, <span className="text-sky-300">Pin it on-chain</span> from its
+            card (one wallet signature) so the vault enforces it. A public rule has no secret - its
+            clauses are public by design. Once live, use it in this dapp by marking it{' '}
+            <span className="text-sky-300">global</span> (it then applies to every Managed Session
+            spend), or reference the rule id below from an SDK/MCP session key.
           </p>
         </div>
         {reveal.chips.length > 0 && (
@@ -624,7 +624,7 @@ function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void })
             ))}
           </div>
         )}
-        <CopyRow label="Rule id · public handle, live on-chain" value={reveal.ruleId} />
+        <CopyRow label="Rule id · public handle (pin it to go live)" value={reveal.ruleId} />
         <CopyRow label="Agent config · { mode, publicRuleId }" value={configJson} />
         <div className="flex justify-end border-t border-white/[0.06] pt-3">
           <button onClick={onDone} className={primaryBtn}>
@@ -775,12 +775,21 @@ function RuleCard({
   const draft = cachedDraft(p.commitment);
   const chips = draft ? draftChips(draft) : null;
   const clauses = draft ? draftToRule(draft).clauses : [];
-  // A private rule is usable once pinned; a public rule is live the moment it is
-  // stored on-chain (no pinning), so it is always "live".
-  const live = priv ? pinned : true;
-  // Make-global is available for a private rule once it is pinned (or already
-  // global), and for a public rule any time (public globals are not pinned).
-  const canGlobal = priv ? pinned || isGlobal : true;
+  // A public rule's on-chain state: it is "pinned"/live once set_public_rule has
+  // written its clauses (get_public_rule returns them). Read it so a public card
+  // shows Pin-to-use vs Live honestly, exactly like a private card reads its
+  // pinned-commitment set. (Same query key as the usage panel, so it is deduped.)
+  const { data: publicRuleData } = useQuery({
+    queryKey: ['public-rule', p.commitment],
+    queryFn: () => getPublicRule(p.commitment),
+    enabled: !priv,
+  });
+  // A private rule is usable once pinned; a public rule once its clauses are written
+  // on-chain. Both take one wallet signature at Pin.
+  const live = priv ? pinned : !!publicRuleData?.rule;
+  // Make-global needs the rule live on-chain first (set_global_public requires the
+  // public rule to exist; a private global must be a pinned commitment).
+  const canGlobal = live || isGlobal;
 
   return (
     <Card className={`flex flex-col p-0 ${live ? '' : 'opacity-[0.96]'}`}>
@@ -812,28 +821,23 @@ function RuleCard({
               >
                 {priv ? 'Private' : 'Public'}
               </span>
-              {priv && pinned && (
+              {live ? (
                 <span
-                  title="Pinned on-chain: this rule is live and can authorize spends."
+                  title={
+                    priv
+                      ? 'Pinned on-chain: this rule is live and can authorize spends.'
+                      : 'Live on-chain in the clear: the vault enforces this rule directly on each session spend (and it can be made global).'
+                  }
                   className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-300"
                 >
-                  <Anchor size={9} /> Pinned
+                  {priv ? <Anchor size={9} /> : <Check size={9} />} {priv ? 'Pinned' : 'Live'}
                 </span>
-              )}
-              {priv && !pinned && (
+              ) : (
                 <span
-                  title="Not pinned. Pin this rule on-chain (one wallet signature) before it can authorize a spend."
+                  title="Not on-chain yet. Pin this rule (one wallet signature) before it can authorize a spend."
                   className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300"
                 >
                   Pin to use
-                </span>
-              )}
-              {!priv && (
-                <span
-                  title="Live on-chain in the clear: the vault enforces this rule directly on each session spend."
-                  className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-300"
-                >
-                  <Check size={9} /> Live
                 </span>
               )}
               {isDefault && (
@@ -909,35 +913,37 @@ function RuleCard({
 
         {/* Live on-chain usage: public reads by rule id; private reads the pinned
             commitment's window accumulator (the only totals that are public). */}
-        {!priv && <PublicUsagePanel ruleId={p.commitment} />}
+        {!priv && live && <PublicUsagePanel ruleId={p.commitment} />}
         {priv && pinned && <PrivateUsagePanel commitment={p.commitment} />}
       </div>
 
       <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] px-4 py-2.5">
-        {priv ? (
-          pinned ? (
-            <button
-              onClick={onUnpin}
-              disabled={pinBusy}
-              className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11.5px] text-slate-400 hover:bg-white/[0.06] hover:text-slate-200 disabled:opacity-40"
-              title="Unpin on-chain (wallet signs unpin_policy_commitment)"
-            >
-              <Anchor size={13} /> {pinBusy ? 'Unpinning…' : 'Unpin'}
-            </button>
-          ) : (
-            <button
-              onClick={onPin}
-              disabled={pinBusy}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/15 px-2.5 py-1 text-[11.5px] font-medium text-violet-200 hover:bg-violet-500/25 disabled:opacity-40"
-              title="Pin on-chain (wallet signs set_policy_commitment) so this rule can authorize spends"
-            >
-              <Anchor size={13} /> {pinBusy ? 'Pinning…' : 'Pin on-chain'}
-            </button>
-          )
+        {live ? (
+          <button
+            onClick={onUnpin}
+            disabled={pinBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11.5px] text-slate-400 hover:bg-white/[0.06] hover:text-slate-200 disabled:opacity-40"
+            title={
+              priv
+                ? 'Unpin on-chain (wallet signs unpin_policy_commitment)'
+                : 'Remove on-chain (wallet signs clear_public_rule)'
+            }
+          >
+            <Anchor size={13} /> {pinBusy ? 'Removing…' : 'Unpin'}
+          </button>
         ) : (
-          <span className="inline-flex items-center gap-1.5 px-1 text-[11.5px] text-slate-500">
-            <Check size={13} className="text-emerald-300" /> Enforced on-chain
-          </span>
+          <button
+            onClick={onPin}
+            disabled={pinBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/15 px-2.5 py-1 text-[11.5px] font-medium text-violet-200 hover:bg-violet-500/25 disabled:opacity-40"
+            title={
+              priv
+                ? 'Pin on-chain (wallet signs set_policy_commitment) so this rule can authorize spends'
+                : 'Pin on-chain (wallet signs set_public_rule) so the vault enforces this rule on session spends'
+            }
+          >
+            <Anchor size={13} /> {pinBusy ? 'Pinning…' : 'Pin on-chain'}
+          </button>
         )}
         <div className="flex shrink-0 items-center gap-1">
           {canGlobal && (
@@ -1110,16 +1116,17 @@ export function RulesManager() {
 
   const save = useMutation({
     mutationFn: async () => {
-      // PUBLIC = a named cleartext rule the vault enforces directly on each session
-      // spend. Generate (or reuse, when editing) a 32-byte rule id, register the full
-      // clause set on-chain with one wallet signature, and keep a server record so it
-      // lists. There is no salt and no pinning: it is live the moment it is stored.
+      // PUBLIC = a named cleartext rule. Saving it is LOCAL + a server record only,
+      // with NO signature (exactly like a private rule's create step): we mint (or
+      // reuse, when editing) a 32-byte rule id and keep the clauses on the device.
+      // The single wallet signature happens later at Pin (set_public_rule), which is
+      // what makes it live on-chain and usable - symmetric with pinning a private
+      // rule. There is no salt (the clauses are public by design).
       if (!draft.isPrivate) {
         const existing = editingId
           ? policies.find((x) => x.id === editingId)?.commitment
           : undefined;
         const ruleId = existing ?? newRuleId();
-        await setPublicRule(ruleId, draftToPublicRule(draft));
         const { rules } = draftToRules(draft);
         const policy = await createPolicy(rules, false, {
           name: name.trim() || undefined,
@@ -1197,8 +1204,11 @@ export function RulesManager() {
         if (globalPrivate === id) await clearGlobalPrivate();
         if (pinnedSet.has(id)) await unpinCommitment(p.commitment);
       } else {
-        if (globalPublic === id) await clearGlobalPublic();
-        await clearPublicRule(p.commitment);
+        // Only sign a clear if the rule is actually live on-chain (an unpinned public
+        // rule has nothing to clear). clear_public_rule also drops the global if this
+        // rule was it, so no separate global clear is needed.
+        const { rule } = await getPublicRule(p.commitment);
+        if (rule) await clearPublicRule(p.commitment);
       }
       await deletePolicy(p.id);
     },
@@ -1231,16 +1241,38 @@ export function RulesManager() {
       setOpen(true);
     },
   });
+  // Pin = the one wallet signature that makes a rule live on-chain and usable, in
+  // BOTH lanes: a private rule pins its commitment (set_policy_commitment); a public
+  // rule writes its cleartext clauses (set_public_rule). Unpin reverses it.
   const pin = useMutation({
-    mutationFn: (commitment: string) => pinCommitment(commitment),
-    onSuccess: () => {
+    mutationFn: (p: Policy) => {
+      if ((p.form ?? (p.isPrivate ? 'private' : 'public')) === 'private') {
+        return pinCommitment(p.commitment);
+      }
+      const d = cachedDraft(p.commitment);
+      if (!d) {
+        throw new Error(
+          'This public rule has no copy on this device, so its clauses cannot be written on-chain here. Re-create it on this device (or edit it) first.',
+        );
+      }
+      return setPublicRule(p.commitment, draftToPublicRule(d));
+    },
+    onSuccess: (_r, p) => {
       qc.invalidateQueries({ queryKey: ['policies'] });
       qc.invalidateQueries({ queryKey: ['pinned-commitments'] });
+      qc.invalidateQueries({ queryKey: ['public-rule', p.commitment] });
     },
   });
   const unpin = useMutation({
-    mutationFn: (commitment: string) => unpinCommitment(commitment),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['pinned-commitments'] }),
+    mutationFn: (p: Policy) =>
+      (p.form ?? (p.isPrivate ? 'private' : 'public')) === 'private'
+        ? unpinCommitment(p.commitment)
+        : clearPublicRule(p.commitment),
+    onSuccess: (_r, p) => {
+      qc.invalidateQueries({ queryKey: ['pinned-commitments'] });
+      qc.invalidateQueries({ queryKey: ['public-rule', p.commitment] });
+      qc.invalidateQueries({ queryKey: ['globals'] });
+    },
   });
 
   const activePolicies = policies.filter((p) => p.status !== 'archived');
@@ -1387,8 +1419,8 @@ export function RulesManager() {
               isDefault={defaultId === p.id}
               pinned={pinnedSet.has(id)}
               onDefault={() => toggleDefault(p.id)}
-              onPin={() => pin.mutate(p.commitment)}
-              onUnpin={() => unpin.mutate(p.commitment)}
+              onPin={() => pin.mutate(p)}
+              onUnpin={() => unpin.mutate(p)}
               onEdit={() => openEdit(p)}
               onDuplicate={() => openDuplicate(p)}
               onDelete={() => {
@@ -1396,12 +1428,12 @@ export function RulesManager() {
                   ? pinnedSet.has(id) || globalPrivate === id
                     ? ' It is live on-chain, so this also unpins it (and clears it as global if set) with a wallet signature, after which it can no longer authorize a spend.'
                     : ''
-                  : ' It is live on-chain, so this also removes the public rule (and clears it as global if set) with a wallet signature.';
+                  : ' If it is live on-chain, this also removes it (and clears it as global if set) with a wallet signature.';
                 if (window.confirm(`Delete "${p.name || 'this rule'}"?${onChain}`)) del.mutate(p);
               }}
               pinBusy={
-                (pin.isPending && pin.variables === p.commitment) ||
-                (unpin.isPending && unpin.variables === p.commitment) ||
+                (pin.isPending && pin.variables?.id === p.id) ||
+                (unpin.isPending && unpin.variables?.id === p.id) ||
                 (del.isPending && del.variables?.id === p.id)
               }
               isGlobal={isGlobal}
@@ -1432,7 +1464,7 @@ export function RulesManager() {
           title={
             reveal
               ? reveal.kind === 'public'
-                ? 'Public rule · id & agent config'
+                ? 'Public rule saved · pin to use'
                 : 'Private rule · salt & agent bundle'
               : editingId
                 ? 'Edit rule (saves a new version)'

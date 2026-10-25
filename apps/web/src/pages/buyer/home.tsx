@@ -132,6 +132,7 @@ function RuleLanePicker({
   managed,
   applied,
   usingGlobalAsRule,
+  publicGlobalActive,
 }: {
   lane: 'private' | 'public';
   setLane: (l: 'private' | 'public') => void;
@@ -142,6 +143,8 @@ function RuleLanePicker({
   managed: ManagedSession | undefined;
   applied: Applied;
   usingGlobalAsRule: boolean;
+  /** A public rule is marked global, so the vault AND-enforces it on every session spend. */
+  publicGlobalActive: boolean;
 }) {
   return (
     <div className="space-y-2">
@@ -190,7 +193,9 @@ function RuleLanePicker({
         ) : (
           <span className="text-xs text-slate-400">
             {sessionActive
-              ? `Managed Session · ${managed!.session!.remainingUsdc.toFixed(2)} USDC cap left`
+              ? `Managed Session · ${managed!.session!.remainingUsdc.toFixed(2)} USDC cap left${
+                  publicGlobalActive ? ' · a global public rule applies' : ''
+                }`
               : 'No Managed Session. Set one up on the Vault tab.'}
           </span>
         )}
@@ -737,6 +742,7 @@ export function CommandChat() {
                 managed={managed}
                 applied={applied}
                 usingGlobalAsRule={usingGlobalAsRule}
+                publicGlobalActive={!!globals?.publicRuleId}
               />
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] leading-relaxed text-slate-500">
@@ -895,6 +901,7 @@ export function CommandChat() {
                   managed={managed}
                   applied={applied}
                   usingGlobalAsRule={usingGlobalAsRule}
+                  publicGlobalActive={!!globals?.publicRuleId}
                 />
               </div>
 
