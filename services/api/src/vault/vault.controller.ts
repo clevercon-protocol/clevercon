@@ -98,6 +98,18 @@ const sessionUpdateSchema = z.object({
   newSpendCapUsdc: z.number().nonnegative(),
 });
 const sessionPauseSchema = z.object({ paused: z.boolean() });
+
+// Self-custody agent keys: the owner authorizes an arbitrary key bound to a public
+// rule (+ optional cap / expiry). sessionPublicKey is any G... address.
+const gAddr = z.string().regex(/^G[A-Z2-7]{55}$/);
+const agentKeyRegisterSchema = z.object({
+  sessionPublicKey: gAddr,
+  ruleId: rid64,
+  spendCapUsdc: z.number().nonnegative().optional(),
+  expiresInSeconds: z.number().int().nonnegative().optional(),
+});
+const agentKeyOnlySchema = z.object({ sessionPublicKey: gAddr });
+const agentKeyPauseSchema = z.object({ sessionPublicKey: gAddr, paused: z.boolean() });
 const sessionPayBodySchema = z.object({
   payee: z.string().min(1),
   amount: z.number().positive(),
@@ -334,6 +346,46 @@ export class VaultController {
   @Get('session')
   getSession(@CurrentUser() user: AuthUser) {
     return this.vault.getSession(user.userId);
+  }
+
+  // ── Self-custody agent keys (local session keys) ─────────────────────────────
+
+  /**
+   * Build register_session for a SELF-CUSTODY agent key: the owner authorizes an
+   * arbitrary public key (server_held=false) bound to a public rule + optional cap,
+   * optionally time-boxed. Signed in the wallet and submitted via `submit`. The agent
+   * holds the key's secret and spends with it directly (local mode).
+   */
+  @Post('agent-key/register')
+  registerAgentKey(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const p = parseBody(agentKeyRegisterSchema, body);
+    return this.vault.buildRegisterAgentKey(
+      user.userId,
+      p.sessionPublicKey,
+      p.ruleId,
+      p.spendCapUsdc,
+      p.expiresInSeconds,
+    );
+  }
+
+  /** Build the wallet-signed pause/unpause XDR for a specific agent key. */
+  @Post('agent-key/pause')
+  pauseAgentKey(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const p = parseBody(agentKeyPauseSchema, body);
+    return this.vault.buildPauseAgentKey(user.userId, p.sessionPublicKey, p.paused);
+  }
+
+  /** Build the wallet-signed revoke_session XDR for a specific agent key. */
+  @Post('agent-key/revoke')
+  revokeAgentKey(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const p = parseBody(agentKeyOnlySchema, body);
+    return this.vault.buildRevokeAgentKey(user.userId, p.sessionPublicKey);
+  }
+
+  /** The live on-chain scope of a specific agent key (cap/spent/rule/paused/...), or null. */
+  @Get('agent-key/:sessionPublicKey')
+  agentKey(@CurrentUser() user: AuthUser, @Param('sessionPublicKey') sessionPublicKey: string) {
+    return this.vault.getAgentKey(user.userId, sessionPublicKey);
   }
 
   /**

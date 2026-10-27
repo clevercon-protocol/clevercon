@@ -25,11 +25,13 @@ export async function getVault(): Promise<Vault> {
 export interface VaultStatus {
   depositsEnabled: boolean;
   contractAddress: string;
+  /** The USDC Stellar Asset Contract id (for building self-custody agent-key tokens). */
+  usdcSac: string;
 }
 
 /** Deposit availability + the deployed contract address (empty in demo/unconfigured). */
 export async function getVaultStatus(): Promise<VaultStatus> {
-  if (isDemo()) return { depositsEnabled: false, contractAddress: '' };
+  if (isDemo()) return { depositsEnabled: false, contractAddress: '', usdcSac: '' };
   return apiFetch<VaultStatus>('/vault/status');
 }
 
@@ -311,6 +313,46 @@ export async function revokeManagedSession(): Promise<{ txHash: string }> {
   const built = await apiPost<BuildResp>('/vault/session/revoke', {});
   const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
   return apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
+}
+
+// ── Self-custody agent keys (local session keys) ───────────────────────────────
+
+/**
+ * Authorize a SELF-CUSTODY agent key on-chain (wallet-signed, once): the owner blesses
+ * an arbitrary public key, bound to a public rule and an optional spend cap / expiry.
+ * The agent holds the key's secret and then spends hands-off (local mode). This is the
+ * dapp-side one-time grant; pause / revoke it any time.
+ */
+export function registerAgentKey(
+  sessionPublicKey: string,
+  ruleId: string,
+  spendCapUsdc?: number,
+  expiresInSeconds?: number,
+): Promise<{ txHash: string }> {
+  return signAndSubmitBuild('/vault/agent-key/register', {
+    sessionPublicKey,
+    ruleId,
+    ...(spendCapUsdc ? { spendCapUsdc } : {}),
+    ...(expiresInSeconds ? { expiresInSeconds } : {}),
+  });
+}
+
+/** Pause / unpause a self-custody agent key on-chain (wallet-signed). */
+export function pauseAgentKey(sessionPublicKey: string, paused: boolean): Promise<{ txHash: string }> {
+  return signAndSubmitBuild('/vault/agent-key/pause', { sessionPublicKey, paused });
+}
+
+/** Revoke a self-custody agent key on-chain (wallet-signed); it can spend nothing after. */
+export function revokeAgentKey(sessionPublicKey: string): Promise<{ txHash: string }> {
+  return signAndSubmitBuild('/vault/agent-key/revoke', { sessionPublicKey });
+}
+
+/** Read a specific agent key's live on-chain scope (cap/spent/rule/paused/...), or null. */
+export async function getAgentKey(
+  sessionPublicKey: string,
+): Promise<{ sessionPublicKey: string; session: ManagedSessionScope | null }> {
+  if (isDemo()) return { sessionPublicKey, session: null };
+  return apiFetch(`/vault/agent-key/${sessionPublicKey}`);
 }
 
 /**

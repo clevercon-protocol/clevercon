@@ -1,5 +1,6 @@
 import { isDemo } from '../../config';
 import { WalletCard, VaultCard, AgentWalletCard, ManagedSessionCard } from './parts';
+import { AgentKeysCard } from './AgentKeysCard';
 import { SectionLabel } from '../../components/ui';
 
 /**
@@ -28,6 +29,15 @@ export function VaultPage() {
         <VaultCard />
         {!isDemo() && <ManagedSessionCard />}
       </div>
+
+      {!isDemo() && (
+        <div>
+          <SectionLabel>Self-custody agent keys (public lane, local mode)</SectionLabel>
+          <div className="mt-2">
+            <AgentKeysCard />
+          </div>
+        </div>
+      )}
 
       {!isDemo() && (
         <div>

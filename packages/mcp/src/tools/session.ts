@@ -128,10 +128,13 @@ export async function sessionPayHandler(
     }
 
     const { spender, ruleId: tokenRule } = loadLocalSession();
-    const rule = (argRule as string | undefined) ?? tokenRule;
+    // The rule for a local spend: a per-call ruleId, else the one packed in the
+    // session key, else CLEVERCON_RULE_KEY (set it when the session key is a bare
+    // secret + vault/USDC without a rule, e.g. a key authorized on the dapp).
+    const rule = (argRule as string | undefined) ?? tokenRule ?? serverRule();
     if (!rule) {
       throw new Error(
-        'a public rule must be set for the spend: register the session under a public rule, or pass ruleId',
+        'a public rule must be set for the spend: set CLEVERCON_RULE_KEY (from the Rules tab), register the key under a rule, or pass ruleId',
       );
     }
     const res = await spender.pay(payee.trim(), amount, rule);

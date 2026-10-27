@@ -19,11 +19,13 @@ export class VaultService {
     private readonly delegates: DelegateService,
   ) {}
 
-  /** Deposit availability + the deployed contract address (for UI transparency). */
-  get status(): { depositsEnabled: boolean; contractAddress: string } {
+  /** Deposit availability + the deployed contract + USDC SAC (for UI transparency and
+   *  for building self-custody agent-key tokens client-side). */
+  get status(): { depositsEnabled: boolean; contractAddress: string; usdcSac: string } {
     return {
       depositsEnabled: this.contract.active,
       contractAddress: this.contract.contractAddress,
+      usdcSac: this.contract.usdcAsset,
     };
   }
 
@@ -312,6 +314,73 @@ export class VaultService {
     if (!publicKey) return { sessionPublicKey: null, session: null };
     const session = await this.contract.readSession(publicKey);
     return { sessionPublicKey: publicKey, session };
+  }
+
+  // ── Self-custody agent keys (local session keys) ─────────────────────────────
+  // Unlike the Managed Session (a server-held delegate), these are keys the AGENT
+  // holds. The owner authorizes an arbitrary public key ONCE (register_session with
+  // server_held=false), bound to a public rule and an optional cap; local keys may be
+  // open-ended (no expiry). All ops are wallet-signed and submitted via `submit`.
+
+  /** Build the wallet-signed register_session for a self-custody agent key. */
+  async buildRegisterAgentKey(
+    userId: string,
+    sessionPublicKey: string,
+    ruleIdHex: string,
+    spendCapUsdc?: number,
+    expiresInSeconds?: number,
+  ) {
+    if (!StrKey.isValidEd25519PublicKey(sessionPublicKey)) {
+      throw new BadRequestException('Invalid agent key (expected a G... address)');
+    }
+    const cap = spendCapUsdc ?? 0;
+    if (cap < 0) throw new BadRequestException('spendCapUsdc cannot be negative');
+    if (cap === 0 && !ruleIdHex) {
+      throw new BadRequestException('an agent key needs a public rule and/or a spend cap');
+    }
+    const address = await this.primaryAddress(userId);
+    const expiry =
+      expiresInSeconds && expiresInSeconds > 0
+        ? Math.floor(Date.now() / 1000) + expiresInSeconds
+        : 0;
+    const xdr = await this.contract.buildRegisterSessionXdr(
+      address,
+      sessionPublicKey,
+      expiry,
+      cap,
+      ruleIdHex || null,
+      false,
+    );
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed pause/unpause XDR for a self-custody agent key. */
+  async buildPauseAgentKey(userId: string, sessionPublicKey: string, paused: boolean) {
+    if (!StrKey.isValidEd25519PublicKey(sessionPublicKey)) {
+      throw new BadRequestException('Invalid agent key');
+    }
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildSetSessionPausedXdr(address, sessionPublicKey, paused);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed revoke_session XDR for a self-custody agent key. */
+  async buildRevokeAgentKey(userId: string, sessionPublicKey: string) {
+    if (!StrKey.isValidEd25519PublicKey(sessionPublicKey)) {
+      throw new BadRequestException('Invalid agent key');
+    }
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildRevokeSessionXdr(address, sessionPublicKey);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** The live on-chain scope of a specific agent key (cap/spent/rule/paused/...), or null. */
+  async getAgentKey(_userId: string, sessionPublicKey: string) {
+    if (!StrKey.isValidEd25519PublicKey(sessionPublicKey)) {
+      throw new BadRequestException('Invalid agent key');
+    }
+    const session = await this.contract.readSession(sessionPublicKey);
+    return { sessionPublicKey, session };
   }
 
   /** Mark the caller's delegate as authorized (called after the register tx submits). */
