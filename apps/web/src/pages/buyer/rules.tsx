@@ -41,6 +41,7 @@ import {
 import { computePolicyCommitment } from '../../lib/prove';
 import { encryptRuleBundle } from '../../lib/rule-backup';
 import { newSalt } from '@clevercon/agent-sdk/prover';
+import { packPolicyKey, packRuleKey } from '@clevercon/agent-sdk/config-tokens';
 import { CLAUSE_ENFORCEMENT, type ClauseType, type RuleForm } from '@clevercon/common/rule-model';
 import { Card, EmptyState, ErrorState, Loading, controls } from '../../components/ui';
 import {
@@ -587,8 +588,8 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 }
 
 type Reveal =
-  | { kind: 'private'; commitment: string; salt: string; bundleJson: string }
-  | { kind: 'public'; ruleId: string; chips: string[] };
+  | { kind: 'private'; commitment: string; policyKey: string }
+  | { kind: 'public'; ruleId: string; ruleKey: string; chips: string[] };
 
 /**
  * Shown once right after a rule is created (or via the view action later). Private:
@@ -599,17 +600,15 @@ type Reveal =
  */
 function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void }) {
   if (reveal.kind === 'public') {
-    const configJson = JSON.stringify({ mode: 'public', publicRuleId: reveal.ruleId }, null, 2);
     return (
       <div className="space-y-4">
         <div className="flex items-start gap-2.5 rounded-xl border border-sky-500/25 bg-sky-500/[0.06] p-3">
           <Eye size={16} className="mt-0.5 shrink-0 text-sky-300" />
           <p className="text-[12.5px] leading-relaxed text-slate-300">
             Public rule saved. Next, <span className="text-sky-300">Pin it on-chain</span> from its
-            card (one wallet signature) so the vault enforces it. A public rule has no secret - its
-            clauses are public by design. Once live, use it in this dapp by marking it{' '}
-            <span className="text-sky-300">global</span> (it then applies to every Managed Session
-            spend), or reference the rule id below from an SDK/MCP session key.
+            card (one wallet signature) so the vault enforces it. Use it in this dapp by selecting
+            it on the Agent tab (or marking it <span className="text-sky-300">global</span>), or
+            hand an agent the single rule key below.
           </p>
         </div>
         {reveal.chips.length > 0 && (
@@ -624,8 +623,16 @@ function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void })
             ))}
           </div>
         )}
-        <CopyRow label="Rule id · public handle (pin it to go live)" value={reveal.ruleId} />
-        <CopyRow label="Agent config · { mode, publicRuleId }" value={configJson} />
+        <CopyRow label="Rule key · CLEVERCON_RULE_KEY (server mode)" value={reveal.ruleKey} />
+        <div className="rounded-xl bg-white/[0.03] p-3 text-[11.5px] leading-relaxed text-slate-400">
+          <div className="mb-1 font-medium text-slate-300">Use it with an agent</div>
+          Server mode: set <span className="text-sky-300">CLEVERCON_PUBLIC_MODE=server</span> +{' '}
+          <span className="text-sky-300">CLEVERCON_RULE_KEY</span> to the key above (plus your API
+          key). Local mode: register a session key with the SDK{' '}
+          <span className="text-sky-300">registerSession</span> (it returns a single{' '}
+          <span className="text-sky-300">CLEVERCON_SESSION_KEY</span>). The global public rule, if
+          any, is applied by the vault automatically.
+        </div>
         <div className="flex justify-end border-t border-white/[0.06] pt-3">
           <button onClick={onDone} className={primaryBtn}>
             Done
@@ -639,25 +646,28 @@ function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void })
       <div className="flex items-start gap-2.5 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] p-3">
         <ShieldCheck size={16} className="mt-0.5 shrink-0 text-emerald-300" />
         <p className="text-[12.5px] leading-relaxed text-slate-300">
-          To let an agent spend under this private rule, provision the bundle below into your
-          agent&apos;s SDK or MCP config. The <span className="text-violet-300">salt</span> is the
-          secret that lets the agent prove; it is also backed up encrypted under your wallet, so you
-          can recover it by reconnecting on any device. Keep it private.
+          To let an agent spend under this private rule, give it the single{' '}
+          <span className="text-violet-300">policy key</span> below. It packs your rule and its
+          secret salt into one opaque string (the raw rule and salt are never shown), and it is also
+          backed up encrypted under your wallet so you can re-reveal it on any device. Keep it
+          private.
         </p>
       </div>
 
-      <CopyRow label="Commitment · public id, pinned on-chain" value={reveal.commitment} />
-      <CopyRow label="Salt · secret" value={reveal.salt} />
-      <CopyRow label="Agent config · { rules, salt }" value={reveal.bundleJson} />
+      <CopyRow
+        label="Policy key · CLEVERCON_POLICY_KEY (secret - keep private)"
+        value={reveal.policyKey}
+      />
+      <CopyRow label="Commitment · public on-chain id (not secret)" value={reveal.commitment} />
 
       <div className="rounded-xl bg-white/[0.03] p-3 text-[11.5px] leading-relaxed text-slate-400">
         <div className="mb-1 font-medium text-slate-300">Use it with an agent</div>
         <div className="font-mono text-[11px] text-slate-400">
-          MCP: set <span className="text-violet-300">CLEVERCON_POLICY_JSON</span> to the config
-          above.
+          MCP: set <span className="text-violet-300">CLEVERCON_POLICY_KEY</span> to the key above.
           <br />
-          SDK: <span className="text-violet-300">createSpender(&#123; policyBundle &#125;)</span>,
-          then <span className="text-violet-300">disbursePrivate(lines)</span>.
+          SDK: <span className="text-violet-300">createSpender(&#123; apiKey &#125;)</span>, then{' '}
+          <span className="text-violet-300">disbursePrivate(lines)</span> (circuit artifacts
+          download automatically).
         </div>
       </div>
 
@@ -1110,7 +1120,12 @@ export function RulesManager() {
       return;
     }
     const d = cachedDraft(p.commitment);
-    setReveal({ kind: 'public', ruleId: p.commitment, chips: d ? draftChips(d) : [] });
+    setReveal({
+      kind: 'public',
+      ruleId: p.commitment,
+      ruleKey: packRuleKey(p.commitment),
+      chips: d ? draftChips(d) : [],
+    });
     setOpen(true);
   };
 
@@ -1172,7 +1187,12 @@ export function RulesManager() {
         }
         qc.invalidateQueries({ queryKey: ['policies'] });
         qc.invalidateQueries({ queryKey: ['public-rule', ruleId] });
-        setReveal({ kind: 'public', ruleId, chips: draftChips(draft) });
+        setReveal({
+          kind: 'public',
+          ruleId,
+          ruleKey: packRuleKey(ruleId),
+          chips: draftChips(draft),
+        });
         return;
       }
       const { policy: p, salt } = result;
@@ -1186,8 +1206,7 @@ export function RulesManager() {
       setReveal({
         kind: 'private',
         commitment: p.commitment,
-        salt,
-        bundleJson: JSON.stringify({ rules: draftToBundleRules(draft), salt }, null, 2),
+        policyKey: packPolicyKey({ rules: draftToBundleRules(draft), salt }),
       });
     },
   });
@@ -1235,8 +1254,7 @@ export function RulesManager() {
       setReveal({
         kind: 'private',
         commitment: b.commitment,
-        salt: b.salt,
-        bundleJson: JSON.stringify({ rules: b.rules, salt: b.salt }, null, 2),
+        policyKey: packPolicyKey({ rules: b.rules, salt: b.salt }),
       });
       setOpen(true);
     },

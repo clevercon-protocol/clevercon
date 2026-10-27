@@ -28,6 +28,7 @@ import {
   rpc,
   Networks,
 } from '@stellar/stellar-sdk';
+import { packSessionKey, unpackSessionKey } from './config-tokens.js';
 
 const DEFAULT_RPC_URL = 'https://soroban-testnet.stellar.org';
 const UNIT = 10_000_000; // 1 USDC in stroops (7 decimals)
@@ -86,6 +87,12 @@ export interface RegisteredSession {
   /** Unix-second ledger-time cutoff after which the key is dead (0 = open-ended). */
   expiry: number;
   txHash: string;
+  /**
+   * ONE opaque token to hand the agent (CLEVERCON_SESSION_KEY): it packs the session
+   * secret, the vault + USDC ids, the RPC, and the rule - so a local-key agent config
+   * is a single line instead of four env vars. Keep it as private as the key inside.
+   */
+  sessionKey: string;
 }
 
 export interface SessionScope {
@@ -265,6 +272,13 @@ export async function registerSession(opts: RegisterSessionOptions): Promise<Reg
     ruleId: opts.ruleId ?? null,
     expiry,
     txHash,
+    sessionKey: packSessionKey({
+      sessionSecret: session.secret(),
+      vaultId: opts.vaultId,
+      usdcSac: opts.usdcSac,
+      rpcUrl: opts.rpcUrl,
+      ruleId: opts.ruleId,
+    }),
   };
 }
 
@@ -295,6 +309,27 @@ export function createSessionSpender(
       ]);
       return decodeScope(raw);
     },
+  };
+}
+
+/**
+ * Build a session spender straight from a `CLEVERCON_SESSION_KEY` token (the one
+ * string `registerSession` returns): it unpacks the secret + network + rule, so an
+ * agent needs no other config. `pay` defaults to the rule packed in the token when a
+ * per-call ruleId is not given.
+ */
+export function createSessionSpenderFromKey(sessionKey: string): SessionSpender {
+  const cfg = unpackSessionKey(sessionKey);
+  const base = createSessionSpender({
+    vaultId: cfg.vaultId,
+    usdcSac: cfg.usdcSac,
+    rpcUrl: cfg.rpcUrl,
+    sessionSecret: cfg.sessionSecret,
+  });
+  return {
+    publicKey: base.publicKey,
+    pay: (payee, amountUsdc, ruleId) => base.pay(payee, amountUsdc, ruleId ?? cfg.ruleId),
+    scope: base.scope,
   };
 }
 

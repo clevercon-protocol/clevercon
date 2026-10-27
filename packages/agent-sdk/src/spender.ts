@@ -17,6 +17,8 @@
 // the prover (snarkjs/stellar) chain. The prover is loaded lazily in disbursePrivate.
 import type { PolicyBundle } from './payments/policy-bundle.js';
 import type { PoseidonArtifacts } from './payments/poseidon.js';
+// Token decode is tiny + dependency-free (no snarkjs/stellar), so a value import is fine.
+import { unpackPolicyKey } from './config-tokens.js';
 
 export interface SpenderOptions {
   /** Scoped API key (cc_...). */
@@ -43,11 +45,13 @@ export interface SpenderOptions {
    */
   globalBundle?: PolicyBundle;
   /**
-   * Circuit artifacts for local proving (paths or URLs). Falls back to
-   * `CLEVERCON_PP2_WASM` / `CLEVERCON_PP2_ZKEY`; the poseidon set defaults to the
-   * hosted artifacts when the policy needs it (allowlist/deny/calendar/category).
+   * OPTIONAL override for the circuit artifacts. By default disbursePrivate downloads
+   * `policy_batch.wasm` + the proving `.zkey` once from the hosted bucket and caches
+   * them on disk, so a user never has to set a path. Set this (or `CLEVERCON_PP2_WASM`
+   * / `CLEVERCON_PP2_ZKEY`) only to pin local files. Poseidon artifacts default to the
+   * hosted set when a policy needs them (allowlist/deny/calendar/category).
    */
-  proverArtifacts?: { wasmPath: string; zkeyPath: string; poseidon?: PoseidonArtifacts };
+  proverArtifacts?: { wasmPath?: string; zkeyPath?: string; poseidon?: PoseidonArtifacts };
 }
 
 export interface PaymentLine {
@@ -220,49 +224,38 @@ export function createSpender(options: SpenderOptions): CleverConClient {
   const env = (k: string): string | undefined =>
     typeof process !== 'undefined' ? process.env?.[k] : undefined;
 
-  // Resolve the owner's private policy bundle (fail-closed): the option wins, else
-  // inline CLEVERCON_POLICY_JSON. Never a silent fallback to a server path.
+  // Resolve the owner's private policy bundle (fail-closed): the option wins, else the
+  // single CLEVERCON_POLICY_KEY token (from the Rules tab), else a legacy raw
+  // CLEVERCON_POLICY_JSON. Never a silent fallback to a server path.
   function resolveBundle(): PolicyBundle {
     if (options.policyBundle) return options.policyBundle;
+    const token = env('CLEVERCON_POLICY_KEY');
+    if (token) return unpackPolicyKey(token) as unknown as PolicyBundle;
     const raw = env('CLEVERCON_POLICY_JSON');
-    if (!raw) {
-      throw new Error(
-        'disbursePrivate: no private policy bundle (set options.policyBundle or CLEVERCON_POLICY_JSON to {"rules":{...},"salt":"..."})',
-      );
+    if (raw) {
+      const b = JSON.parse(raw) as PolicyBundle;
+      if (!b?.rules || !b?.salt) throw new Error('policy bundle needs { rules, salt }');
+      return b;
     }
-    const b = JSON.parse(raw) as PolicyBundle;
-    if (!b?.rules || !b?.salt) throw new Error('policy bundle needs { rules, salt }');
-    return b;
+    throw new Error(
+      'disbursePrivate: no private policy (set options.policyBundle, or CLEVERCON_POLICY_KEY to the key you copied from the Rules tab)',
+    );
   }
 
-  // Resolve the owner's global-private bundle, if any (option, else
-  // CLEVERCON_GLOBAL_POLICY_JSON). Null when no global-private is set.
+  // Resolve the owner's global-private bundle, if any: option, else the single
+  // CLEVERCON_GLOBAL_KEY token, else a legacy CLEVERCON_GLOBAL_POLICY_JSON. Null when
+  // no global-private is set on the account.
   function resolveGlobalBundle(): PolicyBundle | null {
-    const b = options.globalBundle ?? parseBundleEnv('CLEVERCON_GLOBAL_POLICY_JSON');
-    if (!b) return null;
-    if (!b.rules || !b.salt) throw new Error('global bundle needs { rules, salt }');
-    return b;
-  }
-
-  function parseBundleEnv(key: string): PolicyBundle | null {
-    const raw = env(key);
-    return raw ? (JSON.parse(raw) as PolicyBundle) : null;
-  }
-
-  function resolvePrivateArtifacts(): {
-    wasmPath: string;
-    zkeyPath: string;
-    poseidon?: PoseidonArtifacts;
-  } {
-    if (options.proverArtifacts) return options.proverArtifacts;
-    const wasmPath = env('CLEVERCON_PP2_WASM');
-    const zkeyPath = env('CLEVERCON_PP2_ZKEY');
-    if (!wasmPath || !zkeyPath) {
-      throw new Error(
-        'disbursePrivate: set options.proverArtifacts or CLEVERCON_PP2_WASM + CLEVERCON_PP2_ZKEY',
-      );
+    if (options.globalBundle) return options.globalBundle;
+    const token = env('CLEVERCON_GLOBAL_KEY');
+    if (token) return unpackPolicyKey(token) as unknown as PolicyBundle;
+    const raw = env('CLEVERCON_GLOBAL_POLICY_JSON');
+    if (raw) {
+      const b = JSON.parse(raw) as PolicyBundle;
+      if (!b.rules || !b.salt) throw new Error('global bundle needs { rules, salt }');
+      return b;
     }
-    return { wasmPath, zkeyPath };
+    return null;
   }
 
   return {
@@ -274,11 +267,19 @@ export function createSpender(options: SpenderOptions): CleverConClient {
     disbursePrivate: async (lines) => {
       const bundle = resolveBundle();
       const globalBundle = resolveGlobalBundle();
-      const artifacts = resolvePrivateArtifacts();
-      // Lazily pull in the prover (snarkjs/stellar) only when actually proving, so
-      // importing createSpender stays dependency-free.
+      // Lazily pull in the prover (snarkjs/stellar) + artifact resolver only when
+      // actually proving, so importing createSpender stays dependency-free.
       const { buildPrivateDisbursement, commitmentForBundle } =
         await import('./payments/private-disburse.js');
+      const { resolveArtifacts } = await import('./payments/artifacts.js');
+      // Resolve the circuit artifacts: by default they are downloaded once from the
+      // hosted bucket and cached on disk, so a user never has to set a wasm/zkey path.
+      // options.proverArtifacts / CLEVERCON_PP2_WASM+_ZKEY only override that.
+      const resolved = await resolveArtifacts({
+        wasmPath: options.proverArtifacts?.wasmPath,
+        zkeyPath: options.proverArtifacts?.zkeyPath,
+      });
+      const artifacts = { ...resolved, poseidon: options.proverArtifacts?.poseidon };
       type Accum = {
         runningSpend: string;
         priorCount: string;

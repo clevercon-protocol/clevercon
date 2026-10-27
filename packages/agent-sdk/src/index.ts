@@ -31,6 +31,18 @@ export {
   extractBatchOutputs,
   type SorobanProof,
 } from './payments/policy-codec.js';
+export {
+  packPolicyKey,
+  unpackPolicyKey,
+  packRuleKey,
+  unpackRuleKey,
+  packSessionKey,
+  unpackSessionKey,
+  POLICY_KEY_PREFIX,
+  RULE_KEY_PREFIX,
+  SESSION_KEY_PREFIX,
+} from './config-tokens.js';
+export type { PolicyKeyPayload, RuleKeyPayload, SessionKeyPayload } from './config-tokens.js';
 export { newSalt, policyWitnessFromBundle, buildPolicyWitness } from './payments/policy-bundle.js';
 export type { PolicyBundle, PolicyBundleRules } from './payments/policy-bundle.js';
 export { buildPrivateDisbursement, commitmentForBundle } from './payments/private-disburse.js';
@@ -55,6 +67,7 @@ export { createAgentWallet } from './agent-wallet.js';
 export {
   registerSession,
   createSessionSpender,
+  createSessionSpenderFromKey,
   revokeSession,
   setSessionPaused,
   updateSession,

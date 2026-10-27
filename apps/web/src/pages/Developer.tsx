@@ -376,22 +376,25 @@ export function Developer() {
 
 /** The extra env a given lane needs, plus the MCP tool(s) it unlocks. */
 const PRIVATE_ENV = [
-  '# Private (keyless): the { rules, salt } you copied from the Rules tab.',
-  '# It never leaves the agent - only the proof is relayed.',
-  'CLEVERCON_POLICY_JSON={"rules":{...},"salt":"..."}',
-  '# circuit artifacts (download once):',
-  'CLEVERCON_PP2_WASM=/path/policy_batch.wasm',
-  'CLEVERCON_PP2_ZKEY=/path/policy_batch_final.zkey',
-  '# only if you marked a private rule global, add its bundle too:',
-  '# CLEVERCON_GLOBAL_POLICY_JSON={"rules":{...},"salt":"..."}',
+  '# Private (keyless): the ONE policy key you copied from the Rules tab.',
+  '# It packs your rule + its salt; it never leaves the agent, only the proof is relayed.',
+  'CLEVERCON_POLICY_KEY=ccpk1_…',
+  '# Only if a private rule is marked GLOBAL on your account, add its key too:',
+  '# CLEVERCON_GLOBAL_KEY=ccpk1_…',
+  '# (Circuit artifacts download automatically on first use - nothing to set.)',
 ].join('\n');
 
-const PUBLIC_ENV = [
-  '# Public (session key): a bounded key the owner authorized once.',
-  '# Hand it to the agent out-of-band - never to the model.',
-  'CLEVERCON_SESSION_SECRET=S...',
-  'CLEVERCON_VAULT_ID=C...',
-  'CLEVERCON_USDC_SAC=C...',
+const PUBLIC_SERVER_ENV = [
+  '# Public, SERVER mode: spend via the account Managed Session (set up in the dapp).',
+  'CLEVERCON_PUBLIC_MODE=server',
+  'CLEVERCON_RULE_KEY=ccrk1_…   # the public rule to spend under (from the Rules tab)',
+  '# (The global public rule, if any, is applied by the vault automatically.)',
+].join('\n');
+
+const PUBLIC_LOCAL_ENV = [
+  '# Public, LOCAL mode (default): the agent holds its own session key.',
+  '# registerSession (SDK) returns this ONE token; it packs the key + vault + rule.',
+  'CLEVERCON_SESSION_KEY=ccsk1_…',
 ].join('\n');
 
 function LaneTab({
@@ -496,9 +499,9 @@ function McpQuickstart() {
         {lane === 'private' ? (
           <div className="mt-4 space-y-3">
             <p className="text-[12.5px] leading-relaxed text-slate-400">
-              In the dapp, create a <b>Private</b> rule and <b>Pin</b> it, then copy its{' '}
-              <span className="font-mono text-[11.5px] text-violet-300">{'{ rules, salt }'}</span>{' '}
-              bundle (the salt never touches our server). Add it plus the circuit artifacts:
+              In the dapp, create a <b>Private</b> rule, <b>Pin</b> it, then copy its single{' '}
+              <span className="font-mono text-[11.5px] text-violet-300">policy key</span> (it packs
+              the rule + salt; nothing else to set). Add it to the config env:
             </p>
             <CopyBlock text={PRIVATE_ENV} label="private env" />
             <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-slate-400">
@@ -508,12 +511,17 @@ function McpQuickstart() {
         ) : (
           <div className="mt-4 space-y-3">
             <p className="text-[12.5px] leading-relaxed text-slate-400">
-              In the dapp, create a <b>Public</b> rule (copy its rule id) and register a session key
-              bounded by a cap and/or that rule (Rules tab, or the SDK{' '}
-              <span className="font-mono text-[11.5px] text-violet-300">registerSession</span>).
-              Hand the agent the session secret:
+              Public spending uses a session key in one of two modes. A specific public rule is
+              enforced per spend (the global, if any, is applied by the vault automatically).
             </p>
-            <CopyBlock text={PUBLIC_ENV} label="public env" />
+            <div className="text-[12px] font-medium text-slate-300">
+              Local (default) &ndash; the agent holds its own key:
+            </div>
+            <CopyBlock text={PUBLIC_LOCAL_ENV} label="public local env" />
+            <div className="text-[12px] font-medium text-slate-300">
+              Server &ndash; use the account Managed Session (set up in the dapp Vault tab):
+            </div>
+            <CopyBlock text={PUBLIC_SERVER_ENV} label="public server env" />
             <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-slate-400">
               Tools: <ToolPill name="session_pay" /> <ToolPill name="session_scope" /> pay within
               the scope, instantly.
@@ -605,7 +613,7 @@ function CustodyReference() {
     "import { createSpender } from '@clevercon/agent-sdk';",
     'const cc = createSpender({ apiKey: process.env.CLEVERCON_API_KEY! });',
     '',
-    '// Private, keyless (bundle + artifacts via env, like MCP):',
+    '// Private, keyless (CLEVERCON_POLICY_KEY via env; artifacts auto-download):',
     'await cc.disbursePrivate([{ payee: "G...", amount: 5 }]);',
     '',
     '// Public, platform-held Managed Session (owner enabled it in the dapp):',

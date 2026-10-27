@@ -7,17 +7,21 @@
  * sees the policy plaintext and cannot forge the proof; the chain verifies it and
  * moves funds. One proof authorizes up to 4 payouts.
  *
- * The private policy is provisioned to the agent out-of-band (never by the model):
- *   - CLEVERCON_POLICY_JSON   inline bundle JSON `{ "rules": {...}, "salt": "..." }`
- *   - CLEVERCON_POLICY_FILE   path to that JSON
- * and, when a global-private rule is set on-chain, the global bundle (its "global
- * salt") via CLEVERCON_GLOBAL_POLICY_JSON / _FILE so the required second proof is
- * relayed too. Circuit artifacts via CLEVERCON_PP2_WASM / _ZKEY (paths) or _URL.
+ * The private policy is provisioned to the agent out-of-band (never by the model) as
+ * ONE opaque key copied from the dapp Rules tab:
+ *   - CLEVERCON_POLICY_KEY    the policy key token (packs { rules, salt })
+ *   (legacy: CLEVERCON_POLICY_JSON / CLEVERCON_POLICY_FILE still work.)
+ * When a global-private rule is set on-chain, add the global key too (its "global
+ * salt"), so the required second proof is relayed:
+ *   - CLEVERCON_GLOBAL_KEY    (legacy: CLEVERCON_GLOBAL_POLICY_JSON / _FILE.)
+ * Circuit artifacts download automatically from the hosted bucket on first use (no
+ * setup); CLEVERCON_PP2_WASM / _ZKEY (paths) or _URL only override them.
  */
 import { readFileSync } from 'node:fs';
 // Import from the light subpaths, NOT the package index: the index pulls in the
 // agent/provider/express/x402/mpp chain (~11s cold load) and would make the MCP
-// server appear to hang on boot. /prover + /artifacts carry only what we need.
+// server appear to hang on boot. /prover + /artifacts + /config-tokens carry only
+// what we need.
 import {
   buildPrivateDisbursement,
   commitmentForBundle,
@@ -25,6 +29,7 @@ import {
   type PolicyBundle,
 } from '@clevercon/agent-sdk/prover';
 import { resolveArtifacts } from '@clevercon/agent-sdk/artifacts';
+import { unpackPolicyKey } from '@clevercon/agent-sdk/config-tokens';
 import {
   createApiClient,
   toolJson,
@@ -60,12 +65,14 @@ export const disbursePrivateSchema = {
 };
 
 function loadPolicyBundle(): PolicyBundle {
+  const token = process.env.CLEVERCON_POLICY_KEY;
+  if (token) return unpackPolicyKey(token) as unknown as PolicyBundle;
   const json = process.env.CLEVERCON_POLICY_JSON;
   const file = process.env.CLEVERCON_POLICY_FILE;
   const raw = json ?? (file ? readFileSync(file, 'utf-8') : '');
   if (!raw) {
     throw new Error(
-      'no private policy: set CLEVERCON_POLICY_JSON or CLEVERCON_POLICY_FILE to {"rules":{...},"salt":"..."}',
+      'no private policy: set CLEVERCON_POLICY_KEY to the key you copied from the Rules tab',
     );
   }
   const bundle = JSON.parse(raw) as PolicyBundle;
@@ -75,6 +82,8 @@ function loadPolicyBundle(): PolicyBundle {
 
 /** The owner's global-private bundle, if a global rule is set on-chain (else null). */
 function loadGlobalBundle(): PolicyBundle | null {
+  const token = process.env.CLEVERCON_GLOBAL_KEY;
+  if (token) return unpackPolicyKey(token) as unknown as PolicyBundle;
   const json = process.env.CLEVERCON_GLOBAL_POLICY_JSON;
   const file = process.env.CLEVERCON_GLOBAL_POLICY_FILE;
   const raw = json ?? (file ? readFileSync(file, 'utf-8') : '');

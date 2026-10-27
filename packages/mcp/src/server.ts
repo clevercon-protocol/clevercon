@@ -116,9 +116,9 @@ class CleverConMCPServer {
           case 'disburse_private':
             return await disbursePrivateHandler(args || {}, this.config);
           case 'session_pay':
-            return await sessionPayHandler(args || {});
+            return await sessionPayHandler(args || {}, this.config);
           case 'session_scope':
-            return await sessionScopeHandler();
+            return await sessionScopeHandler(this.config);
           case 'hire_agent':
             return await hireAgentHandler(args || {}, this.config);
           case 'set_limit':

@@ -23,6 +23,10 @@
       "types": "./dist/sessions.d.ts",
       "default": "./dist/sessions.js"
     },
+    "./config-tokens": {
+      "types": "./dist/config-tokens.d.ts",
+      "default": "./dist/config-tokens.js"
+    },
     "./receipts": {
       "types": "./dist/receipts.d.ts",
       "default": "./dist/receipts.js"
@@ -60,6 +64,9 @@
       ],
       "sessions": [
         "./dist/sessions.d.ts"
+      ],
+      "config-tokens": [
+        "./dist/config-tokens.d.ts"
       ],
       "receipts": [
         "./dist/receipts.d.ts"
