@@ -316,6 +316,9 @@ export function createSpender(options: SpenderOptions): CleverConClient {
           payLines,
           artifacts,
           await readAccum(gCommitment),
+          // Share the main release's validity window so the global proof's public
+          // signals match what the vault reconstructs.
+          { validAfter: batchRequest.validAfter, validBefore: batchRequest.validBefore },
         );
         global = {
           commitment: g.request.commitment,

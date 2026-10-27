@@ -162,6 +162,8 @@ export async function disbursePrivateHandler(
         lines,
         art,
         await readAccum(gCommitment),
+        // Share the main release's validity window so the global proof verifies.
+        { validAfter: request.validAfter, validBefore: request.validBefore },
       );
       global = {
         commitment: g.request.commitment,

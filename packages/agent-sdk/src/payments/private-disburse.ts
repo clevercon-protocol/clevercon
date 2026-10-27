@@ -108,6 +108,11 @@ export async function buildPrivateDisbursement(
   lines: DisbursementLine[],
   artifacts: PrivateDisburseArtifacts,
   accumulator: AccumulatorState = FRESH_ACCUMULATOR,
+  // The GLOBAL-private second proof must cover the SAME validity window as the main
+  // release (the vault reconstructs its public signals from the release's
+  // validAfter/validBefore). Pass the main proof's window here when building the
+  // global proof; omit it for the main proof (it derives its own ~1-day window).
+  validity?: { validAfter: string; validBefore: string },
 ): Promise<PrivateDisbursement> {
   if (!bundle?.rules || !bundle?.salt) throw new Error('policy bundle needs { rules, salt }');
   if (!Array.isArray(lines) || lines.length === 0 || lines.length > 4) {
@@ -125,8 +130,8 @@ export async function buildPrivateDisbursement(
 
   const now = Math.floor(Date.now() / 1000);
   const ctx: BatchContext = {
-    validAfter: String(now - 3600),
-    validBefore: String(now + 86400),
+    validAfter: validity?.validAfter ?? String(now - 3600),
+    validBefore: validity?.validBefore ?? String(now + 86400),
     runningSpend: accumulator.runningSpend,
     priorCount: accumulator.priorCount,
     anchorR2: accumulator.anchorR2,
@@ -136,15 +141,35 @@ export async function buildPrivateDisbursement(
   // Distinct spend_counter per leg (ms base + index) so repeated identical releases
   // across calls still derive unique nullifiers.
   const base = Date.now();
+  const r = bundle.rules;
+  // PRIVACY: a private rule must stay hidden even from the agent running this. So a
+  // rejection returns ONE generic reason - never the clause, the limit value, or
+  // which axis failed - so the agent learns only "this did not satisfy your rule,
+  // nothing was sent", not the rule itself. (A probing agent can still infer bounds
+  // by trying amounts; that is inherent and out of our control. We just never hand
+  // the rule over directly.) The caller pre-checks locally so we also avoid wasting a
+  // proof, but the THROWN message is deliberately opaque.
+  const REJECTED =
+    'This payment does not satisfy your private rule, so nothing was sent. Adjust the payment (amount or payee) or your rule, then retry.';
   const releases: BatchRelease[] = lines.map((l, i) => {
     if (typeof l.payee !== 'string' || l.payee.trim() === '')
       throw new Error('each line needs a payee address');
     if (typeof l.amount !== 'number' || l.amount <= 0)
       throw new Error('each line needs amount > 0');
     const payee = l.payee.trim();
+    // Pre-check the bounds we can know locally so we never waste a proof - but throw
+    // the SAME opaque reason for every clause, so the message leaks nothing.
+    const entry = r.allowlist?.find((a) => a.payeeAddress === payee);
     const membership = allowlist?.membership(payee);
-    if (allowlist && !membership)
-      throw new Error(`payee ${payee} is not on the policy allowlist (R3)`);
+    if (
+      (r.perPaymentCeilingUsdc && l.amount > r.perPaymentCeilingUsdc) ||
+      (entry?.perPayeeCapUsdc && l.amount > entry.perPayeeCapUsdc) ||
+      (r.denylist?.includes(payee) &&
+        (!r.denylistThresholdUsdc || l.amount > r.denylistThresholdUsdc)) ||
+      (allowlist && !membership)
+    ) {
+      throw new Error(REJECTED);
+    }
     return {
       payeeAddress: payee,
       amountStroops: String(BigInt(Math.round(l.amount * STROOPS_PER_USDC))),
@@ -154,13 +179,24 @@ export async function buildPrivateDisbursement(
   });
 
   const totalUsdc = releases.reduce(
-    (s, r) => s + Number(BigInt(r.amountStroops)) / STROOPS_PER_USDC,
+    (s, r2) => s + Number(BigInt(r2.amountStroops)) / STROOPS_PER_USDC,
     0,
   );
-  const proof = await createBatchProof(policy, releases, ctx, {
-    wasmPath: artifacts.wasmPath,
-    zkeyPath: artifacts.zkeyPath,
-  });
+  let proof;
+  try {
+    proof = await createBatchProof(policy, releases, ctx, {
+      wasmPath: artifacts.wasmPath,
+      zkeyPath: artifacts.zkeyPath,
+    });
+  } catch (e) {
+    // A circuit assertion (window rules: rolling cap / velocity, caught only at
+    // proving time) also collapses to the SAME opaque reason - never the clause.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/Assert Failed|template PolicyBatch|line:\s*\d+/i.test(msg)) {
+      throw new Error(REJECTED);
+    }
+    throw e;
+  }
   const request = buildBatchReleaseRequest(proof, releases, ctx, {
     vaultTaskId: null,
     planCostUsdc: totalUsdc,
