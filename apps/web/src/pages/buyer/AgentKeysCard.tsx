@@ -7,6 +7,7 @@ import { describeSavedLimit } from './limits-model';
 import {
   getPublicRule,
   getAgentKey,
+  getGlobals,
   registerAgentKey,
   pauseAgentKey,
   revokeAgentKey,
@@ -80,13 +81,24 @@ type Reveal =
   | { kind: 'pasted'; publicKey: string };
 
 /** A single authorized agent key, with its live on-chain scope + pause/revoke. */
-function AgentKeyRow({ k, onForget }: { k: StoredKey; onForget: () => void }) {
+function AgentKeyRow({
+  k,
+  onForget,
+  resolveRule,
+  globalLabel,
+}: {
+  k: StoredKey;
+  onForget: () => void;
+  resolveRule: (id: string | null) => string | null;
+  globalLabel: string | null;
+}) {
   const qc = useQueryClient();
   const { data } = useQuery({
     queryKey: ['agent-key', k.publicKey],
     queryFn: () => getAgentKey(k.publicKey),
   });
   const s = data?.session ?? null;
+  const ruleLabel = resolveRule(s?.ruleId ?? null);
   const invalidate = () => qc.invalidateQueries({ queryKey: ['agent-key', k.publicKey] });
   const pause = useMutation({
     mutationFn: (p: boolean) => pauseAgentKey(k.publicKey, p),
@@ -138,6 +150,19 @@ function AgentKeyRow({ k, onForget }: { k: StoredKey; onForget: () => void }) {
             <div className="text-slate-500">Payments</div>
             <div className="text-slate-300">{s.releaseCount}</div>
           </div>
+        </div>
+      )}
+      {s && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span className="text-slate-500">Rules:</span>
+          <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-sky-200">
+            {ruleLabel ?? 'cap only'}
+          </span>
+          {globalLabel && (
+            <span className="rounded bg-fuchsia-500/10 px-1.5 py-0.5 text-fuchsia-200">
+              + global: {globalLabel}
+            </span>
+          )}
         </div>
       )}
       <div className="mt-2.5 flex gap-2">
@@ -195,6 +220,16 @@ export function AgentKeysCard() {
     })),
   });
   const livePublic = publicPolicies.filter((_, i) => !!live[i]?.data?.rule);
+
+  // Resolve a rule id (commitment hex) to a readable label for the key list, and the
+  // account global-public rule (AND-applied to every session spend) if one is set.
+  const { data: globals } = useQuery({ queryKey: ['globals'], queryFn: getGlobals });
+  const resolveRule = (id: string | null): string | null => {
+    if (!id) return null;
+    const p = policies.find((x) => x.commitment.toLowerCase() === id.toLowerCase());
+    return p ? p.name || describeSavedLimit(p) : `${id.slice(0, 6)}…`;
+  };
+  const globalLabel = resolveRule(globals?.publicRuleId ?? null);
 
   const addr = mode === 'paste' ? pasted.trim() : '';
   const validPaste = /^G[A-Z2-7]{55}$/.test(addr);
@@ -412,7 +447,13 @@ export function AgentKeysCard() {
               Your agent keys
             </div>
             {keys.map((k) => (
-              <AgentKeyRow key={k.publicKey} k={k} onForget={() => forget(k.publicKey)} />
+              <AgentKeyRow
+                key={k.publicKey}
+                k={k}
+                onForget={() => forget(k.publicKey)}
+                resolveRule={resolveRule}
+                globalLabel={globalLabel}
+              />
             ))}
           </div>
         )}

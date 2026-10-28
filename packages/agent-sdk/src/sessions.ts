@@ -156,6 +156,41 @@ function passphrase(net: SessionNetwork): string {
   return net.networkPassphrase ?? Networks.TESTNET;
 }
 
+// Clean, actionable messages for the vault's VaultError codes a session spend can hit,
+// so local-mode rejections read like a sentence instead of a raw HostError dump (the
+// server path gets the same via the API). Mirrors the API's translator.
+const SESSION_ERROR_MESSAGES: Record<number, string> = {
+  2: 'The vault is paused by the operator; try again shortly.',
+  5: 'Not enough balance in the vault for this.',
+  6: 'Not enough available balance (some is locked by active jobs).',
+  11: 'Invalid amount.',
+  42: 'This session key is not registered (or was revoked).',
+  43: 'This session key has expired.',
+  44: 'That payee is not on the rule’s approved list.',
+  45: 'This payment would exceed the session key’s spend cap.',
+  46: 'Only the owner can manage this session.',
+  50: 'That payee is blocked by the rule’s deny-list.',
+  51: 'This payment exceeds the rule’s per-payment cap.',
+  52: 'This session key has expired.',
+  53: 'This session key is paused; unpause it to spend again.',
+  54: 'The public rule this key runs under no longer exists.',
+  55: 'This payment is below the rule’s per-payment minimum.',
+  56: 'This payment would exceed the rule’s rolling cap for its window.',
+  57: 'This payment would exceed the rule’s rate limit (too many in the window).',
+  58: 'This payment is outside the rule’s allowed calendar window.',
+  60: 'This session key is unbounded (needs a cap and/or a rule).',
+};
+
+/** Turn a raw Soroban `Error(Contract, #NN)` / HostError into a clean sentence. */
+function cleanContractError(raw: string, method: string): string {
+  const m = raw.match(/Error\(Contract,\s*#(\d+)\)/);
+  if (m) {
+    const code = Number(m[1]);
+    return SESSION_ERROR_MESSAGES[code] ?? `The vault rejected this (code #${code}).`;
+  }
+  return `${method} failed: ${raw}`;
+}
+
 /** Build, simulate/assemble, sign (source), submit, and poll a vault invocation. */
 async function invoke(
   net: SessionNetwork,
@@ -176,12 +211,12 @@ async function invoke(
   // prepareTransaction simulates and assembles the footprint/auth; it throws if
   // the contract would reject (scope exceeded, expired, revoked, ...).
   const prepared = await srv.prepareTransaction(built).catch((e: unknown) => {
-    throw new SessionError(`${method} rejected on-chain: ${(e as Error).message}`);
+    throw new SessionError(cleanContractError((e as Error).message, method));
   });
   prepared.sign(source);
   const sent = await srv.sendTransaction(prepared);
   if (sent.status === 'ERROR') {
-    throw new SessionError(`${method} submit failed: ${JSON.stringify(sent.errorResult ?? {})}`);
+    throw new SessionError(cleanContractError(JSON.stringify(sent.errorResult ?? {}), method));
   }
   let got = await srv.getTransaction(sent.hash);
   for (let i = 0; i < 40 && got.status === 'NOT_FOUND'; i++) {

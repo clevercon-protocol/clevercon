@@ -53,6 +53,7 @@ import {
   pauseManagedSession,
   updateManagedSession,
   getPublicRule,
+  getGlobals,
 } from '../../lib/vault';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import { getConnectedAddress } from '../../lib/wallet';
@@ -1467,6 +1468,15 @@ export function ManagedSessionCard() {
   });
   const livePublic = publicPolicies.filter((_, i) => !!liveQueries[i]?.data?.rule);
 
+  // Resolve the session's bound rule + the account global-public rule (if set) to labels.
+  const { data: sessionGlobals } = useQuery({ queryKey: ['globals'], queryFn: getGlobals });
+  const resolveRuleLabel = (id: string | null | undefined): string | null => {
+    if (!id) return null;
+    const p = policies.find((x) => x.commitment.toLowerCase() === id.toLowerCase());
+    return p ? p.name || describeSavedLimit(p) : `${id.slice(0, 6)}…`;
+  };
+  const sessionGlobalLabel = resolveRuleLabel(sessionGlobals?.publicRuleId);
+
   const enable = useMutation({
     mutationFn: () =>
       enableManagedSession(Number(cap), Math.round(Number(hours) * 3600), ruleId || undefined),
@@ -1555,6 +1565,17 @@ export function ManagedSessionCard() {
               <span className={expired ? 'text-red-300' : 'text-slate-300'}>
                 {new Date(active.expiry * 1000).toLocaleString()}
               </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-[12px]">
+              <span className="text-slate-400">Rules:</span>
+              <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-sky-200">
+                {resolveRuleLabel(active.ruleId) ?? 'cap only'}
+              </span>
+              {sessionGlobalLabel && (
+                <span className="rounded bg-fuchsia-500/10 px-1.5 py-0.5 text-fuchsia-200">
+                  + global: {sessionGlobalLabel}
+                </span>
+              )}
             </div>
 
             {editing ? (
