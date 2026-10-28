@@ -202,23 +202,31 @@ export class VaultService {
    * wallet-signed and instant. This is the dapp's public option (a browser key
    * could not sign hands-off), replacing the old server-logic Autopay.
    */
-  async buildEnableSession(userId: string, spendCapUsdc: number, expiresInSeconds: number) {
+  async buildEnableSession(
+    userId: string,
+    spendCapUsdc: number,
+    expiresInSeconds: number,
+    ruleIdHex: string,
+  ) {
     if (spendCapUsdc <= 0) throw new BadRequestException('spendCapUsdc must be positive');
     if (expiresInSeconds <= 0) throw new BadRequestException('expiresInSeconds must be positive');
+    if (!ruleIdHex)
+      throw new BadRequestException('a public rule is required for a Managed Session');
     if (!this.delegates.available) {
       throw new BadRequestException('Managed Sessions are not configured on this deployment');
     }
     const address = await this.primaryAddress(userId);
     const { publicKey } = await this.delegates.getOrProvision(userId);
     const expiry = Math.floor(Date.now() / 1000) + expiresInSeconds;
-    // The dapp's Managed Session is a SERVER-HELD key: a total spend cap + expiry,
-    // no allowlist/rule (it pays any payee up to the cap). server_held=true, rule=null.
+    // The dapp's Managed Session is a SERVER-HELD key bound to a cap + expiry + a public
+    // rule (picked on the dapp). The vault enforces the bound rule on every session
+    // spend, so the agent never has to pass one. server_held=true.
     const xdr = await this.contract.buildRegisterSessionXdr(
       address,
       publicKey,
       expiry,
       spendCapUsdc,
-      null,
+      ruleIdHex,
       true,
     );
     return {

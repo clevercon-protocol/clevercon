@@ -105,45 +105,35 @@ export async function sessionPayHandler(
       throw new Error('ruleId must be a 32-byte hex string (64 chars)');
     }
 
+    // The rule is OPTIONAL: when the session key was bound to a rule on the dapp
+    // (the normal case now), omit it and the vault enforces the bound rule. A per-call
+    // ruleId, the session key's packed rule, or CLEVERCON_RULE_KEY can still OVERRIDE it.
     if (publicMode() === 'server') {
       const rule = serverRule(argRule as string | undefined);
-      if (!rule) {
-        throw new Error(
-          'a public rule must be set for the spend: provide CLEVERCON_RULE_KEY (from the Rules tab) or pass ruleId',
-        );
-      }
       const client = createApiClient(config);
       const res = await client.post('/vault/session/pay', {
         payee: payee.trim(),
         amount,
-        ruleId: rule,
+        ...(rule ? { ruleId: rule } : {}),
       });
       return toolJson({
         mode: 'server',
         payee: payee.trim(),
         amountUsdc: amount,
-        ruleId: rule,
+        ruleId: rule ?? null,
         ...(res as object),
       });
     }
 
     const { spender, ruleId: tokenRule } = loadLocalSession();
-    // The rule for a local spend: a per-call ruleId, else the one packed in the
-    // session key, else CLEVERCON_RULE_KEY (set it when the session key is a bare
-    // secret + vault/USDC without a rule, e.g. a key authorized on the dapp).
     const rule = (argRule as string | undefined) ?? tokenRule ?? serverRule();
-    if (!rule) {
-      throw new Error(
-        'a public rule must be set for the spend: set CLEVERCON_RULE_KEY (from the Rules tab), register the key under a rule, or pass ruleId',
-      );
-    }
     const res = await spender.pay(payee.trim(), amount, rule);
     return toolJson({
       mode: 'local',
       sessionPublicKey: spender.publicKey,
       payee: payee.trim(),
       amountUsdc: amount,
-      ruleId: rule,
+      ruleId: rule ?? null,
       ...res,
     });
   } catch (error) {

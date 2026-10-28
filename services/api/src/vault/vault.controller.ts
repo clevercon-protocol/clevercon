@@ -92,6 +92,8 @@ const batchReleaseKeylessSchema = z.object({
 const sessionEnableSchema = z.object({
   spendCapUsdc: z.number().positive(),
   expiresInSeconds: z.number().int().positive(),
+  // The public rule the Managed Session runs under (bound on-chain at registration).
+  ruleId: rid64,
 });
 const sessionUpdateSchema = z.object({
   newExpiresInSeconds: z.number().int().nonnegative(),
@@ -311,8 +313,8 @@ export class VaultController {
    */
   @Post('session/enable')
   enableSession(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    const { spendCapUsdc, expiresInSeconds } = parseBody(sessionEnableSchema, body);
-    return this.vault.buildEnableSession(user.userId, spendCapUsdc, expiresInSeconds);
+    const { spendCapUsdc, expiresInSeconds, ruleId } = parseBody(sessionEnableSchema, body);
+    return this.vault.buildEnableSession(user.userId, spendCapUsdc, expiresInSeconds, ruleId);
   }
 
   /** Hands-off public-lane spend; bounded by the on-chain session cap (no step-up). */

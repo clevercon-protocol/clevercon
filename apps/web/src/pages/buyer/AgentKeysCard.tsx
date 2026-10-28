@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Keypair } from '@stellar/stellar-sdk';
-import { packSessionKey, packRuleKey } from '@clevercon/agent-sdk/config-tokens';
+import { packSessionKey } from '@clevercon/agent-sdk/config-tokens';
 import { KeyRound, Copy, Check, Trash2 } from 'lucide-react';
 import { getPolicies, type Policy } from '../../lib/policies';
 import {
@@ -78,13 +78,7 @@ function CopyLine({ label, value }: { label: string; value: string }) {
 
 type Reveal =
   | { kind: 'generated'; sessionKey: string; secret: string; publicKey: string }
-  | {
-      kind: 'pasted';
-      publicKey: string;
-      ruleKey: string;
-      vaultId: string;
-      usdcSac: string;
-    };
+  | { kind: 'pasted'; publicKey: string; vaultId: string; usdcSac: string };
 
 /** A single authorized agent key, with its live on-chain scope + pause/revoke. */
 function AgentKeyRow({ k, onForget }: { k: StoredKey; onForget: () => void }) {
@@ -206,8 +200,7 @@ export function AgentKeysCard() {
 
   const addr = mode === 'paste' ? pasted.trim() : '';
   const validPaste = /^G[A-Z2-7]{55}$/.test(addr);
-  const canSubmit =
-    !!ruleId && (mode === 'generate' || validPaste) && !!status?.contractAddress;
+  const canSubmit = !!ruleId && (mode === 'generate' || validPaste) && !!status?.contractAddress;
 
   const register = useMutation({
     mutationFn: async () => {
@@ -229,14 +222,16 @@ export function AgentKeysCard() {
       const vaultId = status!.contractAddress;
       const usdcSac = status!.usdcSac;
       if (secret) {
+        // The rule is bound on-chain at registration, so the token carries only the
+        // key + network - the agent needs no rule in its config.
         setReveal({
           kind: 'generated',
           publicKey,
           secret,
-          sessionKey: packSessionKey({ sessionSecret: secret, vaultId, usdcSac, ruleId }),
+          sessionKey: packSessionKey({ sessionSecret: secret, vaultId, usdcSac }),
         });
       } else {
-        setReveal({ kind: 'pasted', publicKey, ruleKey: packRuleKey(ruleId), vaultId, usdcSac });
+        setReveal({ kind: 'pasted', publicKey, vaultId, usdcSac });
       }
       setLabel('');
       setPasted('');
@@ -286,12 +281,12 @@ export function AgentKeysCard() {
             ) : (
               <>
                 <p className="text-[12px] text-slate-400">
-                  You hold this key's secret. Provision your agent (local mode) with:
+                  You hold this key's secret. Provision your agent (local mode) with these - no rule
+                  needed, it's bound on-chain:
                 </p>
                 <CopyLine label="CLEVERCON_SESSION_SECRET" value="S…your key's secret" />
                 <CopyLine label="CLEVERCON_VAULT_ID" value={reveal.vaultId} />
                 <CopyLine label="CLEVERCON_USDC_SAC" value={reveal.usdcSac} />
-                <CopyLine label="CLEVERCON_RULE_KEY" value={reveal.ruleKey} />
                 <p className="text-[11px] text-slate-500">
                   Also set{' '}
                   <span className="font-mono text-sky-300">CLEVERCON_PUBLIC_MODE=local</span>.
@@ -327,7 +322,9 @@ export function AgentKeysCard() {
               className="space-y-3"
             >
               <label className="block">
-                <span className="mb-1 block text-xs text-slate-500">Label (for your reference)</span>
+                <span className="mb-1 block text-xs text-slate-500">
+                  Label (for your reference)
+                </span>
                 <input
                   value={label}
                   onChange={(e) => setLabel(e.target.value)}
@@ -373,7 +370,9 @@ export function AgentKeysCard() {
 
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
-                  <span className="mb-1 block text-xs text-slate-500">Spend cap (USDC, optional)</span>
+                  <span className="mb-1 block text-xs text-slate-500">
+                    Spend cap (USDC, optional)
+                  </span>
                   <input
                     value={cap}
                     onChange={(e) => setCap(e.target.value.replace(/[^0-9.]/g, ''))}
@@ -383,7 +382,9 @@ export function AgentKeysCard() {
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-xs text-slate-500">Expires in (hours, optional)</span>
+                  <span className="mb-1 block text-xs text-slate-500">
+                    Expires in (hours, optional)
+                  </span>
                   <input
                     value={hours}
                     onChange={(e) => setHours(e.target.value.replace(/[^0-9]/g, ''))}
@@ -394,7 +395,11 @@ export function AgentKeysCard() {
                 </label>
               </div>
 
-              <button type="submit" disabled={!canSubmit || register.isPending} className={primaryBtn + ' w-full'}>
+              <button
+                type="submit"
+                disabled={!canSubmit || register.isPending}
+                className={primaryBtn + ' w-full'}
+              >
                 {register.isPending ? 'Authorizing…' : 'Authorize agent key'}
               </button>
               {register.error && <p className="text-sm text-red-400">{readErr(register.error)}</p>}

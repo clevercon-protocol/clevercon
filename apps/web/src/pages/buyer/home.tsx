@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Vault as VaultIcon,
   Sparkles,
@@ -27,7 +27,6 @@ import {
   managedSessionPay,
   getGlobals,
   getPinnedCommitments,
-  getPublicRule,
   type ManagedSession,
 } from '../../lib/vault';
 import { getServices } from '../../lib/services';
@@ -129,9 +128,7 @@ function RuleLanePicker({
   ruleId,
   setRuleId,
   privateRules,
-  publicRules,
-  publicRuleId,
-  setPublicRuleId,
+  boundRuleLabel,
   sessionActive,
   managed,
   applied,
@@ -143,10 +140,8 @@ function RuleLanePicker({
   ruleId: string;
   setRuleId: (id: string) => void;
   privateRules: Policy[];
-  /** The owner's public rules, selectable per task for a session spend. */
-  publicRules: Policy[];
-  publicRuleId: string;
-  setPublicRuleId: (id: string) => void;
+  /** The public rule the Managed Session is BOUND to (picked on the Vault tab), or null. */
+  boundRuleLabel: string | null;
   sessionActive: boolean;
   managed: ManagedSession | undefined;
   applied: Applied;
@@ -202,27 +197,11 @@ function RuleLanePicker({
           <span className="text-xs text-amber-300/80">
             No Managed Session. Set one up on the Vault tab.
           </span>
-        ) : publicRules.length ? (
-          <select
-            value={publicRuleId}
-            onChange={(e) => setPublicRuleId(e.target.value)}
-            className="cc-input max-w-[17rem] flex-1 !py-1.5 text-sm"
-            aria-label="Public rule enforced for this spend"
-          >
-            <option value="">
-              {publicGlobalActive ? 'None (cap + global rule)' : 'None (cap only)'}
-            </option>
-            {publicRules.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name || describeSavedLimit(p)}
-              </option>
-            ))}
-          </select>
         ) : (
           <span className="text-xs text-slate-400">
-            {`Managed Session · ${managed!.session!.remainingUsdc.toFixed(2)} USDC cap left${
-              publicGlobalActive ? ' · a global public rule applies' : ''
-            }`}
+            {`Managed Session · ${managed!.session!.remainingUsdc.toFixed(2)} USDC cap left · rule: ${
+              boundRuleLabel ?? 'bound on-chain'
+            }${publicGlobalActive ? ' · global applies' : ''}`}
           </span>
         )}
         <Link to="/app/rules" className="text-xs text-violet-300 hover:text-violet-200">
@@ -300,10 +279,6 @@ export function CommandChat() {
   // The selected PRIVATE rule (a user-created, pinned policy). No 'default'/'none'/
   // 'custom': only a rule you created ever governs a spend.
   const [ruleId, setRuleId] = useState<string>('');
-  // The PUBLIC rule selected for this spend (optional, per task): enforced by the
-  // vault on top of the Managed Session's own cap + expiry. Blank = cap-only (plus
-  // any global public rule, which always applies).
-  const [publicRuleId, setPublicRuleId] = useState<string>('');
 
   // Natural-language box: the agent parses it into a plan you then approve.
   const [nl, setNl] = useState('');
@@ -348,21 +323,17 @@ export function CommandChat() {
   const enforcedRule = pickedRule ?? globalPolicy;
   const usingGlobalAsRule = !pickedRule && !!globalPolicy;
   const sessionActive = !!managed?.session && managed.session.expiry * 1000 > Date.now();
-  // Public rules the user can pick for a session spend. Like the private picker shows
-  // only PINNED rules, the public picker shows only rules that are LIVE on-chain (their
-  // clauses are written via set_public_rule), so you can never select one that the
-  // vault would reject. Live-ness is read per rule (get_public_rule).
-  const publicPolicies = policies.filter(
-    (p) => (p.form === 'public' || (!p.form && !p.isPrivate)) && p.status !== 'archived',
-  );
-  const publicLive = useQueries({
-    queries: publicPolicies.map((p) => ({
-      queryKey: ['public-rule', p.commitment],
-      queryFn: () => getPublicRule(p.commitment),
-    })),
-  });
-  const publicRules = publicPolicies.filter((_, i) => !!publicLive[i]?.data?.rule);
-  const pickedPublicRule = publicRules.find((p) => p.id === publicRuleId);
+  // The Managed Session is BOUND to a public rule at enable time (on the Vault tab), so
+  // public spending needs no per-task rule pick - the bound rule governs. Resolve its
+  // label for display.
+  const boundRule = managed?.session?.ruleId
+    ? policies.find((p) => p.commitment.toLowerCase() === managed.session!.ruleId!.toLowerCase())
+    : undefined;
+  const boundRuleLabel = boundRule
+    ? boundRule.name || describeSavedLimit(boundRule)
+    : managed?.session?.ruleId
+      ? 'bound on-chain'
+      : null;
 
   // What the vault will enforce for the next instruction, as a short label.
   const applied: Applied = (() => {
@@ -378,11 +349,9 @@ export function CommandChat() {
     if (enforcedRule) return { label: describeSavedLimit(enforcedRule), isPrivate: true };
     return { label: 'none selected', isPrivate: true };
   })();
-  // Whether the current lane is ready to spend. Public mirrors private: a live session
-  // AND a selected public rule (or an active global public rule). Private: a selected
-  // rule (or an active global).
-  const publicReady = sessionActive && (!!pickedPublicRule || !!globals?.publicRuleId);
-  const laneReady = lane === 'public' ? publicReady : !!enforcedRule;
+  // Whether the current lane is ready to spend. Public needs only a live Managed Session
+  // (its bound rule governs). Private needs a selected rule (or an active global).
+  const laneReady = lane === 'public' ? sessionActive : !!enforcedRule;
 
   const hire = useMutation({
     mutationFn: (p: { title: string; serviceId: string; budget: number; policyId?: string }) =>
@@ -404,12 +373,9 @@ export function CommandChat() {
   // even the AI planner) runs until a valid, enforceable rule is in place.
   function laneBlockedReason(): string | null {
     if (lane === 'public') {
-      if (!sessionActive) {
-        return 'No active Managed Session. Set one up on the Vault tab before spending in public mode.';
-      }
-      return pickedPublicRule || globals?.publicRuleId
+      return sessionActive
         ? null
-        : 'No public rule selected. Pick a live public rule above (or mark one global on the Rules tab, which then applies on its own).';
+        : 'No active Managed Session. Set one up on the Vault tab (cap + expiry + a rule) before spending in public mode.';
     }
     return enforcedRule
       ? null
@@ -628,7 +594,7 @@ export function CommandChat() {
       try {
         push({ id: nextId(), role: 'agent', text: 'Spending under your Managed Session…' });
         for (const l of plan.lines) {
-          await managedSessionPay(l.payee, l.amount, pickedPublicRule?.commitment);
+          await managedSessionPay(l.payee, l.amount);
         }
         qc.invalidateQueries({ queryKey: ['tasks'] });
         qc.invalidateQueries({ queryKey: ['vault'] });
@@ -788,9 +754,7 @@ export function CommandChat() {
                 ruleId={ruleId}
                 setRuleId={setRuleId}
                 privateRules={privateRules}
-                publicRules={publicRules}
-                publicRuleId={publicRuleId}
-                setPublicRuleId={setPublicRuleId}
+                boundRuleLabel={boundRuleLabel}
                 sessionActive={sessionActive}
                 managed={managed}
                 applied={applied}
@@ -950,9 +914,7 @@ export function CommandChat() {
                   ruleId={ruleId}
                   setRuleId={setRuleId}
                   privateRules={privateRules}
-                  publicRules={publicRules}
-                  publicRuleId={publicRuleId}
-                  setPublicRuleId={setPublicRuleId}
+                  boundRuleLabel={boundRuleLabel}
                   sessionActive={sessionActive}
                   managed={managed}
                   applied={applied}

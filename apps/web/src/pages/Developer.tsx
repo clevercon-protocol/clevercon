@@ -385,15 +385,17 @@ const PRIVATE_ENV = [
 ].join('\n');
 
 const PUBLIC_SERVER_ENV = [
-  '# Public, SERVER mode: spend via the account Managed Session (set up in the dapp).',
+  '# Public, SERVER mode: spend via the account Managed Session (set up in the dapp,',
+  '# bound to a public rule there). No rule in the config - the bound rule governs.',
   'CLEVERCON_PUBLIC_MODE=server',
-  'CLEVERCON_RULE_KEY=ccrk1_…   # the public rule to spend under (from the Rules tab)',
-  '# (The global public rule, if any, is applied by the vault automatically.)',
+  '# (A global public rule, if set, applies automatically too.)',
 ].join('\n');
 
 const PUBLIC_LOCAL_ENV = [
   '# Public, LOCAL mode (default): the agent holds its own session key.',
-  '# registerSession (SDK) returns this ONE token; it packs the key + vault + rule.',
+  '# Authorize the key on the dapp (Vault -> Agent keys), bound to a public rule.',
+  '# The dapp gives you this ONE token (secret + vault); the bound rule governs.',
+  'CLEVERCON_PUBLIC_MODE=local',
   'CLEVERCON_SESSION_KEY=ccsk1_…',
 ].join('\n');
 
@@ -511,8 +513,9 @@ function McpQuickstart() {
         ) : (
           <div className="mt-4 space-y-3">
             <p className="text-[12.5px] leading-relaxed text-slate-400">
-              Public spending uses a session key in one of two modes. A specific public rule is
-              enforced per spend (the global, if any, is applied by the vault automatically).
+              Public spending uses a session key in one of two modes. The rule it runs under is
+              bound to the key on the dapp, so the agent config carries no rule (a global, if any,
+              applies automatically).
             </p>
             <div className="text-[12px] font-medium text-slate-300">
               Local (default) &ndash; the agent holds its own key:

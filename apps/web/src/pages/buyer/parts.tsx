@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import {
   Wallet,
   Search,
@@ -46,6 +52,7 @@ import {
   revokeManagedSession,
   pauseManagedSession,
   updateManagedSession,
+  getPublicRule,
 } from '../../lib/vault';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import { getConnectedAddress } from '../../lib/wallet';
@@ -1437,6 +1444,7 @@ export function ManagedSessionCard() {
   const qc = useQueryClient();
   const [cap, setCap] = useState('');
   const [hours, setHours] = useState('24');
+  const [ruleId, setRuleId] = useState('');
   const [editing, setEditing] = useState(false);
   const [addCap, setAddCap] = useState('');
   const [addHours, setAddHours] = useState('');
@@ -1444,10 +1452,25 @@ export function ManagedSessionCard() {
   const active = data?.session ?? null;
   const invalidate = () => qc.invalidateQueries({ queryKey: ['managed-session'] });
 
+  // The public rule the session will run under is BOUND on-chain at enable time, so
+  // the agent (SDK/MCP) never has to configure a rule. Only live (pinned) rules show.
+  const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
+  const publicPolicies = policies.filter(
+    (p) => (p.form === 'public' || (!p.form && !p.isPrivate)) && p.status !== 'archived',
+  );
+  const liveQueries = useQueries({
+    queries: publicPolicies.map((p) => ({
+      queryKey: ['public-rule', p.commitment],
+      queryFn: () => getPublicRule(p.commitment),
+    })),
+  });
+  const livePublic = publicPolicies.filter((_, i) => !!liveQueries[i]?.data?.rule);
+
   const enable = useMutation({
-    mutationFn: () => enableManagedSession(Number(cap), Math.round(Number(hours) * 3600)),
+    mutationFn: () => enableManagedSession(Number(cap), Math.round(Number(hours) * 3600), ruleId),
     onSuccess: () => {
       setCap('');
+      setRuleId('');
       invalidate();
     },
   });
@@ -1477,7 +1500,7 @@ export function ManagedSessionCard() {
 
   if (isDemo()) return null;
 
-  const canEnable = Number(cap) > 0 && Number(hours) > 0 && !enable.isPending;
+  const canEnable = Number(cap) > 0 && Number(hours) > 0 && !!ruleId && !enable.isPending;
   const expired = !!active && active.expiry * 1000 <= Date.now();
   const busy = pause.isPending || edit.isPending || revoke.isPending;
 
@@ -1491,11 +1514,10 @@ export function ManagedSessionCard() {
       <div className="p-5 pt-4">
         <p className="text-sm text-slate-400">
           The public (&ldquo;Fast&rdquo;) lane: authorize a server key once with your wallet &ndash;
-          just a total spend cap and an expiry &ndash; and the platform spends within it hands-off
-          (it can pay any payee up to the cap). The vault enforces the cap and expiry on-chain, so
-          even we can never exceed them or spend past expiry. Pause, extend, or revoke any time. To
-          add clause limits (per-payment max, allowlist, deny-list) on top, create a public rule on
-          the Rules tab and mark it global.
+          a total spend cap, an expiry, and the public rule it runs under &ndash; and the platform
+          spends within it hands-off. The vault enforces the rule, cap, and expiry on-chain, so even
+          we can never break them. Your agent needs no rule in its config (it is bound here). Pause,
+          extend, or revoke any time; a global public rule, if set, applies on top.
         </p>
 
         {active ? (
@@ -1644,12 +1666,36 @@ export function ManagedSessionCard() {
                 />
               </label>
             </div>
+            <label className="block">
+              <span className="mb-1 block text-xs text-slate-500">Runs under this public rule</span>
+              {livePublic.length ? (
+                <select
+                  value={ruleId}
+                  onChange={(e) => setRuleId(e.target.value)}
+                  className={inputCls}
+                  aria-label="Public rule for the session"
+                >
+                  <option value="">Select a public rule…</option>
+                  {livePublic.map((p) => (
+                    <option key={p.id} value={p.commitment}>
+                      {p.name || `rule ${p.commitment.slice(0, 8)}`}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="text-xs text-amber-300/80">
+                  No live public rule. Create one and pin it on the Rules tab first.
+                </span>
+              )}
+            </label>
             <button type="submit" disabled={!canEnable} className={primaryBtn + ' w-full'}>
               {enable.isPending ? 'Authorizing…' : 'Enable Managed Session'}
             </button>
             {enable.error && <p className="text-sm text-red-400">{readError(enable.error)}</p>}
             <p className="text-[11px] text-slate-600">
-              You will sign once in your wallet to authorize the cap and expiry on-chain.
+              You sign once to bind the cap, expiry, and rule on-chain. Your agent then spends under
+              this rule hands-off with no rule in its config; a global public rule, if set, applies
+              on top.
             </p>
           </form>
         )}

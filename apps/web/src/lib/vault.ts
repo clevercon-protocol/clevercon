@@ -263,10 +263,11 @@ export async function getManagedSession(): Promise<ManagedSession> {
 export async function enableManagedSession(
   spendCapUsdc: number,
   expiresInSeconds: number,
+  ruleId: string,
 ): Promise<{ txHash: string; sessionPublicKey: string; expiry: number }> {
   const built = await apiPost<BuildResp & { sessionPublicKey: string; expiry: number }>(
     '/vault/session/enable',
-    { spendCapUsdc, expiresInSeconds },
+    { spendCapUsdc, expiresInSeconds, ruleId },
   );
   const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
   const res = await apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
@@ -338,7 +339,10 @@ export function registerAgentKey(
 }
 
 /** Pause / unpause a self-custody agent key on-chain (wallet-signed). */
-export function pauseAgentKey(sessionPublicKey: string, paused: boolean): Promise<{ txHash: string }> {
+export function pauseAgentKey(
+  sessionPublicKey: string,
+  paused: boolean,
+): Promise<{ txHash: string }> {
   return signAndSubmitBuild('/vault/agent-key/pause', { sessionPublicKey, paused });
 }
 

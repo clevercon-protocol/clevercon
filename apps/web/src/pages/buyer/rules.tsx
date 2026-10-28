@@ -1350,11 +1350,11 @@ export function RulesManager() {
                   Server key · Managed Session
                 </div>
                 <p className="mt-0.5 max-w-xl text-[12px] leading-relaxed text-slate-400">
-                  A hands-off key the server signs, bounded on-chain by just a spend cap and an
-                  expiry (it can pay any payee up to the cap). Set it up, pause, edit, or revoke it
-                  on the Vault tab. Mark a public rule below{' '}
-                  <span className="text-sky-300">global</span> to add clause limits on top of every
-                  session spend.
+                  A hands-off key the server signs, bound on-chain to a spend cap, an expiry, and
+                  one of your public rules (picked when you enable it). Set it up, pause, edit, or
+                  revoke it on the Vault tab. A public rule marked{' '}
+                  <span className="text-sky-300">global</span> applies on top of every session
+                  spend.
                 </p>
               </div>
             </div>
