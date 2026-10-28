@@ -34,6 +34,12 @@ const DEFAULT_RPC_URL = 'https://soroban-testnet.stellar.org';
 const UNIT = 10_000_000; // 1 USDC in stroops (7 decimals)
 const INCLUSION_FEE = '1000000'; // 0.1 XLM; prepareTransaction adds the resource fee
 
+// Network constants so a local-key agent config can be just the secret (the vault +
+// USDC SAC are fixed per network, not per user). Override via the SessionNetwork /
+// env on another deployment or mainnet.
+export const DEFAULT_TESTNET_VAULT_ID = 'CDVMPHPD3V6KNVS2ORBQD6A6FSWDCHN7RK2LW4C2KUPHZLM5H3KNKK6A';
+export const DEFAULT_TESTNET_USDC_SAC = 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
+
 /** Raised when a session call fails on-chain (scope exceeded, expired, revoked, ...). */
 export class SessionError extends Error {
   constructor(message: string) {

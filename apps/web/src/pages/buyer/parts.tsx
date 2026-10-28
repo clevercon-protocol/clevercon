@@ -1467,7 +1467,8 @@ export function ManagedSessionCard() {
   const livePublic = publicPolicies.filter((_, i) => !!liveQueries[i]?.data?.rule);
 
   const enable = useMutation({
-    mutationFn: () => enableManagedSession(Number(cap), Math.round(Number(hours) * 3600), ruleId),
+    mutationFn: () =>
+      enableManagedSession(Number(cap), Math.round(Number(hours) * 3600), ruleId || undefined),
     onSuccess: () => {
       setCap('');
       setRuleId('');
@@ -1500,7 +1501,7 @@ export function ManagedSessionCard() {
 
   if (isDemo()) return null;
 
-  const canEnable = Number(cap) > 0 && Number(hours) > 0 && !!ruleId && !enable.isPending;
+  const canEnable = Number(cap) > 0 && Number(hours) > 0 && !enable.isPending;
   const expired = !!active && active.expiry * 1000 <= Date.now();
   const busy = pause.isPending || edit.isPending || revoke.isPending;
 
@@ -1667,26 +1668,22 @@ export function ManagedSessionCard() {
               </label>
             </div>
             <label className="block">
-              <span className="mb-1 block text-xs text-slate-500">Runs under this public rule</span>
-              {livePublic.length ? (
-                <select
-                  value={ruleId}
-                  onChange={(e) => setRuleId(e.target.value)}
-                  className={inputCls}
-                  aria-label="Public rule for the session"
-                >
-                  <option value="">Select a public rule…</option>
-                  {livePublic.map((p) => (
-                    <option key={p.id} value={p.commitment}>
-                      {p.name || `rule ${p.commitment.slice(0, 8)}`}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <span className="text-xs text-amber-300/80">
-                  No live public rule. Create one and pin it on the Rules tab first.
-                </span>
-              )}
+              <span className="mb-1 block text-xs text-slate-500">
+                Runs under this public rule (optional)
+              </span>
+              <select
+                value={ruleId}
+                onChange={(e) => setRuleId(e.target.value)}
+                className={inputCls}
+                aria-label="Public rule for the session"
+              >
+                <option value="">No rule - cap only (pays any payee up to the cap)</option>
+                {livePublic.map((p) => (
+                  <option key={p.id} value={p.commitment}>
+                    {p.name || `rule ${p.commitment.slice(0, 8)}`}
+                  </option>
+                ))}
+              </select>
             </label>
             <button type="submit" disabled={!canEnable} className={primaryBtn + ' w-full'}>
               {enable.isPending ? 'Authorizing…' : 'Enable Managed Session'}

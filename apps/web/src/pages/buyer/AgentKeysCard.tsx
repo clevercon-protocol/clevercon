@@ -1,11 +1,9 @@
 import { useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Keypair } from '@stellar/stellar-sdk';
-import { packSessionKey } from '@clevercon/agent-sdk/config-tokens';
 import { KeyRound, Copy, Check, Trash2 } from 'lucide-react';
 import { getPolicies, type Policy } from '../../lib/policies';
 import {
-  getVaultStatus,
   getPublicRule,
   getAgentKey,
   registerAgentKey,
@@ -77,8 +75,8 @@ function CopyLine({ label, value }: { label: string; value: string }) {
 }
 
 type Reveal =
-  | { kind: 'generated'; sessionKey: string; secret: string; publicKey: string }
-  | { kind: 'pasted'; publicKey: string; vaultId: string; usdcSac: string };
+  | { kind: 'generated'; secret: string; publicKey: string }
+  | { kind: 'pasted'; publicKey: string };
 
 /** A single authorized agent key, with its live on-chain scope + pause/revoke. */
 function AgentKeyRow({ k, onForget }: { k: StoredKey; onForget: () => void }) {
@@ -184,7 +182,6 @@ export function AgentKeysCard() {
   const [reveal, setReveal] = useState<Reveal | null>(null);
   const [keys, setKeys] = useState<StoredKey[]>(() => loadKeys());
 
-  const { data: status } = useQuery({ queryKey: ['vault-status'], queryFn: getVaultStatus });
   const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
   const publicPolicies = policies.filter(
     (p: Policy) => (p.form === 'public' || (!p.form && !p.isPrivate)) && p.status !== 'archived',
@@ -200,7 +197,9 @@ export function AgentKeysCard() {
 
   const addr = mode === 'paste' ? pasted.trim() : '';
   const validPaste = /^G[A-Z2-7]{55}$/.test(addr);
-  const canSubmit = !!ruleId && (mode === 'generate' || validPaste) && !!status?.contractAddress;
+  // A key must be bounded by a cap and/or a rule (the vault rejects an unbounded key).
+  const hasBound = !!ruleId || Number(cap) > 0;
+  const canSubmit = hasBound && (mode === 'generate' || validPaste);
 
   const register = useMutation({
     mutationFn: async () => {
@@ -208,7 +207,7 @@ export function AgentKeysCard() {
       const publicKey = mode === 'generate' ? kp!.publicKey() : addr;
       const capNum = cap ? Number(cap) : undefined;
       const expSecs = hours ? Math.round(Number(hours) * 3600) : undefined;
-      await registerAgentKey(publicKey, ruleId, capNum, expSecs);
+      await registerAgentKey(publicKey, ruleId || undefined, capNum, expSecs);
       return { publicKey, secret: kp?.secret() ?? null };
     },
     onSuccess: ({ publicKey, secret }) => {
@@ -219,20 +218,7 @@ export function AgentKeysCard() {
       setKeys(next);
       saveKeys(next);
       qc.invalidateQueries({ queryKey: ['agent-key', publicKey] });
-      const vaultId = status!.contractAddress;
-      const usdcSac = status!.usdcSac;
-      if (secret) {
-        // The rule is bound on-chain at registration, so the token carries only the
-        // key + network - the agent needs no rule in its config.
-        setReveal({
-          kind: 'generated',
-          publicKey,
-          secret,
-          sessionKey: packSessionKey({ sessionSecret: secret, vaultId, usdcSac }),
-        });
-      } else {
-        setReveal({ kind: 'pasted', publicKey, vaultId, usdcSac });
-      }
+      setReveal(secret ? { kind: 'generated', publicKey, secret } : { kind: 'pasted', publicKey });
       setLabel('');
       setPasted('');
       setCap('');
@@ -253,7 +239,7 @@ export function AgentKeysCard() {
       <CardHeader
         icon={KeyRound}
         title="Agent keys (self-custody)"
-        hint="Authorize a key your agent holds, bound to a public rule. One signature; then it spends hands-off (SDK/MCP local mode). Pause or revoke any time."
+        hint="Authorize a key your agent holds, bounded by a cap and/or a public rule. Bring your own key (paste its address) or generate one here. One signature; then it spends hands-off (SDK/MCP local mode). Pause or revoke any time."
       />
       <div className="p-5 pt-4">
         {reveal ? (
@@ -264,35 +250,46 @@ export function AgentKeysCard() {
             </div>
             {reveal.kind === 'generated' ? (
               <>
+                <p className="text-[12px] text-slate-400">
+                  Key generated in your browser and authorized on-chain. Save the secret now - it is
+                  shown once and we do not keep it. Put it in your agent (local mode):
+                </p>
                 <CopyLine
-                  label="CLEVERCON_SESSION_KEY (one token: secret + vault + rule - keep private)"
-                  value={reveal.sessionKey}
+                  label="Agent key address (public - already authorized)"
+                  value={reveal.publicKey}
+                />
+                <CopyLine
+                  label="CLEVERCON_SESSION_SECRET (secret - keep private, shown once)"
+                  value={reveal.secret}
                 />
                 <p className="text-[11px] text-amber-300/80">
-                  This is shown once. It contains the key's secret - store it as securely as a
-                  password; anyone with it can spend within your rule.
-                </p>
-                <p className="text-[11px] text-slate-500">
-                  Set <span className="font-mono text-sky-300">CLEVERCON_PUBLIC_MODE=local</span> +{' '}
-                  <span className="font-mono text-sky-300">CLEVERCON_SESSION_KEY</span> in your
-                  agent, then call <span className="font-mono text-sky-300">session_pay</span>.
+                  Anyone with this secret can spend within the rule/cap you set (and nothing else).
+                  Store it as securely as a password.
                 </p>
               </>
             ) : (
               <>
                 <p className="text-[12px] text-slate-400">
-                  You hold this key's secret. Provision your agent (local mode) with these - no rule
-                  needed, it's bound on-chain:
+                  This key is authorized on-chain. The dapp only ever saw its public address - never
+                  the secret. Provision your agent (local mode) with{' '}
+                  <span className="font-mono text-sky-300">CLEVERCON_SESSION_SECRET</span> = the
+                  secret of the key you pasted (you hold it; we never do).
                 </p>
-                <CopyLine label="CLEVERCON_SESSION_SECRET" value="S…your key's secret" />
-                <CopyLine label="CLEVERCON_VAULT_ID" value={reveal.vaultId} />
-                <CopyLine label="CLEVERCON_USDC_SAC" value={reveal.usdcSac} />
-                <p className="text-[11px] text-slate-500">
-                  Also set{' '}
-                  <span className="font-mono text-sky-300">CLEVERCON_PUBLIC_MODE=local</span>.
-                </p>
+                <CopyLine label="Authorized address" value={reveal.publicKey} />
               </>
             )}
+            <div className="rounded-lg bg-white/[0.03] p-3 text-[11.5px] leading-relaxed text-slate-400">
+              <div className="mb-1 font-medium text-slate-300">Agent config (local mode)</div>
+              <span className="font-mono text-[11px] text-sky-300">
+                CLEVERCON_PUBLIC_MODE=local
+                <br />
+                CLEVERCON_SESSION_SECRET=&lt;your key's secret&gt;
+              </span>
+              <div className="mt-1 text-slate-500">
+                That is all - the vault + USDC ids default to the network, and the rule is bound
+                on-chain.
+              </div>
+            </div>
             <div className="flex justify-end border-t border-white/[0.06] pt-3">
               <button onClick={() => setReveal(null)} className={primaryBtn}>
                 Done
@@ -346,26 +343,22 @@ export function AgentKeysCard() {
               )}
 
               <label className="block">
-                <span className="mb-1 block text-xs text-slate-500">Public rule it runs under</span>
-                {livePublic.length ? (
-                  <select
-                    value={ruleId}
-                    onChange={(e) => setRuleId(e.target.value)}
-                    className={inputCls}
-                    aria-label="Public rule"
-                  >
-                    <option value="">Select a public rule…</option>
-                    {livePublic.map((p) => (
-                      <option key={p.id} value={p.commitment}>
-                        {p.name || `rule ${p.commitment.slice(0, 8)}`}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <span className="text-xs text-amber-300/80">
-                    No live public rule. Create one and pin it on the Rules tab first.
-                  </span>
-                )}
+                <span className="mb-1 block text-xs text-slate-500">
+                  Public rule it runs under (optional if you set a cap)
+                </span>
+                <select
+                  value={ruleId}
+                  onChange={(e) => setRuleId(e.target.value)}
+                  className={inputCls}
+                  aria-label="Public rule"
+                >
+                  <option value="">No rule - cap only</option>
+                  {livePublic.map((p) => (
+                    <option key={p.id} value={p.commitment}>
+                      {p.name || `rule ${p.commitment.slice(0, 8)}`}
+                    </option>
+                  ))}
+                </select>
               </label>
 
               <div className="grid grid-cols-2 gap-2">
@@ -404,8 +397,9 @@ export function AgentKeysCard() {
               </button>
               {register.error && <p className="text-sm text-red-400">{readErr(register.error)}</p>}
               <p className="text-[11px] text-slate-600">
-                One wallet signature authorizes the key under your rule. The vault enforces the rule
-                (and your cap/expiry) on every spend; a global public rule, if set, applies on top.
+                One wallet signature authorizes the key, bounded by your cap and/or rule. The vault
+                enforces that (plus any expiry) on every spend; a global public rule, if set,
+                applies on top. Set a cap or a rule - at least one.
               </p>
             </form>
           </>

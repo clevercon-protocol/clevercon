@@ -263,11 +263,11 @@ export async function getManagedSession(): Promise<ManagedSession> {
 export async function enableManagedSession(
   spendCapUsdc: number,
   expiresInSeconds: number,
-  ruleId: string,
+  ruleId?: string,
 ): Promise<{ txHash: string; sessionPublicKey: string; expiry: number }> {
   const built = await apiPost<BuildResp & { sessionPublicKey: string; expiry: number }>(
     '/vault/session/enable',
-    { spendCapUsdc, expiresInSeconds, ruleId },
+    { spendCapUsdc, expiresInSeconds, ...(ruleId ? { ruleId } : {}) },
   );
   const signedXdr = await signTransaction(built.xdr, built.networkPassphrase);
   const res = await apiPost<{ txHash: string }>('/vault/submit', { signedXdr });
@@ -326,13 +326,13 @@ export async function revokeManagedSession(): Promise<{ txHash: string }> {
  */
 export function registerAgentKey(
   sessionPublicKey: string,
-  ruleId: string,
+  ruleId?: string,
   spendCapUsdc?: number,
   expiresInSeconds?: number,
 ): Promise<{ txHash: string }> {
   return signAndSubmitBuild('/vault/agent-key/register', {
     sessionPublicKey,
-    ruleId,
+    ...(ruleId ? { ruleId } : {}),
     ...(spendCapUsdc ? { spendCapUsdc } : {}),
     ...(expiresInSeconds ? { expiresInSeconds } : {}),
   });

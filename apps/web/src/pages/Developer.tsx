@@ -392,11 +392,11 @@ const PUBLIC_SERVER_ENV = [
 ].join('\n');
 
 const PUBLIC_LOCAL_ENV = [
-  '# Public, LOCAL mode (default): the agent holds its own session key.',
-  '# Authorize the key on the dapp (Vault -> Agent keys), bound to a public rule.',
-  '# The dapp gives you this ONE token (secret + vault); the bound rule governs.',
+  '# Public, LOCAL mode (default): the agent holds its own key. Authorize it on the dapp',
+  '# (Vault -> Agent keys), bounded by a cap and/or a rule. Just the secret - the vault +',
+  '# USDC ids default to the network, and the rule is bound on-chain.',
   'CLEVERCON_PUBLIC_MODE=local',
-  'CLEVERCON_SESSION_KEY=ccsk1_…',
+  "CLEVERCON_SESSION_SECRET=S…your key's secret",
 ].join('\n');
 
 function LaneTab({

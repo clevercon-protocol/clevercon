@@ -2,22 +2,25 @@
  * Session-key (Fast / public lane) tools for an agent. Public spending runs in one of
  * two modes, chosen by CLEVERCON_PUBLIC_MODE (default `local`):
  *
- *   local  (default) - the AGENT holds its own session key. Provision ONE token:
- *                       CLEVERCON_SESSION_KEY   (from the SDK `registerSession`; packs
- *                                                the key + vault/USDC ids + rule)
- *                       (legacy: CLEVERCON_SESSION_SECRET + CLEVERCON_VAULT_ID +
- *                        CLEVERCON_USDC_SAC still work.)
+ *   local  (default) - the AGENT holds its own session key. Provision just:
+ *                       CLEVERCON_SESSION_SECRET   (your key's secret - you hold it)
+ *                       (the vault + USDC SAC default to the network; CLEVERCON_SESSION_KEY
+ *                        token also works and carries them.)
  *   server          - the account's Managed Session (set up in the dapp Vault tab) is
- *                       used via the API. Provision:
- *                       CLEVERCON_API_KEY       (auth)
- *                       CLEVERCON_RULE_KEY      (the public rule to spend under)
+ *                       used via the API. Provision just:
+ *                       CLEVERCON_API_KEY          (auth; the bound rule governs)
  *
  * A specific public rule must be set for a public spend (the per-call ruleId, else the
  * one in the session/rule key). The GLOBAL public rule, if any, is enforced by the
  * vault automatically, so the agent never sets it. Both the cap/expiry and the rule
  * are enforced on-chain, so a compromised agent can never exceed them.
  */
-import { createSessionSpender, type SessionSpender } from '@clevercon/agent-sdk/sessions';
+import {
+  createSessionSpender,
+  DEFAULT_TESTNET_VAULT_ID,
+  DEFAULT_TESTNET_USDC_SAC,
+  type SessionSpender,
+} from '@clevercon/agent-sdk/sessions';
 import { unpackSessionKey, unpackRuleKey } from '@clevercon/agent-sdk/config-tokens';
 import {
   createApiClient,
@@ -48,14 +51,19 @@ function loadLocalSession(): { spender: SessionSpender; ruleId?: string } {
     cfg = unpackSessionKey(token);
   } else {
     const sessionSecret = env('CLEVERCON_SESSION_SECRET');
-    const vaultId = env('CLEVERCON_VAULT_ID');
-    const usdcSac = env('CLEVERCON_USDC_SAC');
-    if (!sessionSecret || !vaultId || !usdcSac) {
+    if (!sessionSecret) {
       throw new Error(
-        'local session not provisioned: set CLEVERCON_SESSION_KEY (from the SDK registerSession), or CLEVERCON_SESSION_SECRET + CLEVERCON_VAULT_ID + CLEVERCON_USDC_SAC',
+        'local session not provisioned: set CLEVERCON_SESSION_SECRET (your key secret), or CLEVERCON_SESSION_KEY',
       );
     }
-    cfg = { sessionSecret, vaultId, usdcSac, rpcUrl: env('STELLAR_RPC_URL') };
+    // The vault + USDC SAC are network constants - default them so the config is just
+    // the secret. CLEVERCON_VAULT_ID / CLEVERCON_USDC_SAC override (e.g. mainnet).
+    cfg = {
+      sessionSecret,
+      vaultId: env('CLEVERCON_VAULT_ID') || DEFAULT_TESTNET_VAULT_ID,
+      usdcSac: env('CLEVERCON_USDC_SAC') || DEFAULT_TESTNET_USDC_SAC,
+      rpcUrl: env('STELLAR_RPC_URL'),
+    };
   }
   const spender = createSessionSpender({
     vaultId: cfg.vaultId,

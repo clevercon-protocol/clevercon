@@ -92,8 +92,9 @@ const batchReleaseKeylessSchema = z.object({
 const sessionEnableSchema = z.object({
   spendCapUsdc: z.number().positive(),
   expiresInSeconds: z.number().int().positive(),
-  // The public rule the Managed Session runs under (bound on-chain at registration).
-  ruleId: rid64,
+  // The public rule the Managed Session runs under (bound on-chain), OPTIONAL - a
+  // cap-only session is valid; a rule adds clause limits on top.
+  ruleId: rid64.optional(),
 });
 const sessionUpdateSchema = z.object({
   newExpiresInSeconds: z.number().int().nonnegative(),
@@ -106,7 +107,8 @@ const sessionPauseSchema = z.object({ paused: z.boolean() });
 const gAddr = z.string().regex(/^G[A-Z2-7]{55}$/);
 const agentKeyRegisterSchema = z.object({
   sessionPublicKey: gAddr,
-  ruleId: rid64,
+  // Rule optional; a cap and/or a rule is required (the service enforces it).
+  ruleId: rid64.optional(),
   spendCapUsdc: z.number().nonnegative().optional(),
   expiresInSeconds: z.number().int().nonnegative().optional(),
 });
@@ -314,7 +316,12 @@ export class VaultController {
   @Post('session/enable')
   enableSession(@CurrentUser() user: AuthUser, @Body() body: unknown) {
     const { spendCapUsdc, expiresInSeconds, ruleId } = parseBody(sessionEnableSchema, body);
-    return this.vault.buildEnableSession(user.userId, spendCapUsdc, expiresInSeconds, ruleId);
+    return this.vault.buildEnableSession(
+      user.userId,
+      spendCapUsdc,
+      expiresInSeconds,
+      ruleId ?? null,
+    );
   }
 
   /** Hands-off public-lane spend; bounded by the on-chain session cap (no step-up). */

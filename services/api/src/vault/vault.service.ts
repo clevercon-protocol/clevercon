@@ -206,27 +206,25 @@ export class VaultService {
     userId: string,
     spendCapUsdc: number,
     expiresInSeconds: number,
-    ruleIdHex: string,
+    ruleIdHex?: string | null,
   ) {
     if (spendCapUsdc <= 0) throw new BadRequestException('spendCapUsdc must be positive');
     if (expiresInSeconds <= 0) throw new BadRequestException('expiresInSeconds must be positive');
-    if (!ruleIdHex)
-      throw new BadRequestException('a public rule is required for a Managed Session');
     if (!this.delegates.available) {
       throw new BadRequestException('Managed Sessions are not configured on this deployment');
     }
     const address = await this.primaryAddress(userId);
     const { publicKey } = await this.delegates.getOrProvision(userId);
     const expiry = Math.floor(Date.now() / 1000) + expiresInSeconds;
-    // The dapp's Managed Session is a SERVER-HELD key bound to a cap + expiry + a public
-    // rule (picked on the dapp). The vault enforces the bound rule on every session
-    // spend, so the agent never has to pass one. server_held=true.
+    // The dapp's Managed Session is a SERVER-HELD key bound to a cap + expiry, OPTIONALLY
+    // under a public rule (picked on the dapp) that the vault then enforces on every
+    // session spend. Cap-only is valid (a server key always has a cap). server_held=true.
     const xdr = await this.contract.buildRegisterSessionXdr(
       address,
       publicKey,
       expiry,
       spendCapUsdc,
-      ruleIdHex,
+      ruleIdHex || null,
       true,
     );
     return {
@@ -334,7 +332,7 @@ export class VaultService {
   async buildRegisterAgentKey(
     userId: string,
     sessionPublicKey: string,
-    ruleIdHex: string,
+    ruleIdHex?: string,
     spendCapUsdc?: number,
     expiresInSeconds?: number,
   ) {
