@@ -64,6 +64,7 @@ import {
   getProofStatus,
   type Policy,
 } from '../../lib/policies';
+import { describeSavedLimit } from './limits-model';
 import { getWalletBalances, addUsdcTrustline, explorerAccount } from '../../lib/stellar';
 import { getApiKeys } from '../../lib/apiKeys';
 import {
@@ -1680,7 +1681,7 @@ export function ManagedSessionCard() {
                 <option value="">No rule - cap only (pays any payee up to the cap)</option>
                 {livePublic.map((p) => (
                   <option key={p.id} value={p.commitment}>
-                    {p.name || `rule ${p.commitment.slice(0, 8)}`}
+                    {`${p.name || describeSavedLimit(p)} · ${p.commitment.slice(0, 6)}`}
                   </option>
                 ))}
               </select>

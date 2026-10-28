@@ -3,6 +3,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { Keypair } from '@stellar/stellar-sdk';
 import { KeyRound, Copy, Check, Trash2 } from 'lucide-react';
 import { getPolicies, type Policy } from '../../lib/policies';
+import { describeSavedLimit } from './limits-model';
 import {
   getPublicRule,
   getAgentKey,
@@ -355,7 +356,7 @@ export function AgentKeysCard() {
                   <option value="">No rule - cap only</option>
                   {livePublic.map((p) => (
                     <option key={p.id} value={p.commitment}>
-                      {p.name || `rule ${p.commitment.slice(0, 8)}`}
+                      {`${p.name || describeSavedLimit(p)} · ${p.commitment.slice(0, 6)}`}
                     </option>
                   ))}
                 </select>
