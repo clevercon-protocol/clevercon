@@ -55,8 +55,6 @@ import {
   updateManagedSession,
   getPublicRule,
   getGlobals,
-  getFaucetStatus,
-  claimFaucetUsdc,
 } from '../../lib/vault';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import { getConnectedAddress } from '../../lib/wallet';
@@ -73,6 +71,7 @@ import {
   getWalletBalances,
   addUsdcTrustline,
   fundWithFriendbot,
+  swapXlmForUsdc,
   explorerAccount,
 } from '../../lib/stellar';
 import { IS_MAINNET } from '../../lib/network';
@@ -371,11 +370,33 @@ function QuickstartStep({
   );
 }
 
+/** How much test USDC the quickstart mints per click (swapped from the wallet's XLM). */
+const SWAP_USDC = 50;
+
+/** Fallback when the DEX has no XLM/USDC liquidity to swap against. */
+function CircleFallback() {
+  return (
+    <p className="mt-1.5 text-xs text-slate-400">
+      The testnet DEX had no USDC liquidity to swap just now. Get testnet USDC from{' '}
+      <a
+        href="https://faucet.circle.com/"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-sky-300 underline underline-offset-2 hover:text-sky-200"
+      >
+        Circle’s faucet
+      </a>{' '}
+      (choose Stellar, paste your wallet address), then reload.
+    </p>
+  );
+}
+
 /**
- * Tester quickstart: get a fresh wallet from zero to spendable in three steps —
- * Friendbot XLM, the USDC trustline, then test USDC (one-click when the operator
- * runs a faucet, otherwise a link). Testnet only; it hides itself once the wallet
- * is funded, holds the trustline, and has USDC.
+ * Tester quickstart: get a fresh wallet from zero to spendable in three
+ * fully client-side, wallet-signed steps — Friendbot XLM, the USDC trustline,
+ * then mint test USDC by swapping a little of that XLM on the DEX (no operator
+ * faucet, no shared wallet, no limit). Testnet only; it hides itself once the
+ * wallet is funded, holds the trustline, and has USDC.
  */
 export function QuickstartCard() {
   const qc = useQueryClient();
@@ -385,7 +406,6 @@ export function QuickstartCard() {
     queryFn: () => getWalletBalances(address),
     enabled: !!address,
   });
-  const { data: faucet } = useQuery({ queryKey: ['faucet-status'], queryFn: getFaucetStatus });
 
   const fund = useMutation({
     mutationFn: () => fundWithFriendbot(address),
@@ -395,8 +415,8 @@ export function QuickstartCard() {
     mutationFn: () => addUsdcTrustline(address),
     onSuccess: () => refreshBalancesSoon(qc),
   });
-  const claim = useMutation({
-    mutationFn: () => claimFaucetUsdc(),
+  const swap = useMutation({
+    mutationFn: () => swapXlmForUsdc(address, SWAP_USDC),
     onSuccess: () => refreshBalancesSoon(qc),
   });
 
@@ -420,17 +440,15 @@ export function QuickstartCard() {
             <span className="font-mono text-sky-300">{bal!.usdc!.toFixed(2)} USDC</span>. Deposit it
             into your vault below to start.
           </span>
-          {faucet?.available && (
-            <button
-              onClick={() => claim.mutate()}
-              disabled={claim.isPending}
-              className={`${btn} ml-auto border-white/10 bg-white/5 text-slate-300 hover:bg-white/10`}
-            >
-              <Droplets size={12} /> {claim.isPending ? 'Sending…' : 'Get more test USDC'}
-            </button>
-          )}
+          <button
+            onClick={() => swap.mutate()}
+            disabled={swap.isPending}
+            className={`${btn} ml-auto border-white/10 bg-white/5 text-slate-300 hover:bg-white/10`}
+          >
+            <Droplets size={12} /> {swap.isPending ? 'Swapping…' : 'Get more test USDC'}
+          </button>
         </div>
-        {claim.error && <p className="mt-2 text-xs text-red-400">{readError(claim.error)}</p>}
+        {swap.error && <CircleFallback />}
       </Card>
     );
   }
@@ -473,33 +491,25 @@ export function QuickstartCard() {
           )}
           {trust.error && <p className="mt-1.5 text-xs text-red-400">{readError(trust.error)}</p>}
         </QuickstartStep>
-        <QuickstartStep index={3} title="Get test USDC" done={hasUsdc}>
+        <QuickstartStep
+          index={3}
+          title={`Get test USDC (swap ${SWAP_USDC} from your XLM)`}
+          done={hasUsdc}
+        >
           {!hasTrustline ? (
             <p className="text-xs text-slate-500">Add the trustline first.</p>
-          ) : faucet?.available ? (
-            <button
-              onClick={() => claim.mutate()}
-              disabled={claim.isPending}
-              className={`${btn} border-violet-900/50 bg-violet-950/30 text-violet-200 hover:bg-violet-950/50`}
-            >
-              <Droplets size={12} />{' '}
-              {claim.isPending ? 'Sending…' : `Get ${faucet.amountUsdc} test USDC`}
-            </button>
           ) : (
-            <p className="text-xs text-slate-400">
-              One-click USDC isn’t enabled here. Get testnet USDC from{' '}
-              <a
-                href="https://faucet.circle.com/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sky-300 underline underline-offset-2 hover:text-sky-200"
+            <>
+              <button
+                onClick={() => swap.mutate()}
+                disabled={swap.isPending}
+                className={`${btn} border-violet-900/50 bg-violet-950/30 text-violet-200 hover:bg-violet-950/50`}
               >
-                Circle’s faucet
-              </a>{' '}
-              (choose Stellar, paste your wallet address).
-            </p>
+                <Droplets size={12} /> {swap.isPending ? 'Swapping…' : `Get ${SWAP_USDC} test USDC`}
+              </button>
+              {swap.error && <CircleFallback />}
+            </>
           )}
-          {claim.error && <p className="mt-1.5 text-xs text-red-400">{readError(claim.error)}</p>}
         </QuickstartStep>
       </ol>
     </Card>

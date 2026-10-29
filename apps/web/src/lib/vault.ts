@@ -372,25 +372,3 @@ export async function getAgentWallet(): Promise<{ publicKey: string | null }> {
 export async function setAgentWallet(publicKey: string): Promise<{ publicKey: string }> {
   return apiPost<{ publicKey: string }>('/vault/agent-wallet', { publicKey });
 }
-
-// ── Testnet quickstart faucet ──────────────────────────────────────────────
-
-export interface FaucetStatus {
-  available: boolean;
-  amountUsdc: number;
-}
-
-/** Whether the operator has a funded one-click USDC faucet in this environment. */
-export async function getFaucetStatus(): Promise<FaucetStatus> {
-  if (isDemo()) return { available: false, amountUsdc: 0 };
-  return apiFetch<FaucetStatus>('/faucet/status');
-}
-
-/** Claim test USDC to the connected wallet (rate-limited per account per day). */
-export async function claimFaucetUsdc(): Promise<{
-  txHash: string;
-  amountUsdc: number;
-  to: string;
-}> {
-  return apiPost('/faucet/usdc', {});
-}

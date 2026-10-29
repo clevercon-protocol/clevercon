@@ -63,13 +63,6 @@ export const envSchema = z.object({
   // is pure plumbing (the plan's "disposable relayer"). Falls back to
   // VAULT_ADMIN_KEY when unset. A dedicated relayer (+ channel accounts) at scale.
   RELAYER_SECRET_KEY: z.string().optional(),
-  // Testnet-only USDC faucet for the tester quickstart. When FAUCET_SECRET_KEY
-  // (S...) is set to a wallet funded with classic USDC + a little XLM for fees,
-  // the dapp offers a one-click "Get test USDC" button (sends FAUCET_USDC_AMOUNT
-  // classic USDC to the tester's wallet, rate-limited per account per 24h). When
-  // unset the faucet reports unavailable and the dapp falls back to a faucet link.
-  FAUCET_SECRET_KEY: z.string().optional(),
-  FAUCET_USDC_AMOUNT: z.coerce.number().positive().default(10),
   // At-rest encryption key for per-user delegate secrets (32-byte hex or base64;
   // KMS in production). When set, the platform can provision per-user spending
   // delegates and automatic settlement is enabled; when unset, tasks run

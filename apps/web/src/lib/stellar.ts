@@ -76,3 +76,57 @@ export async function addUsdcTrustline(address: string): Promise<void> {
   const signed = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
   await server.submitTransaction(signed);
 }
+
+/**
+ * Swap some of the wallet's XLM for `destUsdc` USDC on the DEX (a wallet-signed
+ * strict-receive path payment to self). Testers fund XLM with Friendbot for free,
+ * then mint their own test USDC this way - no operator faucet, no shared source
+ * wallet. Needs the USDC trustline first. Throws when there is no liquidity/path,
+ * so callers can fall back to a hosted faucet link.
+ */
+export async function swapXlmForUsdc(address: string, destUsdc: number): Promise<void> {
+  const { Horizon, TransactionBuilder, Operation, Asset, BASE_FEE } =
+    await import('@stellar/stellar-sdk');
+  const server = new Horizon.Server(HORIZON_URL);
+  const usdc = new Asset(USDC_CODE, USDC_ISSUER);
+  const destAmount = destUsdc.toFixed(7);
+
+  // Find the cheapest XLM->USDC path and size sendMax off it (with slippage
+  // headroom); fall back to a direct single-hop with a generous cap. The user
+  // only ever pays the real cost up to sendMax, so a loose cap is safe.
+  let path: InstanceType<typeof Asset>[] = [];
+  let sendMax = (destUsdc * 10).toFixed(7);
+  try {
+    const paths = await server.strictReceivePaths([Asset.native()], usdc, destAmount).call();
+    const best = paths.records?.[0];
+    if (best) {
+      path = (best.path ?? []).map((p) =>
+        p.asset_type === 'native' ? Asset.native() : new Asset(p.asset_code!, p.asset_issuer!),
+      );
+      sendMax = (Number(best.source_amount) * 1.5).toFixed(7);
+    }
+  } catch {
+    // fall through to the direct-path defaults
+  }
+
+  const account = await server.loadAccount(address);
+  const tx = new TransactionBuilder(account, {
+    fee: String(Number(BASE_FEE) * 10),
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(
+      Operation.pathPaymentStrictReceive({
+        sendAsset: Asset.native(),
+        sendMax,
+        destination: address,
+        destAsset: usdc,
+        destAmount,
+        path,
+      }),
+    )
+    .setTimeout(120)
+    .build();
+  const signedXdr = await signTransaction(tx.toXDR(), NETWORK_PASSPHRASE);
+  const signed = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
+  await server.submitTransaction(signed);
+}
