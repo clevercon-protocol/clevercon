@@ -1,5 +1,11 @@
 import { isDemo } from '../../config';
-import { WalletCard, VaultCard, AgentWalletCard, ManagedSessionCard } from './parts';
+import {
+  WalletCard,
+  QuickstartCard,
+  VaultCard,
+  AgentWalletCard,
+  ManagedSessionCard,
+} from './parts';
 import { AgentKeysCard } from './AgentKeysCard';
 import { SectionLabel } from '../../components/ui';
 
@@ -24,6 +30,7 @@ export function VaultPage() {
       </header>
 
       {!isDemo() && <WalletCard />}
+      {!isDemo() && <QuickstartCard />}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <VaultCard />

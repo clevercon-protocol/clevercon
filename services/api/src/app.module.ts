@@ -8,6 +8,7 @@ import { ApiKeysModule } from './api-keys/api-keys.module.js';
 import { UsersModule } from './users/users.module.js';
 import { ServicesModule } from './services/services.module.js';
 import { VaultModule } from './vault/vault.module.js';
+import { FaucetModule } from './faucet/faucet.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
 import { ProviderModule } from './provider/provider.module.js';
 import { PoliciesModule } from './policies/policies.module.js';
@@ -41,6 +42,7 @@ import { AppLoggerModule } from './logging/logger.module.js';
     UsersModule,
     ServicesModule,
     VaultModule,
+    FaucetModule,
     TasksModule,
     ProviderModule,
     PoliciesModule,

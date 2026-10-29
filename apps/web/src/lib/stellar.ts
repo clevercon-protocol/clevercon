@@ -4,11 +4,29 @@ import { signTransaction } from './wallet';
 // USDC trustline. These are client-side Horizon calls (read-heavy, no custody),
 // adapted from the dashboard. Stellar SDK is dynamically imported so it stays out
 // of the eager bundle.
-import { HORIZON_URL, USDC_ISSUER, NETWORK_PASSPHRASE } from './network';
+import { HORIZON_URL, USDC_ISSUER, NETWORK_PASSPHRASE, NETWORK } from './network';
 
 const USDC_CODE = 'USDC';
 
 export { explorerAccount } from './network';
+
+/**
+ * Create + fund the account with testnet XLM via Friendbot. Testnet only (there
+ * is no Friendbot on mainnet). Idempotent-ish: a second call on a funded account
+ * just tops it up / no-ops. Throws on a non-OK response.
+ */
+export async function fundWithFriendbot(address: string): Promise<void> {
+  if (NETWORK === 'mainnet') {
+    throw new Error('Friendbot is testnet-only; fund this wallet with real XLM.');
+  }
+  const res = await fetch(`https://friendbot.stellar.org/?addr=${encodeURIComponent(address)}`);
+  if (!res.ok) {
+    // Friendbot returns 400 "op_already_exists" when the account is already funded.
+    const body = await res.text().catch(() => '');
+    if (/already|op_already_exists|createAccountAlreadyExist/i.test(body)) return;
+    throw new Error('Friendbot could not fund this account. Try again in a moment.');
+  }
+}
 
 export interface WalletBalances {
   funded: boolean;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import {
   keepPreviousData,
@@ -33,6 +33,7 @@ import {
   Zap,
   Award,
   Lock,
+  Droplets,
 } from 'lucide-react';
 import { isDemo } from '../../config';
 import { useSession } from '../../store/session';
@@ -54,6 +55,8 @@ import {
   updateManagedSession,
   getPublicRule,
   getGlobals,
+  getFaucetStatus,
+  claimFaucetUsdc,
 } from '../../lib/vault';
 import { getTasks, createTask, type HireMode } from '../../lib/tasks';
 import { getConnectedAddress } from '../../lib/wallet';
@@ -66,7 +69,13 @@ import {
   type Policy,
 } from '../../lib/policies';
 import { describeSavedLimit } from './limits-model';
-import { getWalletBalances, addUsdcTrustline, explorerAccount } from '../../lib/stellar';
+import {
+  getWalletBalances,
+  addUsdcTrustline,
+  fundWithFriendbot,
+  explorerAccount,
+} from '../../lib/stellar';
+import { IS_MAINNET } from '../../lib/network';
 import { getApiKeys } from '../../lib/apiKeys';
 import {
   Card,
@@ -322,6 +331,177 @@ export function WalletCard() {
           This wallet is not funded on testnet yet. Fund it, then reload.
         </p>
       )}
+    </Card>
+  );
+}
+
+// ── Testnet quickstart ──────────────────────────────────────────────────────
+
+function QuickstartStep({
+  index,
+  title,
+  done,
+  children,
+}: {
+  index: number;
+  title: string;
+  done: boolean;
+  children?: ReactNode;
+}) {
+  return (
+    <li className="flex gap-3">
+      <div
+        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+          done ? 'bg-emerald-500/15 text-emerald-300' : 'bg-white/5 text-slate-400'
+        }`}
+      >
+        {done ? <Check size={13} /> : index}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div
+          className={`text-sm font-medium ${
+            done ? 'text-slate-500 line-through decoration-slate-700' : 'text-slate-200'
+          }`}
+        >
+          {title}
+        </div>
+        {!done && children && <div className="mt-1.5">{children}</div>}
+      </div>
+    </li>
+  );
+}
+
+/**
+ * Tester quickstart: get a fresh wallet from zero to spendable in three steps —
+ * Friendbot XLM, the USDC trustline, then test USDC (one-click when the operator
+ * runs a faucet, otherwise a link). Testnet only; it hides itself once the wallet
+ * is funded, holds the trustline, and has USDC.
+ */
+export function QuickstartCard() {
+  const qc = useQueryClient();
+  const address = useSession((s) => s.session?.address ?? '');
+  const { data: bal } = useQuery({
+    queryKey: ['wallet-balances', address],
+    queryFn: () => getWalletBalances(address),
+    enabled: !!address,
+  });
+  const { data: faucet } = useQuery({ queryKey: ['faucet-status'], queryFn: getFaucetStatus });
+
+  const fund = useMutation({
+    mutationFn: () => fundWithFriendbot(address),
+    onSuccess: () => refreshBalancesSoon(qc),
+  });
+  const trust = useMutation({
+    mutationFn: () => addUsdcTrustline(address),
+    onSuccess: () => refreshBalancesSoon(qc),
+  });
+  const claim = useMutation({
+    mutationFn: () => claimFaucetUsdc(),
+    onSuccess: () => refreshBalancesSoon(qc),
+  });
+
+  if (IS_MAINNET || !address) return null;
+
+  const funded = !!bal?.funded && (bal?.xlm ?? 0) >= 1;
+  const hasTrustline = bal?.usdc != null;
+  const hasUsdc = (bal?.usdc ?? 0) > 0;
+  const allDone = funded && hasTrustline && hasUsdc;
+
+  const btn =
+    'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs disabled:opacity-50';
+
+  if (allDone) {
+    return (
+      <Card className="border-emerald-900/40 bg-emerald-950/[0.12] p-4">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+          <CheckCircle2 size={16} className="shrink-0 text-emerald-400" />
+          <span className="text-slate-300">
+            Your testnet wallet is funded and holds{' '}
+            <span className="font-mono text-sky-300">{bal!.usdc!.toFixed(2)} USDC</span>. Deposit it
+            into your vault below to start.
+          </span>
+          {faucet?.available && (
+            <button
+              onClick={() => claim.mutate()}
+              disabled={claim.isPending}
+              className={`${btn} ml-auto border-white/10 bg-white/5 text-slate-300 hover:bg-white/10`}
+            >
+              <Droplets size={12} /> {claim.isPending ? 'Sending…' : 'Get more test USDC'}
+            </button>
+          )}
+        </div>
+        {claim.error && <p className="mt-2 text-xs text-red-400">{readError(claim.error)}</p>}
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10 text-violet-300">
+          <Rocket size={15} />
+        </div>
+        <div>
+          <div className="text-sm font-semibold text-white">Testnet quickstart</div>
+          <div className="text-xs text-slate-400">
+            Get a test wallet ready in three steps — no real money, testnet only.
+          </div>
+        </div>
+      </div>
+      <ol className="space-y-3">
+        <QuickstartStep index={1} title="Fund your wallet with testnet XLM" done={funded}>
+          <button
+            onClick={() => fund.mutate()}
+            disabled={fund.isPending}
+            className={`${btn} border-emerald-900/50 bg-emerald-950/30 text-emerald-300 hover:bg-emerald-950/50`}
+          >
+            <Zap size={12} /> {fund.isPending ? 'Funding…' : 'Fund with Friendbot'}
+          </button>
+          {fund.error && <p className="mt-1.5 text-xs text-red-400">{readError(fund.error)}</p>}
+        </QuickstartStep>
+        <QuickstartStep index={2} title="Add the USDC trustline" done={hasTrustline}>
+          {funded ? (
+            <button
+              onClick={() => trust.mutate()}
+              disabled={trust.isPending}
+              className={`${btn} border-sky-900/50 bg-sky-950/30 text-sky-300 hover:bg-sky-950/50`}
+            >
+              <Plus size={12} /> {trust.isPending ? 'Adding…' : 'Add USDC trustline'}
+            </button>
+          ) : (
+            <p className="text-xs text-slate-500">Fund the wallet first.</p>
+          )}
+          {trust.error && <p className="mt-1.5 text-xs text-red-400">{readError(trust.error)}</p>}
+        </QuickstartStep>
+        <QuickstartStep index={3} title="Get test USDC" done={hasUsdc}>
+          {!hasTrustline ? (
+            <p className="text-xs text-slate-500">Add the trustline first.</p>
+          ) : faucet?.available ? (
+            <button
+              onClick={() => claim.mutate()}
+              disabled={claim.isPending}
+              className={`${btn} border-violet-900/50 bg-violet-950/30 text-violet-200 hover:bg-violet-950/50`}
+            >
+              <Droplets size={12} />{' '}
+              {claim.isPending ? 'Sending…' : `Get ${faucet.amountUsdc} test USDC`}
+            </button>
+          ) : (
+            <p className="text-xs text-slate-400">
+              One-click USDC isn’t enabled here. Get testnet USDC from{' '}
+              <a
+                href="https://faucet.circle.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sky-300 underline underline-offset-2 hover:text-sky-200"
+              >
+                Circle’s faucet
+              </a>{' '}
+              (choose Stellar, paste your wallet address).
+            </p>
+          )}
+          {claim.error && <p className="mt-1.5 text-xs text-red-400">{readError(claim.error)}</p>}
+        </QuickstartStep>
+      </ol>
     </Card>
   );
 }
