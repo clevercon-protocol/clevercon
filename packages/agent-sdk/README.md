@@ -27,9 +27,10 @@ self-host. The provider surfaces (`createProvider`, `createAgent`) do not need a
 
 ## The four surfaces, pick what your agent needs
 
-1. **Spend** (`createSpender`) — a bounded, non-custodial spending account: pay, disburse,
-   hire, set limits, read budget and activity, with a scoped API key. **Start here if your
-   agent needs to spend.**
+1. **Spend** (`createSpender` + `@clevercon/agent-sdk/sessions`) — a bounded, non-custodial
+   spending account in two lanes: **private** (self-custody, keyless, trustless, via
+   `disbursePrivate`) and **public / Fast** (a bounded on-chain session key). **Start here
+   if your agent needs to spend.**
 2. **Agent-key mode** (`createAgentWallet`) — the agent pulls working capital from the
    vault into its own wallet (bounded by your policy) and pays **external** x402 services
    with it. Start here to reach services outside CleverCon.
@@ -41,48 +42,75 @@ self-host. The provider surfaces (`createProvider`, `createAgent`) do not need a
 The spending surfaces are on the package root; `@clevercon/agent-sdk/spender` and
 `@clevercon/agent-sdk/provider` are dependency-free subpaths.
 
-## Spend (`createSpender`)
+## Spend
 
-A bounded, non-custodial spending account in a few calls, keyed by a scoped API key.
-Fund the vault and authorize the agent once in the app; after that the agent spends
-autonomously within your limits.
+Two non-custodial lanes, matching the dapp and MCP: **private** (self-custody, keyless,
+trustless) and **public / Fast** (a bounded on-chain session key). Reads and config
+(`getBudget`, `setLimit`, ...) use a scoped API key; the spend itself never does.
+
+### Private spend (`createSpender().disbursePrivate`)
+
+Proves your hidden policy **locally** and relays only a zero-knowledge proof; the vault
+releases against your pinned commitment with a fresh nullifier, so no key signs the spend
+and the server never sees your rule. One proof authorizes up to 4 payouts.
 
 ```ts
 import { createSpender } from '@clevercon/agent-sdk/spender';
 
-const cc = createSpender({ apiKey: process.env.CLEVERCON_API_KEY! });
+// Provide the policy bundle inline, or set CLEVERCON_POLICY_KEY to the key you
+// copied from the dapp's Rules tab. Circuit artifacts download on first use.
+const cc = createSpender({
+  apiKey: process.env.CLEVERCON_API_KEY!, // for reads/config (not the spend itself)
+  policyBundle: JSON.parse(process.env.CLEVERCON_POLICY_JSON!), // { rules, salt }
+});
 
-// Pay one allowlisted address
-await cc.pay('G...PAYEE', 5, { reason: 'design work' });
-
-// Disburse to many in one bounded instruction
-await cc.disburse([
+await cc.disbursePrivate([
   { payee: 'G...A', amount: 2 },
   { payee: 'G...B', amount: 3 },
 ]);
 
-// Read the vault position and set a reusable private policy
+// Read the vault position and manage saved limits (scoped API key)
 const { available } = await cc.getBudget();
 const limit = await cc.setLimit({ perPaymentCeilingUsdc: 10, allowlist: ['G...'] });
 ```
 
-**Methods**
-- `pay(payee, amount, opts?)` and `disburse(lines, opts?)` — bounded by a saved limit
-  (`policyId` in `opts`) or one derived from the payment itself (allowlist = the payees,
-  cap = the largest line). Pass `idempotencyKey` so a retried call returns the original
-  spend instead of paying twice.
-- `hire(opts)` — hire a registered service (also takes `idempotencyKey`).
-- `getBudget()` — `{ balance, available, locked }`.
-- `getActivity()` — recent jobs and payments.
-- `setLimit(limit)` — create a reusable policy; returns a `policyId`.
-- `listLimits()` — saved policies.
+- `disbursePrivate(lines, opts?)` — self-custody private spend (pp/2). Needs a policy
+  bundle (`options.policyBundle` or `CLEVERCON_POLICY_KEY`); add `globalBundle` /
+  `CLEVERCON_GLOBAL_KEY` when the account has a global-private rule.
+- `getBudget()` / `getActivity()` / `setLimit(limit)` / `listLimits()` / `hire(opts)` —
+  reads and config over a scoped API key (`hire` / `setLimit` take `idempotencyKey`).
+- `pay` / `disburse` are **retired** (the managed server-signed path); calling them throws
+  `CleverConError`. Use `disbursePrivate`, or the session lane below.
 
-Errors throw `CleverConError` carrying the HTTP status (401 bad key, 429 quota).
+### Public / Fast spend (`@clevercon/agent-sdk/sessions`)
 
-**Options**
-- `apiKey` (required) — your scoped key.
-- `apiUrl` — API base. Defaults to `CLEVERCON_API_URL`, or the live CleverCon API.
-- `fetchImpl` — custom `fetch` (for tests or a non-global runtime).
+A bounded on-chain session key (cap + payee allowlist + expiry) spends with no per-payment
+proof, for high-frequency low-value work. The owner mints the session once; the agent runs
+with only the session key, signing directly against Soroban (no API).
+
+```ts
+import { registerSession, createSessionSpender } from '@clevercon/agent-sdk/sessions';
+
+// Owner: authorize a bounded session (once)
+const { sessionSecret } = await registerSession({
+  ownerSecret: process.env.OWNER_SECRET!,
+  spendCap: 20,
+  allowlist: ['G...PAYEE'],
+  expirySecs: 7 * 24 * 3600,
+});
+
+// Agent: spend with ONLY the session key
+const spender = createSessionSpender(sessionSecret);
+await spender.pay('G...PAYEE', 1);
+const scope = await spender.scope(); // remaining budget, allowlist, expiry
+```
+
+Verify any settled spend with `receipt(...)` from `@clevercon/agent-sdk/receipts`: it
+decodes the on-chain tx to show the authorizer, a session key (public) or a ZK proof
+(private), so you can confirm which lane actually ran.
+
+Errors throw `CleverConError` (spend / read) or `SessionError` (session ops), carrying the
+HTTP status or the contract reason.
 
 ## Agent-key mode (`createAgentWallet`)
 

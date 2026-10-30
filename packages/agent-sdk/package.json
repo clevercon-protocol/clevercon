@@ -1,6 +1,6 @@
 {
   "name": "@clevercon/agent-sdk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Give an AI agent a private, non-custodial spending account on Stellar: pay, disburse, hire and pay services (x402/MPP), or be a paid service, all within policy.",
   "license": "MIT",
   "type": "module",
