@@ -3,6 +3,7 @@ import {
   Lead,
   P,
   H2,
+  H3,
   UL,
   LI,
   Code,
@@ -14,11 +15,15 @@ import {
   Steps,
   Step,
   Cards,
+  UseCase,
+  Status,
+  Flow,
 } from './ui';
 
 // All documentation pages. Each page is a small component built from the shared
 // primitives; the DOCS registry at the bottom drives the sidebar and routing.
-// House style: no em-dashes anywhere, and no competitor is named.
+// House style: no em-dashes anywhere, and no competitor is named or compared against.
+// Every section carries at least one concrete, relatable use case.
 
 // ── Getting started ─────────────────────────────────────────────────────────
 
@@ -38,6 +43,13 @@ function Introduction() {
         payees stay yours.
       </P>
 
+      <UseCase title="A research desk funds an agent to buy market data">
+        The desk sets one rule: pay only five approved data providers, at most $100 per purchase,
+        and no more than $500 per week. The agent buys data on its own all week. It can never pay a
+        sixth provider, never spend $101, and never blow past $500, and the ledger shows that each
+        payment was allowed without revealing the budget, the providers, or the weekly cap.
+      </UseCase>
+
       <H2 id="who">Who it is for</H2>
       <UL>
         <LI>
@@ -45,7 +57,9 @@ function Introduction() {
           can only spend the way they allowed.
         </LI>
         <LI>Teams paying vendors, contractors, or many recipients on a bounded, private policy.</LI>
-        <LI>Service builders who want to monetize an API or skill that agents can pay per call.</LI>
+        <LI>
+          Service builders who want to monetize an API or skill that agents can pay for per call.
+        </LI>
       </UL>
 
       <H2 id="lanes">Sovereign by default, fast when you ask</H2>
@@ -62,11 +76,6 @@ function Introduction() {
           metered API calls and streaming.
         </LI>
       </UL>
-      <P>
-        Both are non-custodial and both are bounded on-chain. The difference is how a spend is
-        authorized and how fast it settles. See <A to="/docs/concepts">Core concepts</A> for the
-        full model.
-      </P>
 
       <H2 id="surfaces">Three surfaces</H2>
       <UL>
@@ -159,9 +168,24 @@ function Concepts() {
         <LI>Calendar window (only within certain times).</LI>
         <LI>Category ceiling (per class of service).</LI>
       </UL>
+
+      <H3>How a spend is checked</H3>
       <P>
-        A rule is usable only once <B>pinned</B> on-chain, which takes one wallet signature. See{' '}
-        <A to="/docs/rules">Rules</A> for authoring, pinning, and editing.
+        Take the research desk rule (allowlist of 5, $100 max, $500 per week). A $60 purchase runs:
+      </P>
+      <Flow
+        steps={[
+          { label: 'Agent', sub: 'wants to pay provider C $60' },
+          { label: 'Rule check', sub: 'payee allowed, under $100, week total under $500' },
+          { label: 'Proof', sub: 'made on your device' },
+          { label: 'Vault', sub: 'verifies, releases $60' },
+          { label: 'Provider C', sub: 'paid in USDC' },
+        ]}
+      />
+      <P>
+        A $120 purchase, or a payment to a provider not on the list, never produces a valid proof,
+        so the vault never moves funds and nothing about the rule leaks on-chain. See{' '}
+        <A to="/docs/rules">Rules</A> for authoring and pinning.
       </P>
 
       <H2 id="custody-mode">Custody and mode</H2>
@@ -203,8 +227,9 @@ function Concepts() {
       <H2 id="globals">Globals</H2>
       <P>
         You may set one optional global rule per lane. A global applies to every spend in its lane
-        as an AND on top of whatever rule is selected, so it can only ever tighten, never loosen.
-        Use it for an account-wide denylist or a master cap.
+        as an AND on top of whatever rule is selected, so it can only ever tighten, never loosen. A
+        common use is an account-wide denylist, or a master weekly cap that sits over every
+        individual rule.
       </P>
 
       <H2 id="tiers">Verification tiers</H2>
@@ -215,8 +240,7 @@ function Concepts() {
           hash, or a signature), so payment releases instantly.
         </LI>
         <LI>
-          <B>T2 Attestable:</B> an optimistic release with a dispute window and an advisory quality
-          score.
+          <B>T2 Attestable:</B> an optimistic release with a dispute window and an advisory score.
         </LI>
         <LI>
           <B>T3 Human:</B> released on your approval or a milestone.
@@ -239,7 +263,8 @@ function Quickstart() {
     <>
       <Lead>
         The fastest way to see CleverCon work: get a funded test wallet, author a rule, and make a
-        bounded payment, all in the app on Stellar testnet.
+        bounded payment, all in the app on Stellar testnet. We will use a simple scenario: an agent
+        that may pay one address up to $5 per payment.
       </Lead>
       <Steps>
         <Step n={1} title="Connect a wallet">
@@ -251,15 +276,15 @@ function Quickstart() {
           and gets you test USDC, in three clicks. See <A to="/docs/vault">Fund your vault</A>.
         </Step>
         <Step n={3} title="Deposit into the vault">
-          Deposit some USDC. Your balance is read live from the vault on-chain.
+          Deposit, say, 20 USDC. Your balance is read live from the vault on-chain.
         </Step>
         <Step n={4} title="Create and pin a rule">
-          On the Rules tab, create a rule (for example max $5 per payment, only to one address) and
-          pin it on-chain with one signature. See <A to="/docs/rules">Rules</A>.
+          On the Rules tab, create a private rule with a $5 per-payment cap and an allowlist of the
+          one address you will pay, then pin it on-chain with one signature.
         </Step>
         <Step n={5} title="Make a bounded payment">
-          On the Agent tab, pay within the rule. A payment that breaks the rule is refused; one that
-          obeys it settles in USDC. See <A to="/docs/spending">Spending</A>.
+          On the Agent tab, pay that address $3. It settles in USDC. Try $8 and it is refused before
+          anything moves. See <A to="/docs/spending">Spending</A>.
         </Step>
       </Steps>
       <Callout kind="tip" title="Connecting an agent instead?">
@@ -325,15 +350,16 @@ function RulesDoc() {
     <>
       <Lead>
         Rules are the limits your agent must obey. You author them once in one builder, and each
-        rule is born private or public and keeps that form.
+        rule is born private or public and keeps that form. This page walks the mechanics, then
+        shows real rules you can copy.
       </Lead>
 
       <H2 id="create">Create a rule</H2>
       <P>
         On the Rules tab, choose New rule, pick the form (private or public), set one or more
         clauses (per-payment cap, rolling cap and window, allowlist, per-payee cap, velocity,
-        calendar, and so on), and save. Saving is free and takes no signature; it mints the rule and
-        keeps a copy on your device.
+        calendar), and save. Saving is free and takes no signature; it mints the rule and keeps a
+        copy on your device.
       </P>
 
       <H2 id="pin">Pin to go live</H2>
@@ -342,6 +368,43 @@ function RulesDoc() {
         usable: a private rule pins its commitment, a public rule writes its cleartext clauses.
         Until a rule is pinned, the vault will not authorize a spend under it.
       </P>
+
+      <H2 id="examples">Rules by example</H2>
+      <P>Five rules that cover most needs. Set them on the Rules tab with exactly these clauses.</P>
+
+      <UseCase label="Private" title="Contractor payroll">
+        Pay a fixed roster of contractors, no one else, capped per person and in total each month.
+        <br />
+        Clauses: allowlist = your contractors; per-payee cap = $2,000; rolling cap = $20,000 per 30
+        days. Spend with a private disburse (one proof pays up to four at once).
+      </UseCase>
+
+      <UseCase label="Public / Fast" title="Metered API budget">
+        Let an agent call a paid data API all day without a signature per call, bounded tightly.
+        <br />
+        Clauses: allowlist = the API payout address; per-payment max = $0.05; velocity = 1,000 per
+        day; rolling cap = $40 per day. Run it as a session key (Fast lane).
+      </UseCase>
+
+      <UseCase label="Private" title="Subscription">
+        Pay one vendor the same amount on a schedule, and nothing off-schedule.
+        <br />
+        Clauses: allowlist = the vendor; exact amount = $20 (set min equal to max); calendar =
+        monthly; velocity = 1 per month.
+      </UseCase>
+
+      <UseCase label="Private" title="Agent allowance">
+        A general, bounded wallet for an agent to spend as it sees fit, within hard limits.
+        <br />
+        Clauses: open payee (no allowlist); per-payment max = $10; rolling cap = $200 per week;
+        velocity = 50 per week.
+      </UseCase>
+
+      <UseCase label="Private" title="Grant or bounty disbursement">
+        Pay approved recipients up to a fixed amount each, with a hard program total.
+        <br />
+        Clauses: allowlist = recipients; per-payee cap = $500; rolling cap = $5,000 per 90 days.
+      </UseCase>
 
       <H2 id="edit">Editing replaces the rule</H2>
       <P>
@@ -358,14 +421,15 @@ function RulesDoc() {
       <H2 id="globals">Make a rule global</H2>
       <P>
         Mark a rule as the global for its lane to apply it on top of every spend in that lane (an
-        AND filter). There is at most one global-private and one global-public, each set and cleared
-        by a wallet signature.
+        AND filter). For example, keep your payroll and allowance rules separate, but set a
+        global-private denylist so neither can ever pay a sanctioned address. There is at most one
+        global-private and one global-public, each set and cleared by a wallet signature.
       </P>
 
       <H2 id="keys">Rule keys</H2>
       <P>
-        To let an agent spend under a rule, you hand it a single opaque key copied from the rule, no
-        raw secrets shown:
+        To let an agent spend under a rule, you hand it a single opaque key copied from the rule,
+        with no raw secrets shown:
       </P>
       <UL>
         <LI>
@@ -385,48 +449,81 @@ function RulesDoc() {
   );
 }
 
+const SDK_DISBURSE = `import { createSpender } from '@clevercon/agent-sdk/spender';
+
+// CLEVERCON_POLICY_KEY (from the payroll rule) is set in the agent's env.
+const cc = createSpender({ apiKey: process.env.CLEVERCON_API_KEY! });
+
+// One proof pays up to four contractors at once.
+await cc.disbursePrivate([
+  { payee: 'G...ALICE', amount: 2000 },
+  { payee: 'G...BOB', amount: 1500 },
+  { payee: 'G...CAROL', amount: 1800 },
+]);`;
+
+const SDK_SESSION_PAY = `import { createSessionSpender } from '@clevercon/agent-sdk/sessions';
+
+// The agent holds only the session key (CLEVERCON_SESSION_SECRET).
+const spender = createSessionSpender(process.env.CLEVERCON_SESSION_SECRET!);
+
+// Pay the API per call, no per-payment proof, instant, bounded on-chain.
+await spender.pay('G...DATA_API', 0.05);
+const { remaining } = await spender.scope(); // watch the budget`;
+
 function Spending() {
   return (
     <>
       <Lead>
-        How an agent actually spends, in the app and programmatically, and how to pick the right
-        lane.
+        How an agent actually spends, in the app and in code, with a worked example for each lane.
       </Lead>
 
       <H2 id="private">Private spend (default)</H2>
       <P>
-        The headline path: a payment is proven locally against your pinned private rule and only the
-        proof is relayed. No key signs it, and the server never sees your rule. In the app this is
-        the Agent and Disburse flows; one proof can authorize up to four payees at once. Best for
-        larger or sensitive payments.
+        A payment is proven locally against your pinned private rule and only the proof is relayed.
+        No key signs it, and the server never sees your rule. In the app this is the Agent and
+        Disburse flows; one proof can authorize up to four payees at once.
+      </P>
+      <UseCase title="Pay three contractors from payroll">
+        In the app: Disburse tab, pick the payroll rule, add the three addresses and amounts,
+        approve. One in-browser proof pays all three. Programmatically, the same thing:
+      </UseCase>
+      <CodeBlock code={SDK_DISBURSE} lang="ts" />
+      <P>
+        Over MCP the agent calls <Code>disburse_private</Code> with the same lines; see{' '}
+        <A to="/docs/mcp">MCP server</A>.
       </P>
 
-      <H2 id="managed-sessions">Managed Sessions (hands-off public)</H2>
+      <H2 id="public">Public / Fast spend</H2>
+      <P>
+        A bounded on-chain session (cap, allowlist, expiry) authorizes spends with no per-payment
+        proof, for high-frequency low-value work. The owner authorizes the session once; the agent
+        runs with only the session key.
+      </P>
+      <UseCase title="An agent pays a data API per call">
+        You authorize a session on the Vault tab (Agent keys): cap $40, allowlist the API address,
+        expiry 7 days, bound to the metered-API rule. The agent then pays per call with no prompt:
+      </UseCase>
+      <CodeBlock code={SDK_SESSION_PAY} lang="ts" />
+
+      <H2 id="managed">Managed Sessions (hands-off)</H2>
       <P>
         A Managed Session is a bounded key the platform signs with, hands-off, within a scope you
         set once on the Vault tab (a spend cap, a payee allowlist, an expiry, and one of your public
-        rules). It is enforced on-chain and revocable in one click, so the platform can never exceed
-        the scope. Best for hands-off, low-value, or metered spending where you are not present.
-      </P>
-
-      <H2 id="agent-keys">Self-custody agent keys</H2>
-      <P>
-        For a persistent agent you run yourself, authorize a session key your agent holds: generate
-        one in the app or paste your own address. The agent signs its own bounded spends directly
-        against Soroban, so no secret ever touches the platform. This is the self + public lane.
+        rules). It is enforced on-chain and revocable in one click. Best for hands-off, low-value,
+        or metered spending where you are not present to run an agent yourself.
       </P>
 
       <H2 id="agent-wallet">Agent-key mode (external services)</H2>
       <P>
         To reach services outside CleverCon, the vault tops up your agent's own wallet in small,
-        policy-bounded amounts, and the agent pays those services itself (for example metered API
-        calls) with that balance. The vault bounds the allowance; the agent chooses the counterparty
-        beyond the cap.
+        policy-bounded amounts, and the agent pays those services itself with that balance. The
+        vault bounds the allowance; the agent chooses the counterparty beyond the cap.
       </P>
 
       <Callout kind="tip" title="Which lane?">
-        Use private for anything you would miss. Use a public session for high-frequency low-value
-        work. Use a Managed Session when you want it hands-off without running your own agent.
+        Use private for anything you would miss (payroll, grants, larger or one-off payments). Use a
+        public session for high-frequency low-value work (metered APIs, streaming). Use a Managed
+        Session when you want it hands-off without running your own agent.
       </Callout>
     </>
   );
@@ -436,38 +533,107 @@ function Marketplace() {
   return (
     <>
       <Lead>
-        Beyond paying addresses, an agent can hire from a directory of services and pay per call,
-        with trust backed by verification, disputes, and settlement-earned reputation.
+        Beyond paying addresses, CleverCon is an economy: a directory of services an agent can hire
+        and pay per use, with trust backed by verification, disputes, and settlement-earned
+        reputation. This is where a bounded, private spending account becomes genuinely useful: your
+        agent can go out and get work done.
       </Lead>
 
-      <H2 id="hire">Hiring a service</H2>
-      <P>
-        Browse the Services tab, pick a service, and hire it under a rule. The vault locks the
-        budget and releases payment per step as the work is accepted. You pay only for delivery that
-        passes the service's verification.
-      </P>
-
-      <H2 id="tiers">Verification tiers</H2>
-      <P>How a result is accepted depends on the service's tier:</P>
+      <H2 id="participants">Who takes part</H2>
       <UL>
         <LI>
-          <B>T1 Verifiable:</B> re-derived, hashed, or signature-checked, so payment releases
-          instantly and trustlessly.
+          <B>Buyers</B> fund a vault and let an agent hire and pay for work, all within a private
+          rule.
         </LI>
         <LI>
-          <B>T2 Attestable:</B> released after a short dispute window, with an advisory quality
-          score.
+          <B>Providers</B> list a service (an API, a model, a skill, or human work) and earn USDC
+          per accepted job. See <A to="/docs/providers">Be a provider</A>.
         </LI>
         <LI>
-          <B>T3 Human:</B> released when you approve or a milestone is met.
+          <B>Agents</B> are the ones doing the hiring and paying, over the app, the SDK, or MCP.
         </LI>
       </UL>
+
+      <H2 id="hire">Hiring a service</H2>
+      <P>Hiring runs the same bounded, pay-on-delivery flow every time:</P>
+      <Flow
+        steps={[
+          { label: 'Discover', sub: 'search the directory' },
+          { label: 'Hire', sub: 'under a rule' },
+          { label: 'Vault locks', sub: 'the budget' },
+          { label: 'Deliver', sub: 'provider does the work' },
+          { label: 'Verify', sub: 'by the tier' },
+          { label: 'Release', sub: 'paid per step' },
+        ]}
+      />
+      <P>
+        You pay only for delivery that passes the service's verification, and anything left is
+        refunded to available.
+      </P>
+
+      <H2 id="tiers">Verification tiers, by example</H2>
+      <P>Each service declares how its result is accepted, which sets how fast it is paid.</P>
+      <UseCase label="T1 Verifiable" title="A price oracle">
+        An agent hires a price feed for 0.05 USDC. The result is re-derived and checked against the
+        ledger, so it is accepted and paid instantly, trustlessly, no waiting.
+      </UseCase>
+      <UseCase label="T2 Attestable" title="A research summarizer">
+        An agent pays 0.50 USDC to summarize a document. The output releases after a short dispute
+        window, with an advisory quality score; if it is wrong, the buyer disputes before release.
+      </UseCase>
+      <UseCase label="T3 Human" title="A commissioned contribution">
+        A team commissions a design or an open-source contribution for 200 USDC. The budget is
+        locked and released only when the buyer approves the delivered work or a milestone is met.
+      </UseCase>
 
       <H2 id="disputes">Disputes and reputation</H2>
       <P>
         A buyer can open a dispute on a job; the provider responds, and an arbiter settles it,
-        splitting the locked remainder. Reputation is settlement-gated, built from real settled
-        jobs, unique payers, and dispute rate, not self-reported stars, so it is hard to fake.
+        splitting the locked remainder between refund and payout. Reputation is settlement-gated: it
+        is built from real settled jobs, unique payers, and dispute rate, not self-reported stars,
+        so it is hard to fake and it drives discovery. A provider that is more verifiable (T1) is
+        paid instantly and ranks higher, which is the incentive to be checkable.
+      </P>
+
+      <H2 id="metered">The metered-pay rail (x402 / MPP)</H2>
+      <P>The same economy extends to metered, pay-per-call services in two directions.</P>
+      <UL>
+        <LI>
+          <B>Consume</B> <Status kind="dev" />: the vault tops up an agent wallet under your rule,
+          and the agent pays external metered endpoints per call or per token with that balance.
+        </LI>
+        <LI>
+          <B>Offer</B> <Status kind="soon" />: expose a CleverCon service over the metered rail so
+          any agent, including ones not on CleverCon, can pay it, with the verification and
+          reputation of the directory attached.
+        </LI>
+      </UL>
+
+      <H2 id="status">What is live, and where this is going</H2>
+      <P>The directory is honest about maturity. Stated plainly:</P>
+      <Table
+        head={['Capability', 'Status']}
+        rows={[
+          [<>Hire a registered service, pay per step under a rule</>, <Status kind="live" />],
+          [<>Verification tiers (T1 / T2 / T3) and acceptance checks</>, <Status kind="live" />],
+          [
+            <>Disputes (open, respond, settle) and settlement-gated reputation</>,
+            <Status kind="live" />,
+          ],
+          [<>Provider registration and payout-ownership proof</>, <Status kind="live" />],
+          [<>Consume external metered (x402 / MPP) services under policy</>, <Status kind="dev" />],
+          [
+            <>Offer CleverCon services over the metered rail (facilitator)</>,
+            <Status kind="soon" />,
+          ],
+          [<>Provider bonds (a slashable stake that lifts ranking)</>, <Status kind="soon" />],
+          [<>A richer directory (filter by trust, tier, bond, price)</>, <Status kind="soon" />],
+        ]}
+      />
+      <P>
+        The direction is an agent capability marketplace: list a bot, an API, or a skill once, and
+        every agent can hire it and pay per use, bounded and private, with trust earned through real
+        settlements.
       </P>
 
       <Callout kind="note" title="Want to offer a service?">
@@ -523,7 +689,8 @@ function DeveloperQuickstart() {
       <P>Create a rule in the app, copy its policy key, and add CleverCon to your MCP client:</P>
       <CodeBlock code={MCP_PRIVATE} title="claude_desktop_config.json" />
       <P>
-        Restart the client and your agent has the CleverCon tools. Full tool list and config in{' '}
+        Restart the client and your agent has the CleverCon tools. Then just ask it, for example:{' '}
+        <B>"Pay G...ALICE 2 USDC for the logo work."</B> Full tool list and config in{' '}
         <A to="/docs/mcp">MCP server</A>.
       </P>
 
@@ -651,38 +818,39 @@ function Mcp() {
           ],
         ]}
       />
+
+      <H2 id="prompts">Example prompts</H2>
+      <P>Once connected, you drive it in natural language:</P>
+      <UL>
+        <LI>"Pay G...ALICE 2 USDC for the logo work, privately." (private lane)</LI>
+        <LI>"Split 30 USDC across these three addresses." (private disburse, one proof)</LI>
+        <LI>"Pay the data API 0.05 for this call." (public session)</LI>
+        <LI>"What is my remaining session budget?" (session_scope)</LI>
+        <LI>"Find a price-oracle service and hire it with a 2 USDC budget." (hire)</LI>
+      </UL>
+
       <Callout kind="warn" title="Retired tools">
         The legacy <Code>pay</Code> and <Code>disburse</Code> tools (a managed server-signed path)
         are retired. Use <Code>disburse_private</Code> for private self-custody spend, or{' '}
         <Code>session_pay</Code> for the public lane.
       </Callout>
-
-      <H2 id="security">Security model</H2>
-      <UL>
-        <LI>
-          Non-custodial: in the private and public-local lanes you hold the only secret; the server
-          holds no key that can move your funds.
-        </LI>
-        <LI>Bounded on-chain: every spend is checked against your pinned rule or session scope.</LI>
-        <LI>Private: your private rule is proven locally and never published.</LI>
-      </UL>
     </>
   );
 }
 
 const SDK_SESSIONS = `import { registerSession, createSessionSpender } from '@clevercon/agent-sdk/sessions';
 
-// Owner: authorize a bounded session once
+// Owner: authorize a bounded session once (the metered-API budget)
 const { sessionSecret } = await registerSession({
   ownerSecret: process.env.OWNER_SECRET!,
-  spendCap: 20,
-  allowlist: ['G...PAYEE'],
+  spendCap: 40,
+  allowlist: ['G...DATA_API'],
   expirySecs: 7 * 24 * 3600,
 });
 
-// Agent: spend with ONLY the session key
+// Agent: spend with ONLY the session key, per call, no proof
 const spender = createSessionSpender(sessionSecret);
-await spender.pay('G...PAYEE', 1);
+await spender.pay('G...DATA_API', 0.05);
 const scope = await spender.scope(); // remaining budget, allowlist, expiry`;
 
 function Sdk() {
@@ -697,20 +865,23 @@ function Sdk() {
       <H2 id="private">Private spend</H2>
       <P>
         <Code>createSpender().disbursePrivate</Code> proves your hidden policy locally and relays
-        only a proof. One proof authorizes up to four payees.
+        only a proof. One proof authorizes up to four payees. Here is the contractor payroll
+        example:
       </P>
-      <CodeBlock code={SDK_PRIVATE} lang="ts" />
+      <CodeBlock code={SDK_DISBURSE} lang="ts" />
       <P>
-        Reads and config stay on the spender: <Code>getBudget()</Code>, <Code>getActivity()</Code>,{' '}
-        <Code>setLimit()</Code>, <Code>listLimits()</Code>, <Code>hire()</Code>. The legacy{' '}
-        <Code>pay</Code> and <Code>disburse</Code> are retired and throw.
+        Provide the policy with <Code>policyBundle</Code> in options or{' '}
+        <Code>CLEVERCON_POLICY_KEY</Code> in the env. Reads and config stay on the spender:{' '}
+        <Code>getBudget()</Code>, <Code>getActivity()</Code>, <Code>setLimit()</Code>,{' '}
+        <Code>listLimits()</Code>, <Code>hire()</Code>. The legacy <Code>pay</Code> and{' '}
+        <Code>disburse</Code> are retired and throw.
       </P>
 
       <H2 id="public">Public / Fast spend</H2>
       <P>
         The <Code>@clevercon/agent-sdk/sessions</Code> subpath mints and spends a bounded session
         key. The owner registers it once; the agent runs with only the key, signing directly against
-        Soroban.
+        Soroban. Here is the metered-API example:
       </P>
       <CodeBlock code={SDK_SESSIONS} lang="ts" />
 
@@ -810,12 +981,21 @@ function Providers() {
   return (
     <>
       <Lead>
-        Turn a function into a service the marketplace can hire and pay per call. The SDK implements
-        the fulfillment contract, so a provider is a single file with no framework.
+        The other side of the economy: turn a function, an API, a model, or a skill into a service
+        the marketplace can hire and pay per use. The SDK implements the fulfillment contract, so a
+        provider is a single file with no framework.
       </Lead>
+
+      <UseCase title="Monetize a trading signal or a data feed">
+        You run a bot that produces a useful signal. List it once, declare a price per call, and any
+        agent on CleverCon can pay you in USDC per use, non-custodially, with the buyer's spend
+        bounded by their own rule. You never hold their keys; they never hold yours.
+      </UseCase>
+
+      <H2 id="build">Build a provider</H2>
       <CodeBlock code={PROVIDER_CODE} lang="ts" />
 
-      <H2 id="contract">The fulfillment contract</H2>
+      <H3>The fulfillment contract</H3>
       <Table
         head={['Exchange', 'Detail']}
         rows={[
@@ -825,12 +1005,31 @@ function Providers() {
           ],
           [
             'output',
-            'string sent verbatim, or an object JSON-encoded; truncated to a sane maximum',
+            'a string sent verbatim, or an object JSON-encoded; truncated to a sane maximum',
           ],
           ['failure', 'a non-2xx or a timeout fails the step, so the vault does not pay for it'],
           [<Code>GET /health</Code>, 'liveness'],
         ]}
       />
+
+      <H2 id="tier">Pick a verification tier</H2>
+      <P>
+        Higher verifiability means instant pay and higher trust, which is the incentive to be
+        checkable.
+      </P>
+      <UL>
+        <LI>
+          <B>T1</B>: your output can be re-derived, hashed, or signature-checked (a price feed, a
+          VRF, a content-addressed fetch). Paid instantly.
+        </LI>
+        <LI>
+          <B>T2</B>: your output is judged against a schema with a dispute window (a summary, a
+          translation, an extraction).
+        </LI>
+        <LI>
+          <B>T3</B>: human or milestone work, released on buyer approval.
+        </LI>
+      </UL>
 
       <H2 id="register">Register and get paid</H2>
       <Steps>
@@ -848,9 +1047,31 @@ function Providers() {
       </Steps>
       <P>
         Payment settles to your payout address per accepted step, and settlement builds your
-        reputation, which drives discovery. Higher verifiability (T1) means instant pay and higher
-        trust. See <A to="/docs/marketplace">Marketplace</A> for the tiers.
+        reputation, which drives discovery.
       </P>
+
+      <H2 id="monetize">Monetization and the verified mark</H2>
+      <P>How a service earns trust and revenue is growing in this order:</P>
+      <Table
+        head={['Capability', 'Status']}
+        rows={[
+          [<>Per-call pricing in USDC, settled on accepted delivery</>, <Status kind="live" />],
+          [
+            <>Reputation from real settlements (unique payers, dispute rate)</>,
+            <Status kind="live" />,
+          ],
+          [<>Free and subscription pricing models</>, <Status kind="dev" />],
+          [
+            <>A verified mark (passes its own check, N settlements, payout proof)</>,
+            <Status kind="dev" />,
+          ],
+          [<>Provider bonds (a slashable stake that lifts ranking)</>, <Status kind="soon" />],
+          [<>Provider analytics (volume, revenue, top capabilities)</>, <Status kind="soon" />],
+        ]}
+      />
+      <Callout kind="note">
+        See <A to="/docs/marketplace">Marketplace</A> for the buyer side, the tiers, and disputes.
+      </Callout>
     </>
   );
 }
@@ -860,7 +1081,9 @@ function Providers() {
 function Reference() {
   return (
     <>
-      <Lead>Networks, the live testnet contracts and asset, and config token prefixes.</Lead>
+      <Lead>
+        Networks, the live testnet contracts and asset, config token prefixes, and errors.
+      </Lead>
 
       <H2 id="network">Network</H2>
       <P>
@@ -1060,21 +1283,21 @@ export const DOCS: DocPage[] = [
     slug: 'rules',
     group: 'For users',
     title: 'Rules',
-    description: 'Author, pin, edit, and share private and public rules.',
+    description: 'Author, pin, edit, and share rules, with five real examples.',
     Body: RulesDoc,
   },
   {
     slug: 'spending',
     group: 'For users',
     title: 'Spending',
-    description: 'The spend lanes in the app, and when to use each.',
+    description: 'The spend lanes, with a worked example for each.',
     Body: Spending,
   },
   {
     slug: 'marketplace',
     group: 'For users',
     title: 'Marketplace',
-    description: 'Hire services, verification tiers, disputes, and reputation.',
+    description: 'Hire services, verification tiers, disputes, reputation, and the metered rail.',
     Body: Marketplace,
   },
   {
@@ -1088,14 +1311,14 @@ export const DOCS: DocPage[] = [
     slug: 'mcp',
     group: 'For developers',
     title: 'MCP server',
-    description: 'The tools, the two lanes, and config.',
+    description: 'The tools, the two lanes, config, and example prompts.',
     Body: Mcp,
   },
   {
     slug: 'sdk',
     group: 'For developers',
     title: 'SDK',
-    description: 'createSpender, sessions, receipts, and more.',
+    description: 'createSpender, sessions, receipts, with worked examples.',
     Body: Sdk,
   },
   {
@@ -1109,7 +1332,7 @@ export const DOCS: DocPage[] = [
     slug: 'providers',
     group: 'For developers',
     title: 'Be a provider',
-    description: 'List a service agents can hire and pay.',
+    description: 'List a service agents can hire and pay, and earn.',
     Body: Providers,
   },
   {

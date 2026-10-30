@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, Fragment, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, Copy, ArrowRight, Info, Lightbulb, AlertTriangle } from 'lucide-react';
 
@@ -190,6 +190,75 @@ export function Step({ n, title, children }: { n: number; title: string; childre
         )}
       </div>
     </li>
+  );
+}
+
+/** A worked, relatable example (a real scenario) set apart from the prose. */
+export function UseCase({
+  label = 'Use case',
+  title,
+  children,
+}: {
+  label?: string;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="my-6 rounded-xl border border-violet-500/20 bg-gradient-to-b from-violet-500/[0.07] to-transparent p-5">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-violet-400">
+        {label}
+      </div>
+      <div className="mt-1 text-[15px] font-semibold text-white">{title}</div>
+      <div className="mt-2 text-[14px] leading-relaxed text-slate-300">{children}</div>
+    </div>
+  );
+}
+
+const STATUS_MAP: Record<string, { label: string; cls: string }> = {
+  live: { label: 'Live', cls: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' },
+  dev: { label: 'In development', cls: 'border-violet-500/30 bg-violet-500/10 text-violet-300' },
+  soon: { label: 'Planned', cls: 'border-white/10 bg-white/5 text-slate-400' },
+};
+
+/** A small status pill, so the docs are honest about what is live vs planned. */
+export function Status({ kind }: { kind: 'live' | 'dev' | 'soon' }) {
+  const s = STATUS_MAP[kind];
+  return (
+    <span
+      className={`ml-2 inline-flex items-center rounded-full border px-2 py-0.5 align-middle text-[10.5px] font-medium ${s.cls}`}
+    >
+      {s.label}
+    </span>
+  );
+}
+
+/** A horizontal pipeline with a staggered pulse, to show a spend or job flow. */
+export function Flow({ steps }: { steps: { label: string; sub?: string }[] }) {
+  return (
+    <div className="my-6 flex flex-wrap items-stretch gap-2">
+      {steps.map((s, i) => (
+        <Fragment key={s.label}>
+          <div className="min-w-[128px] flex-1 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+            <div className="flex items-center gap-2">
+              <span
+                className="h-2 w-2 shrink-0 rounded-full bg-violet-400"
+                style={{
+                  animation: 'pulse 1.8s ease-in-out infinite',
+                  animationDelay: `${i * 0.3}s`,
+                }}
+              />
+              <span className="text-[13px] font-medium text-white">{s.label}</span>
+            </div>
+            {s.sub && <div className="mt-1 text-[12px] leading-snug text-slate-500">{s.sub}</div>}
+          </div>
+          {i < steps.length - 1 && (
+            <div className="hidden items-center text-slate-600 sm:flex">
+              <ArrowRight size={14} />
+            </div>
+          )}
+        </Fragment>
+      ))}
+    </div>
   );
 }
 

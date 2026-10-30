@@ -65,15 +65,14 @@ Private and sovereign by default, with an optional fast session mode for high-fr
 
 ## What makes it different
 
-|  | Transparent on-chain enforcers | Custodial agent wallets | SDK-only tools | **CleverCon** |
-|---|---|---|---|---|
-| Funds non-custodial | Varies | No | Varies | **Yes** |
-| Spending enforced on-chain | Yes | No (off-chain) | No | **Yes** |
-| Policy kept private | No | n/a | No | **Yes** |
-| Agent-native access (MCP) | Rare | Rare | No | **Yes** |
-| A built-in economy to spend in | No | No | No | **Yes** |
+CleverCon brings four properties together in one layer:
 
-Others enforce agent spending on-chain but leave the policy public, or offer a private account with no economy around it. CleverCon is the only one with on-chain enforcement, a private policy, **and** an agent economy to use it in.
+- **Non-custodial by construction.** The vault holds the funds and the platform has no key that can move them outside your rule.
+- **Enforced on-chain.** Every payment is checked by the contract against your rule before any funds move.
+- **Private policy.** Your caps, allowlist, and limits are committed and verified on-chain without being published.
+- **An economy to spend in.** Direct payments plus a service directory where agents hire, pay per call, verify, and dispute, with settlement-earned reputation.
+
+Non-custodial, on-chain-enforced, private, and agent-native over MCP and the SDK: that combination is what defines CleverCon.
 
 ## What we are building toward
 

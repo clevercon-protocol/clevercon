@@ -95,7 +95,7 @@ const PILLARS = [
     border: 'border-violet-800/40',
     tag: 'Private',
     title: 'Rules only you can see',
-    body: 'Your limits are committed and checked on-chain without being published. Your budget and approved payees stay yours, now enforced by a real zero-knowledge proof verified on-chain (live on testnet), not a trusted server. Transparent enforcers and escrows cannot do this.',
+    body: 'Your limits are committed and checked on-chain without being published. Your budget and approved payees stay yours, enforced by a real zero-knowledge proof verified on-chain (live on testnet), not a trusted server.',
   },
   {
     icon: Boxes,
@@ -731,10 +731,10 @@ export function Landing() {
               Enforcement on-chain. Rules kept private.
             </h2>
             <p className="mt-4 text-slate-400 leading-relaxed">
-              Most agent-payment tools put your budget, your approved payees, and your limits on a
-              public ledger for anyone to read. CleverCon is built so the contract enforces your
-              spending policy and proves it was followed, without revealing the policy. That is what
-              separates it from transparent, custodial, or SDK-only alternatives.
+              Your budget, your approved payees, and your limits do not belong on a public ledger
+              for anyone to read. CleverCon is built so the contract enforces your spending policy
+              and proves it was followed, without revealing the policy itself. That is what makes it
+              safe to hand an autonomous agent real money.
             </p>
             <p className="mt-4 text-sm text-slate-500">
               Stated honestly: what stays private is the policy (your caps, allowlist, and limits),
