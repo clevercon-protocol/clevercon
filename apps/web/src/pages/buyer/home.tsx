@@ -307,6 +307,7 @@ export function CommandChat() {
   const privateRules = policies.filter(
     (p) =>
       (p.form === 'private' || (!p.form && p.isPrivate)) &&
+      p.status !== 'archived' &&
       pinnedSet.has(p.commitment.toLowerCase()),
   );
   // The global-private rule, if set AND it is a pinned private rule (only a pinned

@@ -588,8 +588,8 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 }
 
 type Reveal =
-  | { kind: 'private'; commitment: string; policyKey: string }
-  | { kind: 'public'; ruleId: string; ruleKey: string; chips: string[] };
+  | { kind: 'private'; commitment: string; policyKey: string; replaced?: boolean }
+  | { kind: 'public'; ruleId: string; ruleKey: string; chips: string[]; replaced?: boolean };
 
 /**
  * Shown once right after a rule is created (or via the view action later). Private:
@@ -602,6 +602,12 @@ function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void })
   if (reveal.kind === 'public') {
     return (
       <div className="space-y-4">
+        {reveal.replaced && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.07] p-3 text-[12px] leading-relaxed text-amber-200">
+            Your previous version was removed on-chain. This is a fresh rule, pin it to make the
+            edit live.
+          </div>
+        )}
         <div className="flex items-start gap-2.5 rounded-xl border border-sky-500/25 bg-sky-500/[0.06] p-3">
           <Eye size={16} className="mt-0.5 shrink-0 text-sky-300" />
           <p className="text-[12.5px] leading-relaxed text-slate-300">
@@ -643,6 +649,12 @@ function RevealPanel({ reveal, onDone }: { reveal: Reveal; onDone: () => void })
   }
   return (
     <div className="space-y-4">
+      {reveal.replaced && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.07] p-3 text-[12px] leading-relaxed text-amber-200">
+          Your previous version was removed on-chain (its commitment unpinned). This is a fresh rule
+          with a new commitment, pin it to make the edit live.
+        </div>
+      )}
       <div className="flex items-start gap-2.5 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] p-3">
         <ShieldCheck size={16} className="mt-0.5 shrink-0 text-emerald-300" />
         <p className="text-[12.5px] leading-relaxed text-slate-300">
@@ -1129,8 +1141,33 @@ export function RulesManager() {
     setOpen(true);
   };
 
+  // Remove a rule's ON-CHAIN authority so a replaced or deleted rule can no longer
+  // authorize a spend: clear it as the global if set, then unpin the private
+  // commitment / clear the public rule. Each on-chain step is wallet-signed and runs
+  // only when the rule is actually live, so a never-pinned rule is a no-op (no prompt).
+  const clearOnChainAuthority = async (p: Policy) => {
+    const id = p.commitment.toLowerCase();
+    const priv = (p.form ?? (p.isPrivate ? 'private' : 'public')) === 'private';
+    if (priv) {
+      if (globalPrivate === id) await clearGlobalPrivate();
+      if (pinnedSet.has(id)) await unpinCommitment(p.commitment);
+    } else {
+      // clear_public_rule also drops the global if this rule was it.
+      const { rule } = await getPublicRule(p.commitment);
+      if (rule) await clearPublicRule(p.commitment);
+    }
+  };
+
   const save = useMutation({
     mutationFn: async () => {
+      // Editing replaces the old version: FIRST strip the old rule's on-chain
+      // authority (unpin the private commitment / clear the public rule, and drop it
+      // as global if it was), so it cannot keep authorizing spends or linger as a
+      // pinned orphan. Done before the create so a declined signature aborts cleanly.
+      // The server then archives the old row (supersedes); the new rule is unpinned
+      // and the user pins it to go live.
+      const prior = editingId ? policies.find((x) => x.id === editingId) : undefined;
+      if (prior) await clearOnChainAuthority(prior);
       // PUBLIC = a named cleartext rule. Saving it is LOCAL + a server record only,
       // with NO signature (exactly like a private rule's create step): we mint (or
       // reuse, when editing) a 32-byte rule id and keep the clauses on the device.
@@ -1187,11 +1224,14 @@ export function RulesManager() {
         }
         qc.invalidateQueries({ queryKey: ['policies'] });
         qc.invalidateQueries({ queryKey: ['public-rule', ruleId] });
+        qc.invalidateQueries({ queryKey: ['pinned-commitments'] });
+        qc.invalidateQueries({ queryKey: ['globals'] });
         setReveal({
           kind: 'public',
           ruleId,
           ruleKey: packRuleKey(ruleId),
           chips: draftChips(draft),
+          replaced: !!editingId,
         });
         return;
       }
@@ -1203,36 +1243,35 @@ export function RulesManager() {
       }
       cacheLocalSalt(p.commitment, salt);
       qc.invalidateQueries({ queryKey: ['policies'] });
+      qc.invalidateQueries({ queryKey: ['pinned-commitments'] });
+      qc.invalidateQueries({ queryKey: ['globals'] });
       setReveal({
         kind: 'private',
         commitment: p.commitment,
         policyKey: packPolicyKey({ rules: draftToBundleRules(draft), salt }),
+        replaced: !!editingId,
       });
     },
   });
 
-  // Deleting a rule must also remove its ON-CHAIN authority, not just the server
-  // record: clear it as the global if set, then remove it on-chain (unpin the
-  // private commitment / clear the public rule) so a "deleted" rule can no longer
-  // authorize a spend. Each on-chain step is wallet-signed.
+  // Deleting a rule removes its on-chain authority (clearOnChainAuthority) AND the
+  // saved record, so a "deleted" rule can no longer authorize a spend.
   const del = useMutation({
     mutationFn: async (p: Policy) => {
-      const id = p.commitment.toLowerCase();
-      const priv = (p.form ?? (p.isPrivate ? 'private' : 'public')) === 'private';
-      if (priv) {
-        if (globalPrivate === id) await clearGlobalPrivate();
-        if (pinnedSet.has(id)) await unpinCommitment(p.commitment);
-      } else {
-        // Only sign a clear if the rule is actually live on-chain (an unpinned public
-        // rule has nothing to clear). clear_public_rule also drops the global if this
-        // rule was it, so no separate global clear is needed.
-        const { rule } = await getPublicRule(p.commitment);
-        if (rule) await clearPublicRule(p.commitment);
-      }
+      await clearOnChainAuthority(p);
       await deletePolicy(p.id);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['policies'] });
+      qc.invalidateQueries({ queryKey: ['pinned-commitments'] });
+      qc.invalidateQueries({ queryKey: ['globals'] });
+    },
+  });
+  // Clean up an ORPHANED pin: a commitment still pinned on-chain from a replaced or
+  // removed rule, with no active saved rule, so it could still authorize a spend.
+  const unpinOrphan = useMutation({
+    mutationFn: (commitment: string) => unpinCommitment(commitment),
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['pinned-commitments'] });
       qc.invalidateQueries({ queryKey: ['globals'] });
     },
@@ -1294,6 +1333,11 @@ export function RulesManager() {
   });
 
   const activePolicies = policies.filter((p) => p.status !== 'archived');
+  // Private commitments that are pinned on-chain but have no active saved rule: left
+  // over from a replaced or removed rule, so they can still authorize a private spend
+  // even though no card represents them. Surface them so they can be unpinned.
+  const activeCommitments = new Set(activePolicies.map((p) => p.commitment.toLowerCase()));
+  const orphanPins = pinnedList.filter((c) => !activeCommitments.has(c.toLowerCase()));
   const lane = (p: Policy): 'private' | 'public' => p.form ?? (p.isPrivate ? 'private' : 'public');
   const shown =
     formFilter === 'all' ? activePolicies : activePolicies.filter((p) => lane(p) === formFilter);
@@ -1334,6 +1378,33 @@ export function RulesManager() {
           <Plus size={15} /> New rule
         </button>
       </div>
+
+      {orphanPins.length > 0 && (
+        <div className="mb-4 rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-4">
+          <div className="text-[13px] font-semibold text-amber-200">Orphaned on-chain rules</div>
+          <p className="mt-0.5 max-w-xl text-[12px] leading-relaxed text-amber-200/70">
+            {orphanPins.length} commitment{orphanPins.length > 1 ? 's are' : ' is'} still pinned
+            on-chain from a replaced or removed rule, with no saved rule here. A pinned commitment
+            can still authorize a private spend, so unpin {orphanPins.length > 1 ? 'them' : 'it'}.
+          </p>
+          <ul className="mt-2.5 space-y-1.5">
+            {orphanPins.map((c) => (
+              <li key={c} className="flex items-center justify-between gap-3">
+                <span className="font-mono text-[12px] text-slate-400">
+                  {c.slice(0, 10)}…{c.slice(-6)}
+                </span>
+                <button
+                  onClick={() => unpinOrphan.mutate(c)}
+                  disabled={unpinOrphan.isPending}
+                  className={controls.secondary + ' shrink-0 !px-2.5 !py-1 text-[11px]'}
+                >
+                  <Anchor size={11} /> {unpinOrphan.isPending ? 'Unpinning…' : 'Unpin'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Server key (Managed Session) pointer. A server key is cap+expiry only and is
           set up / paused / edited / revoked on the Vault tab; public RULES below

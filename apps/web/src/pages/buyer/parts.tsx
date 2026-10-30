@@ -991,7 +991,7 @@ export function ProveReleaseCard() {
     },
   });
 
-  const usable = policies.filter((p: Policy) => p.isPrivate);
+  const usable = policies.filter((p: Policy) => p.isPrivate && p.status !== 'archived');
   const selected = usable.find((p: Policy) => p.id === policyId);
   const revealed = status?.status === 'READY' || status?.status === 'VERIFIED';
   const canProve =
