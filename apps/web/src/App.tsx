@@ -27,6 +27,7 @@ const ServiceDetail = lazyFrom(() => import('./pages/ServiceDetail'), 'ServiceDe
 const Provider = lazyFrom(() => import('./pages/Provider'), 'Provider');
 const Admin = lazyFrom(() => import('./pages/Admin'), 'Admin');
 const Developer = lazyFrom(() => import('./pages/Developer'), 'Developer');
+const DocsApp = lazyFrom(() => import('./pages/docs/DocsApp'), 'DocsApp');
 
 function RouteFallback() {
   return <p className="text-sm text-slate-500">Loading…</p>;
@@ -41,6 +42,9 @@ export function App() {
             <Routes>
               <Route path="/" element={<Landing />} />
               <Route path="/connect" element={<Connect />} />
+              {/* Public documentation, its own full-page layout (see Shell bare passthrough). */}
+              <Route path="/docs" element={<DocsApp />} />
+              <Route path="/docs/:slug" element={<DocsApp />} />
 
               {/* Buyer console: a layout with secondary nav and focused sub-pages. */}
               <Route

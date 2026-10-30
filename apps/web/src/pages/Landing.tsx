@@ -164,6 +164,12 @@ const OFFERINGS: {
     body: 'Spending rules enforced on-chain but kept private. A real zero-knowledge proof (Groth16 on BLS12-381) is verified on-chain today on testnet, no trusted prover, so the ledger shows a payment was allowed without revealing the rule that allowed it.',
   },
   {
+    icon: Zap,
+    name: 'Sessions and Fast mode',
+    status: 'live',
+    body: 'Private and sovereign by default. For high-frequency, low-value spend, authorize a bounded session key (a cap, an allowlist, an expiry) the vault enforces, so routine payments settle instantly with no per-payment proof.',
+  },
+  {
     icon: Boxes,
     name: 'Agent SDK',
     status: 'live',
@@ -336,7 +342,9 @@ export function Landing() {
     };
     const warm = () => void preloadWallet();
     const hasRic = typeof w.requestIdleCallback === 'function';
-    const id = hasRic ? w.requestIdleCallback!(warm, { timeout: 2500 }) : window.setTimeout(warm, 1500);
+    const id = hasRic
+      ? w.requestIdleCallback!(warm, { timeout: 2500 })
+      : window.setTimeout(warm, 1500);
     return () => {
       if (hasRic && w.cancelIdleCallback) w.cancelIdleCallback(id);
       else window.clearTimeout(id);
@@ -368,6 +376,9 @@ export function Landing() {
             <a href="#privacy" className="hover:text-white transition-colors">
               Privacy
             </a>
+            <Link to="/docs" className="hover:text-white transition-colors">
+              Docs
+            </Link>
           </div>
           <div className="flex items-center gap-3">
             <a
@@ -495,6 +506,12 @@ export function Landing() {
               Published on npm. Point your agent at CleverCon over MCP, or embed the SDK in your own
               app, and it spends within your private limits.
             </p>
+            <Link
+              to="/docs/developer-quickstart"
+              className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-violet-300 transition-colors hover:text-violet-200"
+            >
+              Read the developer docs <ArrowRight size={14} />
+            </Link>
           </Reveal>
           <div className="mt-10 grid gap-5 md:grid-cols-2">
             {[
@@ -784,6 +801,9 @@ export function Landing() {
             <span className="text-xs text-slate-600">Built on Stellar. Testnet.</span>
           </div>
           <div className="flex items-center gap-4">
+            <Link to="/docs" className="text-xs text-slate-400 transition-colors hover:text-white">
+              Docs
+            </Link>
             <a
               href={GITHUB_URL}
               target="_blank"

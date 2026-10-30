@@ -16,6 +16,7 @@ import {
   ChevronsRight,
   Wallet,
   LogOut,
+  BookOpen,
 } from 'lucide-react';
 import { useSession, type Role } from '../store/session';
 import { useWalletAuth } from '../auth/useWalletAuth';
@@ -226,6 +227,11 @@ function NavRail({
         </>
       )}
 
+      <div className={collapsed ? '' : 'pt-4'}>
+        <SectionLabel>Learn</SectionLabel>
+      </div>
+      <Item to="/docs" label="Docs" icon={BookOpen} />
+
       <div className="mt-auto flex flex-col gap-3 pt-6">
         {!collapsed && (
           <div className="flex flex-wrap gap-2 px-1">
@@ -260,8 +266,9 @@ export function Shell({ children }: { children: ReactNode }) {
       return next;
     });
 
-  // The landing page is a full-bleed marketing page with its own chrome.
-  if (loc.pathname === '/') return <>{children}</>;
+  // The landing page and the docs site are full-bleed, with their own chrome.
+  if (loc.pathname === '/' || loc.pathname === '/docs' || loc.pathname.startsWith('/docs/'))
+    return <>{children}</>;
 
   return (
     <div className="relative min-h-screen text-slate-100">
