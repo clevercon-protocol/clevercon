@@ -334,21 +334,24 @@ export function describeSavedLimit(p: { rules?: PolicyRules | null; commitment: 
 
 // The owner's default limit is a local preference: the id of one saved limit that
 // pre-fills each new instruction. It is never a lock (every instruction can override
-// it), which matches the on-chain model where policy is bound per task.
-const DEFAULT_KEY = 'cc:defaultLimit';
+// it), which matches the on-chain model where policy is bound per task. Scoped by the
+// connected account so a different wallet on the same device never inherits it.
+const defaultKey = (account: string) => `cc:defaultLimit:${account}`;
 
-export function getDefaultLimitId(): string {
+export function getDefaultLimitId(account: string): string {
+  if (!account) return '';
   try {
-    return localStorage.getItem(DEFAULT_KEY) ?? '';
+    return localStorage.getItem(defaultKey(account)) ?? '';
   } catch {
     return '';
   }
 }
 
-export function setDefaultLimitId(id: string): void {
+export function setDefaultLimitId(account: string, id: string): void {
+  if (!account) return;
   try {
-    if (id) localStorage.setItem(DEFAULT_KEY, id);
-    else localStorage.removeItem(DEFAULT_KEY);
+    if (id) localStorage.setItem(defaultKey(account), id);
+    else localStorage.removeItem(defaultKey(account));
   } catch {
     // ignore
   }

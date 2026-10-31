@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Layers,
 } from 'lucide-react';
+import { useSession } from '../../store/session';
 import { getPolicies, type Policy } from '../../lib/policies';
 import { getVault, getGlobals, getPinnedCommitments } from '../../lib/vault';
 import {
@@ -29,11 +30,13 @@ import {
 import type { PolicyBundleRules } from '@clevercon/agent-sdk/prover';
 
 // Persist the in-progress recipients + ceiling so navigating away and back does not
-// lose a half-filled disbursement.
-const DRAFT_KEY = 'cc:disburse:draft';
-const loadDraft = (): { ceiling: string; lines: Line[] } | null => {
+// lose a half-filled disbursement. Scoped by the connected account so a different
+// wallet on the same device never sees another account's draft (payees, amounts).
+const draftKey = (account: string) => `cc:disburse:draft:${account}`;
+const loadDraft = (account: string): { ceiling: string; lines: Line[] } | null => {
+  if (!account) return null;
   try {
-    const raw = localStorage.getItem(DRAFT_KEY);
+    const raw = localStorage.getItem(draftKey(account));
     return raw ? (JSON.parse(raw) as { ceiling: string; lines: Line[] }) : null;
   } catch {
     return null;
@@ -51,7 +54,8 @@ type Phase = 'idle' | 'proving' | 'relaying' | 'done';
  * recipient lists are split automatically into one proof per group of four.
  */
 export function DisbursePage() {
-  const draft = loadDraft();
+  const address = useSession((s) => s.session?.address ?? '');
+  const draft = loadDraft(address);
   const [ceiling, setCeiling] = useState(draft?.ceiling ?? '10');
   // The picked saved limit's full prover rules (allowlist, rolling cap, velocity,
   // deny-list), for the pre-flight checks and pills. A pinned private rule is
@@ -85,12 +89,13 @@ export function DisbursePage() {
 
   // Persist the draft (recipients + ceiling) so it survives navigation.
   useEffect(() => {
+    if (!address) return;
     try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ ceiling, lines }));
+      localStorage.setItem(draftKey(address), JSON.stringify({ ceiling, lines }));
     } catch {
       // ignore
     }
-  }, [ceiling, lines]);
+  }, [ceiling, lines, address]);
 
   const setLine = (i: number, patch: Partial<Line>) =>
     setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -174,7 +179,7 @@ export function DisbursePage() {
     onSuccess: async (data) => {
       // The batch was relayed; drop the saved draft so it doesn't persist a sent list.
       try {
-        localStorage.removeItem(DRAFT_KEY);
+        localStorage.removeItem(draftKey(address));
       } catch {
         // ignore
       }

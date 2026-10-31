@@ -20,6 +20,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { isDemo } from '../../config';
+import { useSession } from '../../store/session';
 import {
   getVault,
   getDelegate,
@@ -112,9 +113,20 @@ const short = (a: string) => (a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}
 const AGENT_INTRO =
   "I'm your spending agent. Tell me what to do with your budget, or use a quick action. I'll propose a plan and you approve before anything moves. The vault enforces the rule you pick, so I can never overspend or pay outside it.";
 
-// The agent conversation is persisted here so it survives navigating away and back,
-// and a full reload. Scoped per browser.
-const CHAT_KEY = 'cc:agent:chat';
+// The agent conversation is persisted so it survives navigating away and back, and a
+// full reload. Scoped by the connected account so a different wallet on the same
+// device never sees another account's conversation.
+const chatKeyFor = (account: string) => `cc:agent:chat:${account}`;
+function loadChat(account: string): Msg[] | null {
+  if (!account) return null;
+  try {
+    const raw = localStorage.getItem(chatKeyFor(account));
+    const parsed = raw ? (JSON.parse(raw) as Msg[]) : null;
+    return parsed && parsed.length ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The lane toggle + rule selector shared by the NL composer and the quick-action
@@ -225,18 +237,11 @@ function RuleLanePicker({
 
 export function CommandChat() {
   const qc = useQueryClient();
-  // The conversation persists across navigation and reloads (it was resetting on
-  // every remount). Stored per browser; cleared explicitly via "Clear".
-  const [messages, setMessages] = useState<Msg[]>(() => {
-    try {
-      const raw = localStorage.getItem(CHAT_KEY);
-      const parsed = raw ? (JSON.parse(raw) as Msg[]) : null;
-      if (parsed && parsed.length) return parsed;
-    } catch {
-      // ignore a corrupt cache
-    }
-    return [{ id: 1, role: 'agent', text: AGENT_INTRO }];
-  });
+  const address = useSession((s) => s.session?.address ?? '');
+  // The conversation persists across navigation and reloads, per connected account.
+  const [messages, setMessages] = useState<Msg[]>(
+    () => loadChat(address) ?? [{ id: 1, role: 'agent', text: AGENT_INTRO }],
+  );
   // Next id continues past the highest restored id so ids never collide.
   const idRef = useRef(messages.reduce((m, x) => Math.max(m, x.id), 1) + 1);
   const nextId = () => idRef.current++;
@@ -246,19 +251,26 @@ export function CommandChat() {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
+  // Reload the conversation when the connected account changes, so one account's chat
+  // never carries into another on the same device.
+  useEffect(() => {
+    setMessages(loadChat(address) ?? [{ id: 1, role: 'agent', text: AGENT_INTRO }]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address]);
   // Persist on every change so leaving and returning keeps the history intact.
   useEffect(() => {
+    if (!address) return;
     try {
-      localStorage.setItem(CHAT_KEY, JSON.stringify(messages.slice(-200)));
+      localStorage.setItem(chatKeyFor(address), JSON.stringify(messages.slice(-200)));
     } catch {
       // ignore quota / serialization issues
     }
-  }, [messages]);
+  }, [messages, address]);
   function clearChat() {
     idRef.current = 2;
     setMessages([{ id: 1, role: 'agent', text: AGENT_INTRO }]);
     try {
-      localStorage.removeItem(CHAT_KEY);
+      localStorage.removeItem(chatKeyFor(address));
     } catch {
       // ignore
     }

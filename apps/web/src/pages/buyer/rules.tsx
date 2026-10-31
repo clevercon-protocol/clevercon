@@ -21,6 +21,7 @@ import {
   Globe,
   KeyRound,
 } from 'lucide-react';
+import { useSession } from '../../store/session';
 import { getPolicies, createPolicy, deletePolicy, type Policy } from '../../lib/policies';
 import {
   pinCommitment,
@@ -1039,7 +1040,10 @@ export function RulesManager() {
   // bundle; public: the active Managed Session scope).
   const [reveal, setReveal] = useState<Reveal | null>(null);
   const [formFilter, setFormFilter] = useState<'all' | 'private' | 'public'>('all');
-  const [defaultId, setDefaultId] = useState<string>(() => getDefaultLimitId());
+  const address = useSession((s) => s.session?.address ?? '');
+  const [defaultId, setDefaultId] = useState<string>(() => getDefaultLimitId(address));
+  // Reload the per-account default if the connected wallet changes without a remount.
+  useEffect(() => setDefaultId(getDefaultLimitId(address)), [address]);
   const {
     data: policies = [],
     isLoading,
@@ -1084,7 +1088,7 @@ export function RulesManager() {
   const toggleDefault = (id: string) => {
     const next = defaultId === id ? '' : id;
     setDefaultId(next);
-    setDefaultLimitId(next);
+    setDefaultLimitId(address, next);
   };
 
   const openNew = () => {

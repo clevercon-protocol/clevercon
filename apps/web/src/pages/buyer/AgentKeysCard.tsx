@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Keypair } from '@stellar/stellar-sdk';
 import { KeyRound, Copy, Check, Trash2 } from 'lucide-react';
+import { useSession } from '../../store/session';
 import { getPolicies, type Policy } from '../../lib/policies';
 import { describeSavedLimit } from './limits-model';
 import {
@@ -20,19 +21,22 @@ const primaryBtn = controls.primary;
 
 // A self-custody agent key the owner authorized, remembered on THIS device so the
 // dapp can list + manage it (the chain is not indexed by owner). The secret is never
-// stored - only the public key + what it was bound to.
+// stored - only the public key + what it was bound to. Scoped by the connected
+// account so a different wallet on the same device never sees another account's keys.
 type StoredKey = { publicKey: string; label: string; ruleId: string; createdAt: string };
-const STORE = 'cc:agent-keys';
-function loadKeys(): StoredKey[] {
+const storeKey = (account: string) => `cc:agent-keys:${account}`;
+function loadKeys(account: string): StoredKey[] {
+  if (!account) return [];
   try {
-    return JSON.parse(localStorage.getItem(STORE) || '[]') as StoredKey[];
+    return JSON.parse(localStorage.getItem(storeKey(account)) || '[]') as StoredKey[];
   } catch {
     return [];
   }
 }
-function saveKeys(keys: StoredKey[]) {
+function saveKeys(account: string, keys: StoredKey[]) {
+  if (!account) return;
   try {
-    localStorage.setItem(STORE, JSON.stringify(keys));
+    localStorage.setItem(storeKey(account), JSON.stringify(keys));
   } catch {
     // ignore
   }
@@ -199,6 +203,7 @@ function AgentKeyRow({
 
 export function AgentKeysCard() {
   const qc = useQueryClient();
+  const address = useSession((s) => s.session?.address ?? '');
   const [mode, setMode] = useState<'generate' | 'paste'>('generate');
   const [label, setLabel] = useState('');
   const [pasted, setPasted] = useState('');
@@ -206,7 +211,9 @@ export function AgentKeysCard() {
   const [cap, setCap] = useState('');
   const [hours, setHours] = useState('');
   const [reveal, setReveal] = useState<Reveal | null>(null);
-  const [keys, setKeys] = useState<StoredKey[]>(() => loadKeys());
+  const [keys, setKeys] = useState<StoredKey[]>(() => loadKeys(address));
+  // Reload the per-account list if the connected wallet changes without a remount.
+  useEffect(() => setKeys(loadKeys(address)), [address]);
 
   const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
   const publicPolicies = policies.filter(
@@ -252,7 +259,7 @@ export function AgentKeysCard() {
         ...keys.filter((x) => x.publicKey !== publicKey),
       ];
       setKeys(next);
-      saveKeys(next);
+      saveKeys(address, next);
       qc.invalidateQueries({ queryKey: ['agent-key', publicKey] });
       setReveal(secret ? { kind: 'generated', publicKey, secret } : { kind: 'pasted', publicKey });
       setLabel('');
@@ -267,7 +274,7 @@ export function AgentKeysCard() {
   const forget = (publicKey: string) => {
     const next = keys.filter((x) => x.publicKey !== publicKey);
     setKeys(next);
-    saveKeys(next);
+    saveKeys(address, next);
   };
 
   return (
