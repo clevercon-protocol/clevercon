@@ -11,14 +11,27 @@ SDK, [`@clevercon/agent-sdk`](https://www.npmjs.com/package/@clevercon/agent-sdk
 
 ## Install
 
-No install needed, run it on demand:
+Requires **Node 18 or newer**. Your MCP client runs the server with whatever Node is
+first on its PATH, so if your default Node is older the server will fail to start even
+though your terminal uses a newer one. Point the config `command` at an absolute Node
+18+ path in that case (see Troubleshooting).
+
+Run it on demand:
 
 ```bash
 npx -y @clevercon/mcp
 ```
 
-Or install globally to get the `clevercon-mcp` command: `npm install -g @clevercon/mcp`.
-Requires Node 18+.
+Heads-up: the first `npx` run downloads a sizable dependency set (Stellar SDK, proving
+libraries) and can take a few minutes before the server responds. Some MCP clients
+time out the connection before that finishes. For a snappier, more reliable start,
+install it once and point the config at the installed binary:
+
+```bash
+npm install -g @clevercon/mcp     # gives the `clevercon-mcp` command
+# or, in a project:
+npm install @clevercon/mcp        # run via node_modules/.bin/clevercon-mcp
+```
 
 ## Two spending lanes
 
@@ -165,6 +178,9 @@ Once configured, you can ask your agent things like:
 
 ## Troubleshooting
 
+- **Server stuck "connecting", no tools appear** — first, make sure you are on `@clevercon/mcp` 0.4.1 or newer (older versions could fail to start silently when launched through a package-manager bin). Then check the Node version: the client runs the server with the Node on its PATH, which may be older than your terminal's. Set `command` to an absolute Node 18+ path, for example `"/home/you/.nvm/versions/node/v20.18.0/bin/npx"`, or install the package and point at the installed `clevercon-mcp`.
+- **It takes a long time on first run** — the first `npx` run downloads a large dependency tree (can be a few minutes). Install the package once (see Install) and point the config at the installed binary for a fast, reliable start.
+- **Changed a key in the config and nothing happened** — the running server keeps its old environment. Fully restart the MCP client (or reload the server) after editing the config env.
 - **A private spend says no policy** — set `CLEVERCON_POLICY_KEY` to the `ccpk1_...` key from the dapp's Rules tab.
 - **A public spend fails** — check the session's scope with `session_scope` (budget left, payee allowlisted, not expired), and that `CLEVERCON_SESSION_SECRET` is set (local mode) or a Managed Session is enabled (server mode).
 - **401 / invalid API key** — check `CLEVERCON_API_KEY` is the full `cc_<prefix>.<secret>`.

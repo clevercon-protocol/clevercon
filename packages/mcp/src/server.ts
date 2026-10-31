@@ -1,13 +1,12 @@
-#!/usr/bin/env node
-
 /**
  * CleverCon MCP Server
  *
  * Gives an AI agent a bounded, non-custodial Stellar spending account on
- * CleverCon: discover services, pay/disburse/hire within a policy, set spending
- * limits, and read budget + activity. Every action is driven with a scoped API
- * key and bounded on-chain by the vault, so the agent can spend but never
- * overspend or pay outside the rules, and never holds funds.
+ * CleverCon: discover services, spend within a policy, set spending limits, and
+ * read budget + activity. Every action is driven with a scoped API key and bounded
+ * on-chain by the vault, so the agent can spend but never overspend or pay outside
+ * the rules, and never holds funds. This module exports the class; the executable
+ * entry is bin.ts (so it runs correctly through a package-manager bin shim).
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -18,8 +17,6 @@ import {
   McpError,
   ErrorCode,
 } from '@modelcontextprotocol/sdk/types.js';
-import { pathToFileURL } from 'url';
-import { resolve } from 'path';
 import { config } from 'dotenv';
 
 // Load environment variables
@@ -34,9 +31,7 @@ import { approveTaskHandler, approveTaskSchema } from './tools/approve-task.js';
 import { disputeTaskHandler, disputeTaskSchema } from './tools/dispute-task.js';
 import {
   payHandler,
-  paySchema,
   disburseHandler,
-  disburseSchema,
   setLimitHandler,
   setLimitSchema,
   listLimitsHandler,
@@ -81,9 +76,8 @@ class CleverConMCPServer {
         // discovery
         searchServicesSchema,
         getServiceSchema,
-        // spend
-        paySchema,
-        disburseSchema,
+        // spend (pay/disburse are retired and intentionally not advertised; see the
+        // graceful fallback in the call handler that points callers to the live tools)
         disbursePrivateSchema,
         sessionPaySchema,
         sessionScopeSchema,
@@ -155,14 +149,6 @@ class CleverConMCPServer {
     await this.server.connect(transport);
     console.error('CleverCon MCP Server running on stdio');
   }
-}
-
-if (import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const server = new CleverConMCPServer();
-  server.run().catch((error) => {
-    console.error('Failed to start server:', error);
-    process.exit(1);
-  });
 }
 
 export { CleverConMCPServer };

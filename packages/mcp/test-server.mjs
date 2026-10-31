@@ -14,7 +14,10 @@ const __dirname = dirname(__filename);
 
 function sendMCPRequest(request) {
   return new Promise((resolve, reject) => {
-    const server = spawn('node', [join(__dirname, 'dist/server.js')], {
+    // Launch the real executable entry (dist/bin.js), not the library module, so
+    // this smoke test exercises the same path a bin shim uses and would catch a
+    // regression where the server fails to start when launched as a command.
+    const server = spawn('node', [join(__dirname, 'dist/bin.js')], {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -88,8 +91,9 @@ async function testListTools() {
     const expectedTools = [
       'search_services',
       'get_service',
-      'pay',
-      'disburse',
+      'disburse_private',
+      'session_pay',
+      'session_scope',
       'hire_agent',
       'set_limit',
       'list_limits',
@@ -97,6 +101,7 @@ async function testListTools() {
       'get_activity',
       'list_tasks',
       'get_task',
+      'approve_task',
       'dispute_task',
     ];
 

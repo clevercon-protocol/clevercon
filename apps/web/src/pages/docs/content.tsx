@@ -1036,6 +1036,16 @@ function Mcp() {
         </Step>
       </Steps>
 
+      <Callout kind="warn" title="Node version and first run">
+        The client runs the server with whatever Node is first on its PATH, which may be older than
+        your terminal's. Node 18+ is required; if the server stays stuck on "connecting" with no
+        tools, set <Code>command</Code> to an absolute Node 18+ path (for example a full{' '}
+        <Code>.nvm/versions/node/v20.x/bin/npx</Code>). The first <Code>npx</Code> run also
+        downloads a large dependency set and can take a few minutes, so for a fast, reliable start
+        install the package once and point at the installed <Code>clevercon-mcp</Code>. After
+        editing config env, fully restart the client; the running server keeps its old environment.
+      </Callout>
+
       <H2 id="lanes">The lanes, and their config</H2>
       <P>
         Provide the keys for the lane you want. The vault and USDC asset default to the live testnet

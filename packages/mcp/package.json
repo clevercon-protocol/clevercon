@@ -1,12 +1,15 @@
 {
   "name": "@clevercon/mcp",
-  "version": "0.4.0",
-  "description": "Stellar MCP server: give an AI agent a bounded, non-custodial spending account (pay, disburse, hire, set limits, read budget and activity)",
+  "version": "0.4.1",
+  "description": "Stellar MCP server: give an AI agent a bounded, non-custodial spending account (spend within a policy, hire, set limits, read budget and activity)",
   "license": "MIT",
   "type": "module",
   "main": "dist/server.js",
   "bin": {
-    "clevercon-mcp": "dist/server.js"
+    "clevercon-mcp": "dist/bin.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "files": [
     "dist",
