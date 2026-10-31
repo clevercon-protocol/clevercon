@@ -31,9 +31,10 @@ function Introduction() {
   return (
     <>
       <Lead>
-        CleverCon gives an AI agent a spending account on Stellar and an economy to use it in. Your
-        agent can pay a vendor, disburse to many, hire a service, and pay per call for APIs and
-        plugins, and you drive it by prompt, in the app, or in code.
+        CleverCon gives an AI agent a spending account on Stellar that it cannot misuse, bounded by
+        private rules only you can see, with an economy to use it in. Your agent can pay a vendor,
+        disburse to many, hire a service, and pay per call for APIs and plugins, always within the
+        limits you set, enforced on-chain and kept private.
       </Lead>
       <P>
         You set the rules once (a budget, who it may pay, how much, how often). They are enforced
@@ -135,8 +136,8 @@ function Introduction() {
           },
           {
             to: '/docs/quickstart',
-            title: 'Quickstart',
-            desc: 'Get a funded test wallet and make your first bounded payment.',
+            title: 'Walkthrough',
+            desc: 'The full flow end to end: connect, fund, set a rule, then pay or hire.',
           },
           {
             to: '/docs/developer-quickstart',
@@ -154,81 +155,51 @@ function Introduction() {
   );
 }
 
-const CODE_PAY = `await cc.disbursePrivate([{ payee: 'G...ALICE', amount: 5 }]);`;
-
-const CODE_DISBURSE = `await cc.disbursePrivate([
-  { payee: 'G...A', amount: 10 },
-  { payee: 'G...B', amount: 10 },
-  { payee: 'G...C', amount: 10 },
-]);`;
-
-const CODE_METERED = `const spender = createSessionSpender(process.env.CLEVERCON_SESSION_SECRET!);
-await spender.pay('G...DATA_API', 0.05); // per call, instant, no proof`;
-
-const CODE_OFFER = `const provider = createProvider({ name: 'price-oracle', port: 4200, fulfill });
-provider.listen(); // now hireable in the directory`;
-
 function WhatYouCanDo() {
   return (
     <>
       <Lead>
-        CleverCon is a spending account plus an economy. Here is everything you (or your agent) can
-        do with it, and the three ways to do each: by prompt, in the app, or in code. Rules are the
-        guardrail you set once so all of this stays safe.
+        CleverCon is a bounded, private spending account plus an economy. Here is everything you (or
+        your agent) can do with it, and the two hands-on ways to do each: by prompt, or by hand in
+        the app. Every action is also callable from code; the snippets live in the SDK reference.
       </Lead>
 
       <H2 id="overview">At a glance</H2>
       <Table
-        head={['Action', 'By prompt (MCP)', 'In the app', 'In code (SDK)']}
+        head={['Action', 'By prompt (an AI agent over MCP)', 'By hand (in the app)']}
         rows={[
+          ['Pay one address', '"Pay G... 5 USDC for the logo"', 'Agent tab'],
+          ['Disburse to many', '"Split 30 USDC across these three"', 'Disburse tab'],
+          ['Hire a service', '"Hire a price oracle with a 2 USDC budget"', 'Services tab'],
           [
-            'Pay one address',
-            '"Pay G... 5 USDC"',
-            'Agent tab',
-            <Code>disbursePrivate([one])</Code>,
+            'Pay per call for an API or plugin',
+            '"Pay the data API 0.05 for this call"',
+            'Vault tab, Agent keys',
           ],
-          [
-            'Disburse to many',
-            '"Split 30 across these 3"',
-            'Disburse tab',
-            <Code>disbursePrivate([...])</Code>,
-          ],
-          [
-            'Hire a service',
-            '"Hire a price oracle, 2 USDC"',
-            'Services tab',
-            <Code>hire(...)</Code>,
-          ],
-          [
-            'Pay per call (APIs, plugins)',
-            '"Pay the API 0.05"',
-            'Vault, Agent keys',
-            <Code>createSessionSpender().pay</Code>,
-          ],
-          ['Offer a service', 'n/a', 'Provider console', <Code>createProvider(...)</Code>],
+          ['Offer your own service', 'n/a (you run it)', 'Provider console'],
         ]}
       />
-      <P>
-        Each action in full below. The code snippets use the SDK; see <A to="/docs/sdk">the SDK</A>{' '}
-        for setup.
-      </P>
+      <Callout kind="note">
+        Nothing spends until you have funded the vault and pinned at least one rule. That is the
+        guardrail, and it is why the steps below always begin there. The{' '}
+        <A to="/docs/quickstart">Walkthrough</A> does it all end to end.
+      </Callout>
 
       <H2 id="pay">Pay one address</H2>
-      <P>A single bounded, private payment to any address you allow.</P>
+      <P>
+        A single bounded, private payment to any address you allow: a vendor, a provider, or another
+        agent.
+      </P>
       <UL>
         <LI>
-          <B>By prompt:</B> "Pay G...ALICE 5 USDC for the logo work." The agent calls the tool, you
+          <B>By prompt:</B> "Pay G...ALICE 5 USDC for the logo work." The agent calls the tool; you
           set nothing per payment.
         </LI>
         <LI>
-          <B>In the app:</B> the Agent tab, enter the payee and amount, approve. The proof is made
-          in your browser.
-        </LI>
-        <LI>
-          <B>In code:</B>
+          <B>By hand:</B> the Agent tab, pick the rule, enter the payee and amount, approve. The
+          proof is made in your browser.
         </LI>
       </UL>
-      <CodeBlock code={CODE_PAY} lang="ts" />
 
       <H2 id="disburse">Disburse to many</H2>
       <P>
@@ -240,13 +211,9 @@ function WhatYouCanDo() {
           <B>By prompt:</B> "Split 30 USDC across G...A, G...B, and G...C."
         </LI>
         <LI>
-          <B>In the app:</B> the Disburse tab, add the lines, approve.
-        </LI>
-        <LI>
-          <B>In code:</B>
+          <B>By hand:</B> the Disburse tab, pick the rule, add the lines, approve.
         </LI>
       </UL>
-      <CodeBlock code={CODE_DISBURSE} lang="ts" />
 
       <H2 id="hire">Hire a service</H2>
       <P>
@@ -259,15 +226,11 @@ function WhatYouCanDo() {
           <B>By prompt:</B> "Find a price-oracle service and hire it with a 2 USDC budget."
         </LI>
         <LI>
-          <B>In the app:</B> the Services tab, pick a service, hire it under a rule.
-        </LI>
-        <LI>
-          <B>In code or MCP:</B> the <Code>hire_agent</Code> MCP tool, or <Code>cc.hire(...)</Code>{' '}
-          in the SDK.
+          <B>By hand:</B> the Services tab, pick a service, hire it under a rule.
         </LI>
       </UL>
 
-      <H2 id="metered">Pay per call for APIs and plugins</H2>
+      <H2 id="metered">Pay per call for an API or plugin</H2>
       <P>
         Give your agent a metered capability (a data API, a model, a tool) that it pays for per use,
         with no signature per call, bounded by a session you authorize once. This is how you plug a
@@ -275,29 +238,25 @@ function WhatYouCanDo() {
       </P>
       <UL>
         <LI>
-          <B>In the app:</B> the Vault tab, Agent keys, authorize a session (a cap, an allowlist, an
+          <B>By hand:</B> the Vault tab, Agent keys, authorize a session (a cap, an allowlist, an
           expiry).
         </LI>
         <LI>
-          <B>By prompt</B> (public mode): "Pay the data API 0.05 for this call."
-        </LI>
-        <LI>
-          <B>In code:</B>
+          <B>By prompt:</B> once the session is live, "Pay the data API 0.05 for this call."
         </LI>
       </UL>
-      <CodeBlock code={CODE_METERED} lang="ts" />
 
       <H2 id="offer">Offer your own service</H2>
       <P>
-        List an API, a bot, or a skill and earn USDC per use. A provider is a single file on the
-        SDK. See <A to="/docs/providers">Be a provider</A>.
+        List an API, a bot, or a skill and earn USDC per use. See{' '}
+        <A to="/docs/providers">Be a provider</A>.
       </P>
-      <CodeBlock code={CODE_OFFER} lang="ts" />
 
-      <H2 id="connect">Connect CleverCon to your agent</H2>
+      <H2 id="code">Doing it in code</H2>
       <P>
-        Give any agent these abilities in one step, over MCP (prompt-driven) or the SDK (code). See{' '}
-        <A to="/docs/developer-quickstart">the developer quickstart</A>.
+        Every action above is also a few lines with the SDK (<Code>disbursePrivate</Code>, session
+        spenders, <Code>hire</Code>, <Code>createProvider</Code>). The setup and snippets live in{' '}
+        <A to="/docs/sdk">the SDK reference</A> and <A to="/docs/mcp">MCP server</A>.
       </P>
 
       <Callout kind="tip">
@@ -440,39 +399,155 @@ function Concepts() {
   );
 }
 
-function Quickstart() {
+function Walkthrough() {
   return (
     <>
       <Lead>
-        The fastest way to see CleverCon work: get a funded test wallet, author a rule, and make a
-        bounded payment, all in the app on Stellar testnet. We will use a simple scenario: an agent
-        that may pay one address up to $5 per payment.
+        A practical, end-to-end manual: how everything fits together, in what order, and why. You
+        will do it twice, once by hand in the app, once by prompt with an AI agent over MCP, using
+        real scenarios you can copy.
       </Lead>
+
+      <H2 id="order">The order, and why</H2>
+      <P>
+        Every setup follows the same four steps, and the order matters: nothing can spend until a
+        rule is pinned, by design. There is no default-allow.
+      </P>
+      <Flow
+        steps={[
+          { label: 'Connect', sub: 'your wallet' },
+          { label: 'Fund', sub: 'the vault' },
+          { label: 'Rule', sub: 'create and pin' },
+          { label: 'Spend', sub: 'pay or hire' },
+        ]}
+      />
+      <UL>
+        <LI>
+          <B>Connect a wallet</B> so you have an identity and a place the funds come from and return
+          to. You always hold your own keys.
+        </LI>
+        <LI>
+          <B>Fund the vault</B> so there is a balance to spend from. The vault is a contract that
+          holds the money and releases it only within your rules; the platform never holds it.
+        </LI>
+        <LI>
+          <B>Create and pin a rule</B> before any spend. The rule is the guardrail (who, how much,
+          how often), and pinning it on-chain is what makes the vault enforce it. Until a rule is
+          pinned, every spend is refused.
+        </LI>
+        <LI>
+          <B>Spend or hire</B> within the rule, by hand or by agent. A payment that fits settles;
+          one that breaks the rule is refused before any funds move.
+        </LI>
+      </UL>
+      <Callout kind="tip" title="Fast path">
+        In a hurry: connect, run the Vault tab testnet quickstart (XLM, trustline, test USDC),
+        deposit a few USDC, create a private rule with a $5 cap and one allowlisted address, pin it,
+        and pay $3 from the Agent tab. The two walkthroughs below do the same thing in full, with a
+        real scenario.
+      </Callout>
+
+      <H2 id="dapp">Walkthrough 1: in the app (contractor payroll)</H2>
+      <P>
+        Scenario: pay three contractors each month, no one else, capped per person and in total, and
+        keep the amounts and the roster private.
+      </P>
       <Steps>
-        <Step n={1} title="Connect a wallet">
-          Open <A href="https://clevercon.xyz">clevercon.xyz</A>, choose Launch app, and connect a
-          Stellar wallet set to testnet.
+        <Step n={1} title="Connect your wallet">
+          Open clevercon.xyz, Launch app, connect a testnet wallet. You are signed in; the app shows
+          your vault, which starts empty.
         </Step>
-        <Step n={2} title="Run the testnet quickstart">
-          On the Vault tab, the quickstart funds your wallet with test XLM, adds the USDC trustline,
-          and gets you test USDC, in three clicks. See <A to="/docs/vault">Fund your vault</A>.
+        <Step n={2} title="Get test funds (Vault tab)">
+          Run the testnet quickstart: fund XLM for fees, add the USDC trustline so your wallet can
+          hold USDC, and get test USDC. Each is one click, signed by your wallet. You need USDC in
+          your wallet before you can put it in the vault.
         </Step>
         <Step n={3} title="Deposit into the vault">
-          Deposit, say, 20 USDC. Your balance is read live from the vault on-chain.
+          Deposit, say, 100 USDC. This is the pool the payroll is paid from. The balance is read
+          live from the vault on-chain; the platform cannot touch it.
         </Step>
-        <Step n={4} title="Create and pin a rule">
-          On the Rules tab, create a private rule with a $5 per-payment cap and an allowlist of the
-          one address you will pay, then pin it on-chain with one signature.
+        <Step n={4} title="Create the payroll rule (Rules tab)">
+          New rule, Private. Allowlist = your three contractor addresses; per-payee cap = $2,000;
+          rolling cap = $20,000 per 30 days. Save (free, no signature). The allowlist means it can
+          only ever pay those three; the per-payee cap bounds any one payment; the rolling cap
+          bounds the month.
         </Step>
-        <Step n={5} title="Make a bounded payment">
-          On the Agent tab, pay that address $3. It settles in USDC. Try $8 and it is refused before
-          anything moves. See <A to="/docs/spending">Spending</A>.
+        <Step n={5} title="Pin the rule">
+          Pin on-chain (one wallet signature). Only now can the vault authorize a spend under it.
+          The rule itself is never published, only a commitment to it.
+        </Step>
+        <Step n={6} title="Disburse">
+          Disburse tab, pick the payroll rule, add the three addresses and amounts, approve. One
+          proof is made in your browser and all three are paid in USDC. A fourth payee, or an amount
+          over a cap, is refused before anything moves.
         </Step>
       </Steps>
-      <Callout kind="tip" title="Connecting an agent instead?">
-        To give your own agent or an MCP client a spending account, start at{' '}
-        <A to="/docs/developer-quickstart">the developer quickstart</A>.
-      </Callout>
+      <P>
+        That is the whole loop by hand. The rule is reusable every month, and editing it cleanly
+        replaces it as the roster changes.
+      </P>
+
+      <H2 id="mcp">Walkthrough 2: by prompt (an AI agent over MCP)</H2>
+      <P>
+        Scenario: let an assistant (Claude Desktop, Cursor, or your own agent) pay an approved
+        address on your instruction, bounded and private. The app setup is the same guardrail; you
+        just hand the agent a key so it can spend within the rule without you clicking.
+      </P>
+      <Steps>
+        <Step n={1} title="Do the app setup (once)">
+          Connect, fund the vault, and create and pin a private rule, exactly as in walkthrough 1.
+          For this scenario: allowlist the one address the agent may pay, per-payment max $5.
+        </Step>
+        <Step n={2} title="Copy the policy key (Rules tab)">
+          On the pinned rule, choose Reveal and copy its policy key (it starts with{' '}
+          <Code>ccpk1_</Code>). It packs the rule and its secret salt into one string. This is all
+          the agent needs to prove a payment, and it never reveals the rule to anyone, including us.
+        </Step>
+        <Step n={3} title="Mint an API key (Developer console)">
+          Create a scoped API key (<Code>cc_...</Code>). The agent uses it to read your budget and
+          activity and to hire services. It cannot move funds on its own.
+        </Step>
+        <Step n={4} title="Add CleverCon to your MCP client">
+          Paste the config into your client (Claude Desktop: Settings, Developer, Edit Config) with
+          the policy key set, then restart. Full setup for every lane is in{' '}
+          <A to="/docs/mcp">MCP server</A>.
+        </Step>
+        <Step n={5} title="Prompt the agent">
+          Ask it: "Pay G...ALICE 3 USDC for the logo." The agent proves the payment locally against
+          your rule and relays only the proof; the vault releases $3. Ask it to pay $8 and it comes
+          back refused, with your rule private the whole time.
+        </Step>
+      </Steps>
+      <CodeBlock code={MCP_PRIVATE} title="claude_desktop_config.json" />
+      <P>
+        For high-frequency, low-value spend (an agent paying a data API per call), use a session key
+        instead of a proof per payment; see <A to="/docs/mcp">MCP server</A> for both lanes and{' '}
+        <A to="/docs/spending">Spending</A> for when to use each.
+      </P>
+
+      <H2 id="more">Other scenarios</H2>
+      <P>The same four steps cover every use case; only the rule changes. A few to copy:</P>
+      <UL>
+        <LI>
+          <B>Metered API budget:</B> a public session with a per-call cap, a velocity limit, and a
+          daily cap.
+        </LI>
+        <LI>
+          <B>Subscription:</B> a private rule with an exact amount, a monthly calendar window, and
+          velocity 1 per month.
+        </LI>
+        <LI>
+          <B>Agent allowance:</B> a private rule, open payee, with a per-payment cap, a weekly cap,
+          and a velocity limit.
+        </LI>
+        <LI>
+          <B>Grants or bounties:</B> a private rule with an allowlist, a per-payee cap, and a
+          program total.
+        </LI>
+      </UL>
+      <P>
+        Each is a copyable clause set in <A to="/docs/rules">Rules by example</A>.
+      </P>
     </>
   );
 }
@@ -933,27 +1008,57 @@ function Mcp() {
         account. Run it on demand with <Code>npx -y @clevercon/mcp</Code>; requires Node 18+.
       </Lead>
 
-      <H2 id="lanes">The two lanes, in env</H2>
-      <P>Provide the keys for the lane you want:</P>
-      <UL>
-        <LI>
-          <B>Private:</B> <Code>CLEVERCON_POLICY_KEY</Code> (the policy key from the Rules tab); add{' '}
-          <Code>CLEVERCON_GLOBAL_KEY</Code> only if the account has a global-private rule.
-        </LI>
-        <LI>
-          <B>Public, local:</B> <Code>CLEVERCON_PUBLIC_MODE=local</Code> (the default) plus{' '}
-          <Code>CLEVERCON_SESSION_SECRET</Code>, your own session key.
-        </LI>
-        <LI>
-          <B>Public, server:</B> <Code>CLEVERCON_PUBLIC_MODE=server</Code> plus{' '}
-          <Code>CLEVERCON_API_KEY</Code>, using the account's Managed Session.
-        </LI>
-      </UL>
-      <CodeBlock code={MCP_LOCAL} title="public local" />
+      <H2 id="setup">Setup, step by step</H2>
       <P>
-        Add <Code>CLEVERCON_API_KEY</Code> to enable the directory, hire, read, and dispute tools.
-        The vault and USDC asset default to the live testnet contracts, so local spending needs only
-        the one secret.
+        Two minutes: get what your lane needs from the app, add one config block, restart. There is
+        nothing to install; the client runs it on demand with npx.
+      </P>
+      <Steps>
+        <Step n={1} title="Fund the vault">
+          Connect a wallet and fund the vault (Vault tab testnet quickstart). The agent spends from
+          this balance; see the <A to="/docs/quickstart">Walkthrough</A>.
+        </Step>
+        <Step n={2} title="Get the key your lane needs">
+          Private lane: create and pin a private rule (Rules tab), choose Reveal, and copy its
+          policy key (<Code>ccpk1_</Code>). Public local: on the Vault tab under Agent keys,
+          authorize a session and copy its session secret (<Code>S...</Code>). Public server: on the
+          Vault tab enable a Managed Session, then mint an API key in the Developer console (
+          <Code>cc_...</Code>
+          ).
+        </Step>
+        <Step n={3} title="Add the config and restart">
+          Paste the matching block below into your MCP client (Claude Desktop: Settings, Developer,
+          Edit Config; Cursor: MCP settings), then restart it.
+        </Step>
+        <Step n={4} title="Verify">
+          Ask the agent for your budget, then make a small bounded payment. A payment that breaks
+          your rule comes back refused.
+        </Step>
+      </Steps>
+
+      <H2 id="lanes">The lanes, and their config</H2>
+      <P>
+        Provide the keys for the lane you want. The vault and USDC asset default to the live testnet
+        contracts, so most lanes need just one secret.
+      </P>
+      <H3>Private (self-custody, keyless)</H3>
+      <P>
+        The policy key packs your rule and its salt; the agent proves locally and relays only the
+        proof. Add <Code>CLEVERCON_GLOBAL_KEY</Code> only if the account has a global-private rule.
+      </P>
+      <CodeBlock code={MCP_PRIVATE} title="private" />
+      <H3>Public, local (the agent holds a session key)</H3>
+      <P>
+        The default mode. The agent signs bounded spends with its own session key, no proof per
+        payment.
+      </P>
+      <CodeBlock code={MCP_LOCAL} title="public local" />
+      <H3>Public, server (Managed Session)</H3>
+      <P>
+        Set <Code>CLEVERCON_PUBLIC_MODE=server</Code> and <Code>CLEVERCON_API_KEY</Code>; the
+        platform signs within the on-chain scope you set in the app. Add{' '}
+        <Code>CLEVERCON_API_KEY</Code> to any lane to also enable the directory, hire, read, and
+        dispute tools.
       </P>
 
       <H2 id="tools">Tools</H2>
@@ -1035,6 +1140,10 @@ const spender = createSessionSpender(sessionSecret);
 await spender.pay('G...DATA_API', 0.05);
 const scope = await spender.scope(); // remaining budget, allowlist, expiry`;
 
+const SDK_ENV = `CLEVERCON_API_KEY=cc_...          # reads, hire, config
+CLEVERCON_POLICY_KEY=ccpk1_...    # private lane: packs your rule + salt
+# CLEVERCON_SESSION_SECRET=S...   # public lane: a session key you hold`;
+
 function Sdk() {
   return (
     <>
@@ -1043,6 +1152,26 @@ function Sdk() {
         lanes, plus the tools to be a paid service. ESM-only, Node 18+.
       </Lead>
       <CodeBlock code={`npm install @clevercon/agent-sdk`} lang="bash" />
+
+      <H2 id="setup">Setup</H2>
+      <P>Two one-time things from the app: the funds, and the key for your lane.</P>
+      <Steps>
+        <Step n={1} title="Fund the vault and pin a rule">
+          In the app, fund the vault and create and pin a rule (see the{' '}
+          <A to="/docs/quickstart">Walkthrough</A>). Nothing spends until a rule is pinned.
+        </Step>
+        <Step n={2} title="Get your keys">
+          Private: Reveal the rule's policy key (<Code>ccpk1_</Code>) on the Rules tab. Public:
+          authorize a session on the Vault tab and copy its secret, or mint one in code with{' '}
+          <Code>registerSession</Code>. For reads, hire, and the server path, mint an API key (
+          <Code>cc_...</Code>) in the Developer console. Full list in{' '}
+          <A to="/docs/config-keys">Config keys</A>.
+        </Step>
+        <Step n={3} title="Set them in the environment">
+          Provide only the ones your lane uses, then call the SDK.
+        </Step>
+      </Steps>
+      <CodeBlock code={SDK_ENV} title=".env" />
 
       <H2 id="private">Private spend</H2>
       <P>
@@ -1451,9 +1580,10 @@ export const DOCS: DocPage[] = [
   {
     slug: 'quickstart',
     group: 'Getting started',
-    title: 'Quickstart',
-    description: 'From an empty wallet to a bounded payment, in the app.',
-    Body: Quickstart,
+    title: 'Walkthrough',
+    description:
+      'The order of operations and why, then two detailed walkthroughs: in the app, and by prompt over MCP.',
+    Body: Walkthrough,
   },
   {
     slug: 'concepts',
