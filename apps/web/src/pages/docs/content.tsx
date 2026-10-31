@@ -31,16 +31,43 @@ function Introduction() {
   return (
     <>
       <Lead>
-        CleverCon gives an AI agent a private, non-custodial spending account on Stellar, and an
-        economy to use it in. You fund a vault, set the rules your agent must obey, and it spends
-        within them. The rules are enforced on-chain and the platform never holds your money.
+        CleverCon gives an AI agent a spending account on Stellar and an economy to use it in. Your
+        agent can pay a vendor, disburse to many, hire a service, and pay per call for APIs and
+        plugins, and you drive it by prompt, in the app, or in code.
       </Lead>
       <P>
-        Two promises define the product. First, an agent <B>cannot abuse the account</B>: the vault
-        releases a payment only when it satisfies a rule, so even a compromised or careless agent
-        cannot overspend or pay someone you did not approve. Second, your rules are <B>private</B>:
-        they are committed and checked on-chain without being published, so your budget and approved
-        payees stay yours.
+        You set the rules once (a budget, who it may pay, how much, how often). They are enforced
+        on-chain and kept private, and the platform never holds your money. So the agent spends on
+        its own and can never overspend, pay someone you did not approve, or leak your limits. The
+        rules are the guardrail you set once, not the daily work.
+      </P>
+
+      <H2 id="do">What you can do</H2>
+      <UL>
+        <LI>
+          <B>Pay one address.</B> A bounded, private payment to a vendor, a provider, or another
+          agent.
+        </LI>
+        <LI>
+          <B>Disburse to many.</B> Payroll, contractor batches, grants, or bounties in one
+          instruction.
+        </LI>
+        <LI>
+          <B>Hire a service.</B> Data, AI, research, or compute from the directory, paid per step on
+          delivery.
+        </LI>
+        <LI>
+          <B>Pay per call for APIs and plugins.</B> Give your agent a metered capability it pays for
+          as it uses it.
+        </LI>
+        <LI>
+          <B>Offer your own service.</B> List an API, a bot, or a skill and earn USDC per use.
+        </LI>
+      </UL>
+      <P>
+        Each of these works by prompt, in the app, or in code. See{' '}
+        <A to="/docs/what-you-can-do">What you can do</A> for every action step by step, with
+        snippets.
       </P>
 
       <UseCase title="A research desk funds an agent to buy market data">
@@ -77,19 +104,20 @@ function Introduction() {
         </LI>
       </UL>
 
-      <H2 id="surfaces">Three surfaces</H2>
+      <H2 id="drive">Three ways to drive it</H2>
       <UL>
         <LI>
-          <B>The app</B> at clevercon.xyz: connect a wallet, fund a vault, author rules, and spend,
-          all in the browser.
+          <B>By prompt.</B> Point any MCP agent (Claude Desktop, Cursor, your own) at CleverCon with{' '}
+          <Code>@clevercon/mcp</Code> and tell it in plain language what to pay, disburse, or hire.
+          It uses the tools within your limits.
         </LI>
         <LI>
-          <B>The MCP server</B> (<Code>@clevercon/mcp</Code>): give any MCP client (for example
-          Claude Desktop or Cursor) a bounded spending account in a couple of minutes.
+          <B>In the app</B> at clevercon.xyz: do any of it by hand, fund, pay, disburse, hire, and
+          author rules, all in the browser.
         </LI>
         <LI>
-          <B>The SDK</B> (<Code>@clevercon/agent-sdk</Code>): embed a spending account, or be a paid
-          service, in your own code.
+          <B>In code</B> with the SDK (<Code>@clevercon/agent-sdk</Code>): pay, disburse, hire, or
+          be a paid service in a few lines.
         </LI>
       </UL>
 
@@ -101,14 +129,14 @@ function Introduction() {
       <Cards
         items={[
           {
+            to: '/docs/what-you-can-do',
+            title: 'What you can do',
+            desc: 'Pay, disburse, hire, pay per call, and offer a service, by prompt or by hand.',
+          },
+          {
             to: '/docs/quickstart',
             title: 'Quickstart',
             desc: 'Get a funded test wallet and make your first bounded payment.',
-          },
-          {
-            to: '/docs/concepts',
-            title: 'Core concepts',
-            desc: 'The vault, rules, custody and mode, and the economy.',
           },
           {
             to: '/docs/developer-quickstart',
@@ -116,12 +144,166 @@ function Introduction() {
             desc: 'Connect an agent over MCP, or embed the SDK.',
           },
           {
-            to: '/docs/security',
-            title: 'Security and privacy',
-            desc: 'The trust model and the honest v1 boundaries.',
+            to: '/docs/concepts',
+            title: 'Core concepts',
+            desc: 'The vault, rules, custody and mode, and the economy.',
           },
         ]}
       />
+    </>
+  );
+}
+
+const CODE_PAY = `await cc.disbursePrivate([{ payee: 'G...ALICE', amount: 5 }]);`;
+
+const CODE_DISBURSE = `await cc.disbursePrivate([
+  { payee: 'G...A', amount: 10 },
+  { payee: 'G...B', amount: 10 },
+  { payee: 'G...C', amount: 10 },
+]);`;
+
+const CODE_METERED = `const spender = createSessionSpender(process.env.CLEVERCON_SESSION_SECRET!);
+await spender.pay('G...DATA_API', 0.05); // per call, instant, no proof`;
+
+const CODE_OFFER = `const provider = createProvider({ name: 'price-oracle', port: 4200, fulfill });
+provider.listen(); // now hireable in the directory`;
+
+function WhatYouCanDo() {
+  return (
+    <>
+      <Lead>
+        CleverCon is a spending account plus an economy. Here is everything you (or your agent) can
+        do with it, and the three ways to do each: by prompt, in the app, or in code. Rules are the
+        guardrail you set once so all of this stays safe.
+      </Lead>
+
+      <H2 id="overview">At a glance</H2>
+      <Table
+        head={['Action', 'By prompt (MCP)', 'In the app', 'In code (SDK)']}
+        rows={[
+          [
+            'Pay one address',
+            '"Pay G... 5 USDC"',
+            'Agent tab',
+            <Code>disbursePrivate([one])</Code>,
+          ],
+          [
+            'Disburse to many',
+            '"Split 30 across these 3"',
+            'Disburse tab',
+            <Code>disbursePrivate([...])</Code>,
+          ],
+          [
+            'Hire a service',
+            '"Hire a price oracle, 2 USDC"',
+            'Services tab',
+            <Code>hire(...)</Code>,
+          ],
+          [
+            'Pay per call (APIs, plugins)',
+            '"Pay the API 0.05"',
+            'Vault, Agent keys',
+            <Code>createSessionSpender().pay</Code>,
+          ],
+          ['Offer a service', 'n/a', 'Provider console', <Code>createProvider(...)</Code>],
+        ]}
+      />
+      <P>
+        Each action in full below. The code snippets use the SDK; see <A to="/docs/sdk">the SDK</A>{' '}
+        for setup.
+      </P>
+
+      <H2 id="pay">Pay one address</H2>
+      <P>A single bounded, private payment to any address you allow.</P>
+      <UL>
+        <LI>
+          <B>By prompt:</B> "Pay G...ALICE 5 USDC for the logo work." The agent calls the tool, you
+          set nothing per payment.
+        </LI>
+        <LI>
+          <B>In the app:</B> the Agent tab, enter the payee and amount, approve. The proof is made
+          in your browser.
+        </LI>
+        <LI>
+          <B>In code:</B>
+        </LI>
+      </UL>
+      <CodeBlock code={CODE_PAY} lang="ts" />
+
+      <H2 id="disburse">Disburse to many</H2>
+      <P>
+        Pay a whole set of recipients in one instruction (one proof covers up to four), capped per
+        payment and in total. Payroll, contractor batches, grants, and bounties.
+      </P>
+      <UL>
+        <LI>
+          <B>By prompt:</B> "Split 30 USDC across G...A, G...B, and G...C."
+        </LI>
+        <LI>
+          <B>In the app:</B> the Disburse tab, add the lines, approve.
+        </LI>
+        <LI>
+          <B>In code:</B>
+        </LI>
+      </UL>
+      <CodeBlock code={CODE_DISBURSE} lang="ts" />
+
+      <H2 id="hire">Hire a service</H2>
+      <P>
+        Hire from the directory and pay per step on accepted delivery: data, AI, research, or
+        compute. See <A to="/docs/marketplace">Marketplace</A> for the tiers, disputes, and
+        reputation.
+      </P>
+      <UL>
+        <LI>
+          <B>By prompt:</B> "Find a price-oracle service and hire it with a 2 USDC budget."
+        </LI>
+        <LI>
+          <B>In the app:</B> the Services tab, pick a service, hire it under a rule.
+        </LI>
+        <LI>
+          <B>In code or MCP:</B> the <Code>hire_agent</Code> MCP tool, or <Code>cc.hire(...)</Code>{' '}
+          in the SDK.
+        </LI>
+      </UL>
+
+      <H2 id="metered">Pay per call for APIs and plugins</H2>
+      <P>
+        Give your agent a metered capability (a data API, a model, a tool) that it pays for per use,
+        with no signature per call, bounded by a session you authorize once. This is how you plug a
+        paid capability into an agent.
+      </P>
+      <UL>
+        <LI>
+          <B>In the app:</B> the Vault tab, Agent keys, authorize a session (a cap, an allowlist, an
+          expiry).
+        </LI>
+        <LI>
+          <B>By prompt</B> (public mode): "Pay the data API 0.05 for this call."
+        </LI>
+        <LI>
+          <B>In code:</B>
+        </LI>
+      </UL>
+      <CodeBlock code={CODE_METERED} lang="ts" />
+
+      <H2 id="offer">Offer your own service</H2>
+      <P>
+        List an API, a bot, or a skill and earn USDC per use. A provider is a single file on the
+        SDK. See <A to="/docs/providers">Be a provider</A>.
+      </P>
+      <CodeBlock code={CODE_OFFER} lang="ts" />
+
+      <H2 id="connect">Connect CleverCon to your agent</H2>
+      <P>
+        Give any agent these abilities in one step, over MCP (prompt-driven) or the SDK (code). See{' '}
+        <A to="/docs/developer-quickstart">the developer quickstart</A>.
+      </P>
+
+      <Callout kind="tip">
+        Prefer to watch first? Do it all by hand in the app, then hand the same abilities to an
+        agent over MCP or the SDK when you are ready.
+      </Callout>
     </>
   );
 }
@@ -130,8 +312,8 @@ function Concepts() {
   return (
     <>
       <Lead>
-        A handful of ideas carry the whole product. Understanding them makes every surface, the app,
-        the SDK, and the MCP server, read the same way.
+        You have seen what CleverCon can do. This page is the model underneath, the vault, rules,
+        custody, and the economy, so every surface reads the same way.
       </Lead>
 
       <H2 id="vault">The vault</H2>
@@ -1255,15 +1437,16 @@ export const DOCS: DocPage[] = [
     slug: 'introduction',
     group: 'Getting started',
     title: 'Introduction',
-    description: 'What CleverCon is, who it is for, and how it works.',
+    description: 'What CleverCon is, what you can do, and how to drive it.',
     Body: Introduction,
   },
   {
-    slug: 'concepts',
+    slug: 'what-you-can-do',
     group: 'Getting started',
-    title: 'Core concepts',
-    description: 'The vault, rules, custody and mode, globals, tiers, and the economy.',
-    Body: Concepts,
+    title: 'What you can do',
+    description:
+      'Pay, disburse, hire, pay per call, and offer a service, by prompt, in the app, or in code.',
+    Body: WhatYouCanDo,
   },
   {
     slug: 'quickstart',
@@ -1271,6 +1454,13 @@ export const DOCS: DocPage[] = [
     title: 'Quickstart',
     description: 'From an empty wallet to a bounded payment, in the app.',
     Body: Quickstart,
+  },
+  {
+    slug: 'concepts',
+    group: 'Getting started',
+    title: 'Core concepts',
+    description: 'The vault, rules, custody and mode, globals, tiers, and the economy.',
+    Body: Concepts,
   },
   {
     slug: 'vault',
