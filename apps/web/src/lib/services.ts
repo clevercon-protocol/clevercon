@@ -12,6 +12,14 @@ export interface Verification {
   method: string;
 }
 
+/** Declared requirement for input files a service needs to be hired. */
+export interface AttachmentSpec {
+  required?: boolean;
+  accept?: string[];
+  maxSizeBytes?: number;
+  maxCount?: number;
+}
+
 export interface Service {
   id: string;
   name: string;
@@ -32,6 +40,12 @@ export interface Service {
   tier: Tier;
   /** How delivery is verified, when declared. */
   verification: Verification | null;
+  /** Interaction shape: sync (default) | async | human | metered. */
+  interaction?: string | null;
+  /** Payment model: escrow (default) | x402 | mpp-session | subscription. */
+  paymentModel?: string | null;
+  /** Required input files, when the service needs an attachment to be hired. */
+  attachmentsIn?: AttachmentSpec | null;
 }
 
 interface ApiService {
@@ -46,12 +60,55 @@ interface ApiService {
   verified?: boolean;
   tier?: Tier;
   verification?: Verification | null;
+  interaction?: string | null;
+  paymentModel?: string | null;
+  attachmentsIn?: AttachmentSpec | null;
   reputation: { score: number } | null;
 }
 
 /** Short label for a verification tier. */
 export function tierLabel(tier: Tier): string {
   return tier === 'T1' ? 'Verifiable' : tier === 'T2' ? 'Attestable' : 'Human';
+}
+
+/** Badge label for a payment model (null = escrow, the default, needs no badge). */
+export function paymentModelLabel(pm?: string | null): string | null {
+  switch (pm) {
+    case 'x402':
+      return 'Pay-per-call (x402)';
+    case 'mpp-session':
+      return 'Streaming (MPP session)';
+    case 'subscription':
+      return 'Subscription';
+    default:
+      return null;
+  }
+}
+
+/** Badge label for an interaction shape (null = sync, the default, needs no badge). */
+export function interactionLabel(i?: string | null): string | null {
+  switch (i) {
+    case 'async':
+      return 'Long-running';
+    case 'human':
+      return 'Human-in-the-loop';
+    case 'metered':
+      return 'Metered';
+    default:
+      return null;
+  }
+}
+
+/**
+ * A metered service (per-call / streaming / subscription) is paid directly by the
+ * agent from its own wallet, NOT escrowed via a vault hire, so the escrow hire flow
+ * does not apply to it.
+ */
+export function isMetered(s: {
+  interaction?: string | null;
+  paymentModel?: string | null;
+}): boolean {
+  return s.interaction === 'metered' || (!!s.paymentModel && s.paymentModel !== 'escrow');
 }
 
 /** Plain-language explanation of how a service's delivery is judged before payment. */
@@ -106,6 +163,9 @@ function mapApiService(s: ApiService): Service {
     pricingModel: s.pricingModel,
     tier: s.tier ?? 'T2',
     verification: s.verification ?? null,
+    interaction: s.interaction ?? null,
+    paymentModel: s.paymentModel ?? null,
+    attachmentsIn: s.attachmentsIn ?? null,
   };
 }
 
@@ -232,6 +292,9 @@ export async function getService(id: string): Promise<ServiceDetail> {
     verified: !!s.verified,
     tier: s.tier ?? 'T2',
     verification: s.verification ?? null,
+    interaction: s.interaction ?? null,
+    paymentModel: s.paymentModel ?? null,
+    attachmentsIn: s.attachmentsIn ?? null,
     capabilities: s.capabilities ?? [],
     pricingModel: s.pricingModel,
     currency: s.currency,

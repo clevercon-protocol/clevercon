@@ -38,7 +38,13 @@ import {
 import { isDemo } from '../../config';
 import { useSession } from '../../store/session';
 import { demoCategories } from '../../lib/demo';
-import { getServices, tierLabel, type ServiceSort, type Tier } from '../../lib/services';
+import {
+  getServices,
+  tierLabel,
+  interactionLabel,
+  type ServiceSort,
+  type Tier,
+} from '../../lib/services';
 import {
   getVault,
   getVaultStatus,
@@ -1285,6 +1291,16 @@ export function Marketplace() {
                 <Badge className="border-white/10 bg-white/[0.04] text-slate-300">
                   <Zap size={11} /> {s.pricingModel === 'MPP' ? 'metered' : 'x402'}
                 </Badge>
+                {interactionLabel(s.interaction) && (
+                  <Badge className="border-sky-500/25 bg-sky-500/10 text-sky-300">
+                    {interactionLabel(s.interaction)}
+                  </Badge>
+                )}
+                {s.attachmentsIn?.required && (
+                  <Badge className="border-amber-500/25 bg-amber-500/10 text-amber-300">
+                    file
+                  </Badge>
+                )}
               </div>
               <div className="mt-3 flex items-center justify-between border-t border-line pt-2.5 text-xs text-slate-500">
                 <span>{s.category ?? 'Uncategorized'}</span>

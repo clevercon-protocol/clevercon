@@ -19,7 +19,11 @@ import {
   getPlatformFeeBps,
   tierLabel,
   verificationBlurb,
+  interactionLabel,
+  paymentModelLabel,
+  isMetered,
   type JsonSchema,
+  type AttachmentSpec,
 } from '../lib/services';
 import { createTask } from '../lib/tasks';
 import { getDelegate } from '../lib/vault';
@@ -68,14 +72,44 @@ function placeholderFor(k: string): string {
   return `Enter ${humanizeField(k).toLowerCase()}`;
 }
 
+function MeteredHireBox({ paymentModel }: { paymentModel?: string | null }) {
+  const label = paymentModelLabel(paymentModel) ?? 'Metered';
+  return (
+    <div className="rounded-2xl bg-white/[0.04] p-6">
+      <h2 className="font-semibold text-slate-300">{label}</h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-400">
+        This service bills per use, not as a one-off escrowed job. Your agent pays it directly from
+        its own wallet, which you fund from your vault under your policy, so there is no budget to
+        escrow here.
+      </p>
+      <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-violet-300">
+        <ShieldCheck size={12} /> Protected by your capped private allowance (the on-chain policy),
+        not by per-job escrow.
+      </p>
+      <Link
+        to="/app/vault"
+        className="mt-4 inline-flex w-full items-center justify-center rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium hover:bg-violet-500"
+      >
+        Set up your agent wallet
+      </Link>
+      <p className="mt-2 text-xs text-slate-500">
+        Then point your agent at this service&apos;s endpoint; each call settles over{' '}
+        {paymentModel === 'mpp-session' ? 'an MPP session' : 'x402'} from the agent wallet.
+      </p>
+    </div>
+  );
+}
+
 function HireBox({
   serviceId,
   serviceName,
   inputSchema,
+  attachmentsIn,
 }: {
   serviceId: string;
   serviceName: string;
   inputSchema: JsonSchema | null;
+  attachmentsIn: AttachmentSpec | null;
 }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -90,6 +124,10 @@ function HireBox({
   const propKeys = Object.keys(props);
   const required = inputSchema?.required ?? [];
   const missingRequired = required.filter((k) => !fields[k]?.trim());
+  // The provider declared it needs a file to run the job: block the hire until one
+  // is attached, and surface the accepted types.
+  const fileRequired = !!attachmentsIn?.required;
+  const acceptHint = attachmentsIn?.accept?.length ? attachmentsIn.accept.join(', ') : null;
 
   const hire = useMutation({
     mutationFn: async () => {
@@ -119,6 +157,7 @@ function HireBox({
     Number.isFinite(budgetNum) &&
     budgetNum > 0 &&
     missingRequired.length === 0 &&
+    (!fileRequired || !!file) &&
     !hire.isPending;
 
   return (
@@ -186,11 +225,18 @@ function HireBox({
           </button>
         </div>
       ) : (
-        <label className="mt-3 flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-white/10 px-3 py-2 text-xs text-slate-400 hover:border-violet-500/40 hover:text-slate-300">
-          <Paperclip size={12} /> Attach a file (optional)
+        <label
+          className={`mt-3 flex cursor-pointer items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs hover:border-violet-500/40 hover:text-slate-300 ${
+            fileRequired ? 'border-amber-500/40 text-amber-300' : 'border-white/10 text-slate-400'
+          }`}
+        >
+          <Paperclip size={12} />
+          {fileRequired ? 'Attach a file (required)' : 'Attach a file (optional)'}
+          {acceptHint && <span className="text-slate-500">· {acceptHint}</span>}
           <input
             type="file"
             className="hidden"
+            {...(attachmentsIn?.accept?.length ? { accept: attachmentsIn.accept.join(',') } : {})}
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />
         </label>
@@ -270,6 +316,27 @@ export function ServiceDetail() {
             <p className="mt-1 text-sm text-slate-500">
               {service.category ?? 'Uncategorised'} · {service.provider}
             </p>
+            {(interactionLabel(service.interaction) ||
+              paymentModelLabel(service.paymentModel) ||
+              service.attachmentsIn?.required) && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {paymentModelLabel(service.paymentModel) && (
+                  <span className="rounded-full bg-violet-500/10 px-2.5 py-0.5 text-[11px] text-violet-300">
+                    {paymentModelLabel(service.paymentModel)}
+                  </span>
+                )}
+                {interactionLabel(service.interaction) && (
+                  <span className="rounded-full bg-sky-500/10 px-2.5 py-0.5 text-[11px] text-sky-300">
+                    {interactionLabel(service.interaction)}
+                  </span>
+                )}
+                {service.attachmentsIn?.required && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-[11px] text-amber-300">
+                    <Paperclip size={10} /> Needs a file
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -351,11 +418,16 @@ export function ServiceDetail() {
               </dl>
             </div>
 
-            <HireBox
-              serviceId={service.id}
-              serviceName={service.name}
-              inputSchema={service.inputSchema}
-            />
+            {isMetered(service) ? (
+              <MeteredHireBox paymentModel={service.paymentModel} />
+            ) : (
+              <HireBox
+                serviceId={service.id}
+                serviceName={service.name}
+                inputSchema={service.inputSchema}
+                attachmentsIn={service.attachmentsIn ?? null}
+              />
+            )}
           </div>
         </>
       )}
