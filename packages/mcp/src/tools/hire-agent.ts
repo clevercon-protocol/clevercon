@@ -26,6 +26,11 @@ export const hireAgentSchema = {
       serviceId: { type: 'string', description: 'Required for DIRECT mode' },
       policyId: { type: 'string', description: 'Spend policy to enforce on-chain' },
       description: { type: 'string', maxLength: 2000 },
+      input: {
+        type: 'object',
+        description:
+          "Structured job input for the service (validated against its inputSchema). Put required files in input.attachments as an array of ArtifactRef { url, hash, contentType, size }.",
+      },
     },
     required: ['title', 'mode', 'budget'],
   },
@@ -36,7 +41,7 @@ export async function hireAgentHandler(
   config: ApiConfig,
 ): Promise<ToolResult> {
   try {
-    const { title, mode, budget, serviceId, policyId, description } = args;
+    const { title, mode, budget, serviceId, policyId, description, input } = args;
     if (typeof title !== 'string' || title.trim() === '') throw new Error('title is required');
     if (mode !== 'DIRECT' && mode !== 'SEARCH' && mode !== 'COMPOSE')
       throw new Error('mode must be DIRECT, SEARCH, or COMPOSE');
@@ -44,6 +49,8 @@ export async function hireAgentHandler(
       throw new Error('budget must be a positive number');
     if (mode === 'DIRECT' && (typeof serviceId !== 'string' || serviceId === ''))
       throw new Error('serviceId is required for DIRECT mode');
+    if (input !== undefined && (typeof input !== 'object' || input === null || Array.isArray(input)))
+      throw new Error('input must be an object');
 
     const client = createApiClient(config);
     const task = await client.post('/tasks', {
@@ -53,6 +60,7 @@ export async function hireAgentHandler(
       ...(serviceId ? { serviceId } : {}),
       ...(policyId ? { policyId } : {}),
       ...(description ? { description } : {}),
+      ...(input ? { input } : {}),
     });
     return toolJson(task);
   } catch (error) {

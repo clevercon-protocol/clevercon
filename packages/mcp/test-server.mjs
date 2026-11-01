@@ -102,6 +102,7 @@ async function testListTools() {
       'list_tasks',
       'get_task',
       'approve_task',
+      'answer_step',
       'dispute_task',
     ];
 

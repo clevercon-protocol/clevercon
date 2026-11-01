@@ -164,15 +164,29 @@ export interface CleverConClient {
   /** The owner's live Managed Session (cap/spent/remaining/expiry/paused), or null. */
   getSession(): Promise<unknown>;
   /** Hire a registered service (DIRECT pays a chosen serviceId). `idempotencyKey`
-   *  makes a retry return the original hire rather than hiring twice. */
+   *  makes a retry return the original hire rather than hiring twice. `input`
+   *  carries the structured job input (and `input.attachments`, an ArtifactRef[],
+   *  for services that need files). */
   hire(opts: {
     title: string;
     budget: number;
     serviceId?: string;
     mode?: 'DIRECT' | 'SEARCH' | 'COMPOSE';
     policyId?: string;
+    input?: Record<string, unknown>;
     idempotencyKey?: string;
   }): Promise<Spend>;
+  /** Full state of one of the agent's tasks: its steps, each step's status and
+   *  (for an async/needs-input step) its progress and pending inputRequest. Poll
+   *  this to drive a long-running or needs-input hire to completion. */
+  getTask(taskId: string): Promise<unknown>;
+  /** Answer a step a provider parked as INPUT_REQUIRED (an elicitation), resuming
+   *  the job. `response` is validated against the question's schema server-side. */
+  answer(
+    taskId: string,
+    stepId: string,
+    response: Record<string, unknown>,
+  ): Promise<{ ok: boolean; stepId: string }>;
   /** The vault position the agent can spend (balance, available, locked). */
   getBudget(): Promise<Budget>;
   /** The recent activity ledger (jobs and payments), newest first. */
@@ -371,8 +385,16 @@ export function createSpender(options: SpenderOptions): CleverConClient {
         budget: opts.budget,
         ...(opts.serviceId ? { serviceId: opts.serviceId } : {}),
         ...(opts.policyId ? { policyId: opts.policyId } : {}),
+        ...(opts.input ? { input: opts.input } : {}),
         ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
       }),
+    getTask: (taskId) => request<unknown>('GET', `/tasks/${encodeURIComponent(taskId)}`),
+    answer: (taskId, stepId, response) =>
+      request<{ ok: boolean; stepId: string }>(
+        'POST',
+        `/tasks/${encodeURIComponent(taskId)}/steps/${encodeURIComponent(stepId)}/answer`,
+        { response },
+      ),
     getBudget: () => request<Budget>('GET', '/vault'),
     getActivity: () => request<unknown>('GET', '/activity'),
     setLimit: (limit) => {
