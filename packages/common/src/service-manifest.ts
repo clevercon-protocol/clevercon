@@ -54,6 +54,43 @@ export interface ArtifactRef {
 export type JsonSchema = Record<string, unknown>;
 
 /**
+ * How an agent interacts with a service, orthogonal to how it is paid:
+ * - sync: one request, one response, within a timeout (the only shape today).
+ * - async: the provider returns a durable handle; the worker polls until done.
+ * - human: a person does or approves the work (held until approval/milestone).
+ * - metered: pay-per-call or streaming (x402 / MPP), not escrowed per hire.
+ */
+export type ServiceInteraction = 'sync' | 'async' | 'human' | 'metered';
+
+/** How a service is paid, orthogonal to its interaction shape. */
+export type PaymentModel = 'escrow' | 'x402' | 'mpp-session' | 'subscription';
+
+/** A declared requirement for input attachments the buyer must supply to hire. */
+export interface AttachmentSpec {
+  /** At least one attachment is required. */
+  required?: boolean;
+  /** Accepted content types, e.g. ["application/pdf", "image/*"]. */
+  accept?: string[];
+  /** Max bytes per attachment. */
+  maxSizeBytes?: number;
+  /** Max number of attachments. */
+  maxCount?: number;
+}
+
+/** The lifecycle status a provider reports for a step (MCP Tasks vocabulary). */
+export type ResultStatus = 'completed' | 'working' | 'input_required' | 'failed';
+
+/** A typed question a provider asks mid-job; the answer resumes the job. */
+export interface InputRequest {
+  /** Correlates the question with its answer. */
+  requestId: string;
+  /** The prompt put to the user or agent. */
+  prompt: string;
+  /** Optional JSON Schema the answer must satisfy. */
+  schema?: JsonSchema;
+}
+
+/**
  * The provider's full acceptance contract. Registered once, hashed, and anchored
  * on-chain; editing bumps `version` and re-anchors (anti bait-and-switch).
  */
@@ -78,6 +115,16 @@ export interface ServiceManifest {
   slaMaxLatencyMs?: number;
   /** Bumped on every manifest edit; earned trust is annotated with the version. */
   version: number;
+  /** Interaction shape; absent means 'sync' (back-compat with existing manifests). */
+  interaction?: ServiceInteraction;
+  /** Payment model; absent means 'escrow'. */
+  paymentModel?: PaymentModel;
+  /** Input-attachment requirement, when the service needs files on input. */
+  attachmentsIn?: AttachmentSpec;
+  /** The service may ask the user a question mid-job (elicitation). */
+  mayElicit?: boolean;
+  /** The service streams a metered result (per-tick billing). */
+  streaming?: boolean;
 }
 
 /** What the worker POSTs to a provider endpoint to request a job. */
@@ -96,6 +143,16 @@ export interface JobRequestEnvelope {
   deadline: number;
   /** A retried hire with the same key never double-charges. */
   idempotencyKey: string;
+  /**
+   * What this call does. Absent/`dispatch` starts a job; `poll` checks an async
+   * handle; `answer` resumes an input_required step. Back-compat: absent = dispatch.
+   */
+  kind?: 'dispatch' | 'poll' | 'answer';
+  /** The provider's durable job handle, sent on a `poll`. */
+  handle?: string;
+  /** On an `answer`: the InputRequest being answered and the response payload. */
+  requestId?: string;
+  inputResponse?: Record<string, unknown>;
 }
 
 /** The standard envelope a provider returns, so the pipeline is uniform. */
@@ -111,4 +168,16 @@ export interface JobResultEnvelope {
   issuedAt: number;
   /** Optional: provider signature over jobId|hash(input)|hash(output)|issuedAt. */
   signature?: string;
+  /**
+   * Lifecycle status (MCP Tasks vocabulary). Absent means `completed` when ok, else
+   * `failed`. `working` returns a `handle` to poll; `input_required` returns an
+   * `inputRequest` to put to the user.
+   */
+  status?: ResultStatus;
+  /** For an async job: the durable handle the worker polls. */
+  handle?: string;
+  /** Optional progress for a working async job. */
+  progress?: { pct?: number; message?: string };
+  /** For input_required: the typed question to put to the user or agent. */
+  inputRequest?: InputRequest;
 }

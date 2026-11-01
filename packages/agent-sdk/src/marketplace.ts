@@ -28,6 +28,25 @@ export interface ArtifactRef {
 
 export type JsonSchema = Record<string, unknown>;
 
+export type ServiceInteraction = 'sync' | 'async' | 'human' | 'metered';
+
+export type PaymentModel = 'escrow' | 'x402' | 'mpp-session' | 'subscription';
+
+export interface AttachmentSpec {
+  required?: boolean;
+  accept?: string[];
+  maxSizeBytes?: number;
+  maxCount?: number;
+}
+
+export type ResultStatus = 'completed' | 'working' | 'input_required' | 'failed';
+
+export interface InputRequest {
+  requestId: string;
+  prompt: string;
+  schema?: JsonSchema;
+}
+
 export interface ServiceManifest {
   id: string;
   name: string;
@@ -44,6 +63,16 @@ export interface ServiceManifest {
   healthCheck?: string;
   slaMaxLatencyMs?: number;
   version: number;
+  /** Interaction shape; absent means 'sync' (back-compat). */
+  interaction?: ServiceInteraction;
+  /** Payment model; absent means 'escrow'. */
+  paymentModel?: PaymentModel;
+  /** Input-attachment requirement, when the service needs files on input. */
+  attachmentsIn?: AttachmentSpec;
+  /** The service may ask the user a question mid-job (elicitation). */
+  mayElicit?: boolean;
+  /** The service streams a metered result (per-tick billing). */
+  streaming?: boolean;
 }
 
 export interface JobRequestEnvelope {
@@ -56,6 +85,13 @@ export interface JobRequestEnvelope {
   replyFormat: 'json' | 'text' | 'reference';
   deadline: number;
   idempotencyKey: string;
+  /** dispatch (default) starts a job; poll checks an async handle; answer resumes input_required. */
+  kind?: 'dispatch' | 'poll' | 'answer';
+  /** The provider's durable job handle, sent on a poll. */
+  handle?: string;
+  /** On an answer: which InputRequest this responds to, and the response payload. */
+  requestId?: string;
+  inputResponse?: Record<string, unknown>;
 }
 
 export interface JobResultEnvelope {
@@ -66,4 +102,12 @@ export interface JobResultEnvelope {
   error?: string;
   issuedAt: number;
   signature?: string;
+  /** Lifecycle status; absent means completed when ok, else failed. */
+  status?: ResultStatus;
+  /** For an async job: the durable handle the worker polls. */
+  handle?: string;
+  /** Optional progress for a working async job. */
+  progress?: { pct?: number; message?: string };
+  /** For input_required: the typed question to put to the user or agent. */
+  inputRequest?: InputRequest;
 }
