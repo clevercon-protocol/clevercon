@@ -5,6 +5,7 @@ import type { RuleForm } from '@clevercon/common';
 import { StrKey } from '@stellar/stellar-sdk';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueueService } from '../queue/queue.service.js';
+import type { EligibilityRules } from './eligibility.js';
 
 /**
  * A spending policy expressed as the four composable rule types from
@@ -43,6 +44,11 @@ export interface CreatePolicyParams {
    * ciphertext). The server stores it verbatim and can never read it.
    */
   encryptedBackup?: string;
+  /**
+   * Soft marketplace eligibility (service allow/deny, allowed tiers). NON-sensitive
+   * curation stored in cleartext for both lanes and enforced by the app at hire.
+   */
+  eligibility?: EligibilityRules;
 }
 
 const STROOPS_PER_USDC = 10_000_000;
@@ -85,6 +91,7 @@ function serialize(p: {
   isPrivate: boolean;
   ruleSummary: Prisma.JsonValue | null;
   encryptedBackup: string | null;
+  eligibility: Prisma.JsonValue | null;
   name: string | null;
   form: string;
   status: string;
@@ -101,6 +108,8 @@ function serialize(p: {
     rules: p.ruleSummary,
     // The owner's device decrypts this to re-prove a private rule across devices.
     encryptedBackup: p.encryptedBackup,
+    // Soft marketplace eligibility (cleartext, app-enforced at hire).
+    eligibility: p.eligibility ?? null,
     name: p.name,
     form: p.form,
     status: p.status,
@@ -182,6 +191,10 @@ export class PoliciesService {
         // Private rules keep a wallet-encrypted backup (ciphertext); public rules
         // are already cleartext, so there is nothing to back up privately.
         encryptedBackup: isPrivate ? params.encryptedBackup : undefined,
+        // Soft eligibility is non-sensitive; store it cleartext in both lanes.
+        eligibility: params.eligibility
+          ? (params.eligibility as unknown as Prisma.InputJsonValue)
+          : undefined,
       },
     });
 

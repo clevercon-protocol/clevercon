@@ -27,6 +27,15 @@ const createSchema = z.object({
     denylist: z.array(z.string().min(1)).max(100).optional(),
     denylistThresholdUsdc: z.number().positive().optional(),
   }),
+  // Soft marketplace eligibility (service allow/deny, allowed tiers): non-sensitive
+  // curation the app enforces at hire. Cleartext in both lanes.
+  eligibility: z
+    .object({
+      allowedTiers: z.array(z.enum(['T1', 'T2', 'T3'])).max(3).optional(),
+      serviceAllow: z.array(z.string().min(1).max(60)).max(200).optional(),
+      serviceDeny: z.array(z.string().min(1).max(60)).max(200).optional(),
+    })
+    .optional(),
 });
 
 const proofSchema = z.object({

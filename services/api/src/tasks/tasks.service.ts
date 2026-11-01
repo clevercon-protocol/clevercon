@@ -11,6 +11,7 @@ import { Prisma, PaymentStatus, StepStatus, TaskMode, TaskStatus } from '@clever
 // VALUE from it here. Schema validation uses an API-local copy (./schema-check).
 import type { InputRequest } from '@clevercon/common';
 import { validateAgainstSchema, type SchemaDoc } from './schema-check.js';
+import { checkEligibility, type EligibilityRules } from '../policies/eligibility.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueueService } from '../queue/queue.service.js';
 import { VaultContractService } from '../vault/vault-contract.service.js';
@@ -188,6 +189,21 @@ export class TasksService {
       }
       const service = await this.prisma.service.findUnique({ where: { id: params.serviceId } });
       if (!service) throw new BadRequestException('Unknown service');
+      // Soft eligibility: if the buyer chose a rule that curates services (allow/deny
+      // list or allowed tiers), block a disallowed hire BEFORE any task row or lock.
+      // The on-chain payee allowlist is still the hard backstop; this is the app
+      // filter the plan calls for ("a disallowed service is never attempted").
+      if (params.policyId) {
+        const policy = await this.prisma.policy.findFirst({
+          where: { id: params.policyId, userId },
+          select: { eligibility: true },
+        });
+        const check = checkEligibility(
+          (policy?.eligibility as EligibilityRules | null) ?? null,
+          { id: service.id, tier: service.tier },
+        );
+        if (!check.ok) throw new BadRequestException(`Hire blocked by your rule: ${check.reason}`);
+      }
       directPayee = service.stellarAddress ?? null;
       data.steps = {
         create: [

@@ -424,6 +424,12 @@ model Policy {
   // key derived from a wallet signature) so the owner can re-prove across devices
   // and re-view the salt. The server cannot read it. Null for public rules.
   encryptedBackup String?
+  // Soft marketplace eligibility (service allow/deny, allowed tiers): NON-sensitive
+  // curation the app enforces at hire, stored in cleartext in BOTH lanes (the
+  // sensitive spend clauses stay private/committed). The on-chain payee allowlist is
+  // the hard backstop; this is the convenience filter. { allowedTiers?, serviceAllow?,
+  // serviceDeny? }.
+  eligibility     Json?
   // Lifecycle + shared rule-model fields (Phase A5). All additive/defaulted so
   // Railway's db:deploy syncs them with no data loss.
   name            String?
