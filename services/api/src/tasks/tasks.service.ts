@@ -555,7 +555,10 @@ export class TasksService {
     const t = await this.prisma.task.findFirst({
       where: { id, buyerId: userId },
       include: {
-        steps: { orderBy: { index: 'asc' }, include: { service: { select: { name: true } } } },
+        steps: {
+          orderBy: { index: 'asc' },
+          include: { service: { select: { name: true, tier: true, verification: true } } },
+        },
         payments: { orderBy: { createdAt: 'desc' } },
       },
     });
@@ -592,6 +595,20 @@ export class TasksService {
         status: s.status,
         estimatedCost: Number(s.estimatedCost),
         service: s.service?.name ?? null,
+        // Verification tier (T1 trustless / T2 attestable / T3 human) + whether this
+        // released step was TRUSTLESSLY verified (a T1 check the worker re-ran and
+        // passed, not merely accepted), so the Job view can badge a verified delivery.
+        tier: s.service?.tier ?? null,
+        verified: (() => {
+          const method = (s.service?.verification as { method?: string } | null)?.method;
+          return (
+            s.status === StepStatus.RELEASED &&
+            s.service?.tier === 'T1' &&
+            !!method &&
+            method !== 'attest' &&
+            method !== 'manual'
+          );
+        })(),
         latencyMs: s.latencyMs,
         error: s.error,
         // Advisory LLM-judge signal for the buyer (0-5 + rationale); never gates pay.

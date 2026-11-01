@@ -21,6 +21,7 @@ import {
   raiseDispute,
   approveTask,
   answerStep,
+  getDisputes,
   type TaskDetail as TaskDetailData,
   type TaskStepView,
 } from '../lib/tasks';
@@ -282,6 +283,52 @@ function AnswerForm({ taskId, step }: { taskId: string; step: TaskStepView }) {
   );
 }
 
+/**
+ * This task's dispute history with a clear timeline (raised -> resolved), shown on
+ * both the buyer's Job view and (via the provider inbox) the provider's. Visible
+ * only when a dispute exists, so a clean task stays uncluttered.
+ */
+function DisputePanel({ taskId }: { taskId: string }) {
+  const { data: disputes = [] } = useQuery({ queryKey: ['disputes'], queryFn: getDisputes });
+  const mine = disputes.filter((d) => d.taskId === taskId);
+  if (mine.length === 0) return null;
+  return (
+    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-4">
+      <div className="flex items-center gap-2 text-amber-200">
+        <Flag size={16} />
+        <span className="font-medium">Dispute{mine.length > 1 ? 's' : ''}</span>
+      </div>
+      <div className="mt-3 space-y-3">
+        {mine.map((d) => (
+          <div key={d.id} className="text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`text-xs font-medium ${
+                  d.status === 'OPEN'
+                    ? 'text-amber-300'
+                    : d.status === 'RESOLVED'
+                      ? 'text-emerald-300'
+                      : 'text-slate-400'
+                }`}
+              >
+                {d.status}
+              </span>
+              <span className="text-xs text-slate-500">raised {fmt(d.createdAt)}</span>
+              {d.resolvedAt && (
+                <span className="text-xs text-slate-500">· resolved {fmt(d.resolvedAt)}</span>
+              )}
+            </div>
+            {d.reason && <p className="mt-1 text-slate-400">Reason: {d.reason}</p>}
+            {d.resolution && (
+              <p className="mt-1 text-emerald-300/90">Resolution: {d.resolution}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const STATUS_TINT: Record<string, string> = {
   RUNNING: 'text-sky-300',
   RELEASED: 'text-emerald-300',
@@ -375,6 +422,7 @@ export function TaskDetail() {
             </div>
           )}
           {task.awaitingApproval && <ReviewBanner task={task} />}
+          <DisputePanel taskId={task.id} />
           <UnpaidBanner task={task} />
 
           <div className="grid grid-cols-3 gap-3">
@@ -446,6 +494,13 @@ export function TaskDetail() {
                     )}
                     {s.status === 'INPUT_REQUIRED' && s.inputRequest && (
                       <AnswerForm taskId={task.id} step={s} />
+                    )}
+                    {s.verified && (
+                      <div className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-emerald-300">
+                        <ShieldCheck size={12} className="shrink-0" />
+                        Trustlessly verified before payment — the result was re-checked on-chain,
+                        not just accepted.
+                      </div>
                     )}
                     {s.qualityRating != null && (
                       <div className="mt-2 flex items-start gap-1.5 text-[11px] text-sky-300">

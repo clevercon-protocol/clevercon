@@ -71,6 +71,9 @@ export interface TaskStepView {
   status: string;
   estimatedCost: number;
   service: string | null;
+  // Verification tier (T1/T2/T3) and whether a released step was trustlessly verified.
+  tier?: string | null;
+  verified?: boolean;
   latencyMs: number | null;
   error: string | null;
   output: string | null;
