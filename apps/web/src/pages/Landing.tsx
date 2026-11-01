@@ -17,6 +17,11 @@ import {
   Users,
   EyeOff,
   Fingerprint,
+  GraduationCap,
+  FlaskConical,
+  Code2,
+  Briefcase,
+  TrendingUp,
 } from 'lucide-react';
 
 const GITHUB_URL = 'https://github.com/clevercon-protocol/clevercon';
@@ -116,6 +121,37 @@ const CATEGORIES = [
   'Risk & Compliance',
   'Human Services',
   'Business Services',
+];
+
+// Who the same rail serves. Each example maps to a real capability (pay / disburse /
+// hire under a private, on-chain-enforced rule), so this is honest positioning, not
+// a promise of features that do not exist.
+const VERTICALS = [
+  {
+    icon: GraduationCap,
+    title: 'Students',
+    body: 'Fund one account and let an agent pay per-use research and writing tools, capped so a runaway loop can never overspend.',
+  },
+  {
+    icon: FlaskConical,
+    title: 'Researchers',
+    body: 'Hire data, scraping, and analysis services; keep your methodology and limits private while the chain sees only bounded payments.',
+  },
+  {
+    icon: Code2,
+    title: 'Developers',
+    body: 'Give an agent an API key and a private rule; it discovers and pays services per call within your limits, over MCP or the SDK.',
+  },
+  {
+    icon: Briefcase,
+    title: 'Businesses',
+    body: 'Disburse to contractors or vendors in one instruction, each payment capped and policy-bounded, and never custodial.',
+  },
+  {
+    icon: TrendingUp,
+    title: 'Traders & investors',
+    body: 'Let an agent pay for data and signals under a strict daily cap and allowlist, with every spend on-chain-verifiable.',
+  },
 ];
 
 const USAGE_MODES = [
@@ -717,6 +753,34 @@ export function Landing() {
               </p>
             </div>
           </Reveal>
+        </div>
+      </section>
+
+      {/* Who it's for */}
+      <section id="who" className="px-5 py-20 border-t border-white/5">
+        <div className="max-w-6xl mx-auto">
+          <Reveal className="text-center max-w-2xl mx-auto">
+            <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight text-balance">
+              Built for anyone who hands work to an agent
+            </h2>
+            <p className="mt-3 text-slate-400">
+              One rail, many uses. The limits and privacy are yours to set; the examples below are
+              real things an agent can do today within a bounded, private rule.
+            </p>
+          </Reveal>
+          <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {VERTICALS.map((v, i) => (
+              <Reveal key={v.title} delay={i * 70}>
+                <div className="h-full rounded-2xl border border-white/10 bg-white/[0.02] p-6 transition duration-200 hover:border-white/20 hover:bg-white/[0.03] motion-safe:hover:-translate-y-1">
+                  <div className="w-10 h-10 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
+                    <v.icon size={17} className="text-violet-300" />
+                  </div>
+                  <h3 className="mt-4 text-base font-semibold text-white">{v.title}</h3>
+                  <p className="mt-1.5 text-sm text-slate-400 leading-relaxed">{v.body}</p>
+                </div>
+              </Reveal>
+            ))}
+          </div>
         </div>
       </section>
 
