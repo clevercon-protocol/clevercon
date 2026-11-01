@@ -206,6 +206,10 @@ model Service {
   verification    Json? // { method, spec } for how delivery is judged
   bondAmount      Decimal       @default(0) @db.Decimal(20, 7) // optional slashable stake (phased)
   manifestVersion Int           @default(1) // bumped on edits; anti bait-and-switch
+  // Interaction/payment shape (marketplace v2). Absent = sync/escrow (back-compat).
+  interaction     String? // sync | async | human | metered
+  paymentModel    String? // escrow | x402 | mpp-session | subscription
+  attachmentsIn   Json? // AttachmentSpec {required,accept,maxSizeBytes,maxCount} for required input files
   registeredAt    DateTime      @default(now())
   lastSeen        DateTime?
   updatedAt       DateTime      @updatedAt
@@ -281,6 +285,7 @@ enum TaskStatus {
 enum StepStatus {
   PENDING
   RUNNING
+  INPUT_REQUIRED
   AWAITING_APPROVAL
   RELEASED
   FAILED
@@ -335,6 +340,11 @@ model TaskStep {
   qualityNote   String? // one-line rationale from the judge (advisory; never gates payment)
   artifact      Json? // ArtifactRef {url, hash, contentType, size} when the provider returns a file
   latencyMs     Int?
+  // Async / needs-input execution state (marketplace v2). See service-manifest.ts.
+  providerJobHandle String? // durable handle the worker polls for an async (status=working) job
+  progress          Json? // { pct?, message? } last progress a working async job reported
+  inputRequest      Json? // InputRequest the provider asked mid-job (set with status INPUT_REQUIRED)
+  inputResponse     Json? // the answer supplied for inputRequest; resumes the job on the next poll
   releaseAt     DateTime? // T2 dispute window: when a held step auto-releases if undisputed
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt

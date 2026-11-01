@@ -53,6 +53,15 @@ export interface RegisterServiceParams {
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   verification?: { method: string; spec?: Record<string, unknown> };
+  // Interaction/payment shape (marketplace v2; absent = sync/escrow).
+  interaction?: string;
+  paymentModel?: string;
+  attachmentsIn?: {
+    required?: boolean;
+    accept?: string[];
+    maxSizeBytes?: number;
+    maxCount?: number;
+  };
   /** Proof of control over a payout address that is not the caller's own wallet. */
   payoutProof?: { challenge: string; signature: string };
 }
@@ -66,6 +75,14 @@ export interface UpdateServiceParams {
   pricePerCall?: number;
   endpoint?: string;
   stellarAddress?: string;
+  interaction?: string;
+  paymentModel?: string;
+  attachmentsIn?: {
+    required?: boolean;
+    accept?: string[];
+    maxSizeBytes?: number;
+    maxCount?: number;
+  };
 }
 
 /** Stable, URL-safe id from a display name plus a short random suffix. */
@@ -112,6 +129,10 @@ function serializeService(s: ServiceWithRep, uniquePayers = 0, payoutReady: bool
     status: s.status,
     tier: s.tier,
     verification: s.verification ?? null,
+    // Interaction/payment shape (marketplace v2); null = sync/escrow.
+    interaction: s.interaction ?? null,
+    paymentModel: s.paymentModel ?? null,
+    attachmentsIn: s.attachmentsIn ?? null,
     // The provider's own trust view: how they rank and why.
     trust: trustTier(settlements, score, uniquePayers, disputesUpheld, totalJobs),
     settlements,
@@ -178,6 +199,9 @@ export class ProviderService {
           inputSchema: (params.inputSchema ?? undefined) as Prisma.InputJsonValue | undefined,
           outputSchema: (params.outputSchema ?? undefined) as Prisma.InputJsonValue | undefined,
           verification: (params.verification ?? undefined) as Prisma.InputJsonValue | undefined,
+          interaction: params.interaction ?? undefined,
+          paymentModel: params.paymentModel ?? undefined,
+          attachmentsIn: (params.attachmentsIn ?? undefined) as Prisma.InputJsonValue | undefined,
           manifestHash: manifestHash({
             name: params.name,
             description: params.description,
@@ -245,6 +269,10 @@ export class ProviderService {
       data.pricePerCall = new Prisma.Decimal(params.pricePerCall);
     if (params.endpoint !== undefined) data.endpoint = params.endpoint;
     if (params.stellarAddress !== undefined) data.stellarAddress = params.stellarAddress;
+    if (params.interaction !== undefined) data.interaction = params.interaction;
+    if (params.paymentModel !== undefined) data.paymentModel = params.paymentModel;
+    if (params.attachmentsIn !== undefined)
+      data.attachmentsIn = params.attachmentsIn as Prisma.InputJsonValue;
 
     const updated = await this.prisma.service.update({
       where: { id: serviceId },

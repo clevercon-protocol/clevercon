@@ -99,6 +99,12 @@ function serialize(s: ServiceWithRep, verified: Set<string>, stat?: PayerStat) {
     verification: s.verification ?? null,
     outputSchema: s.outputSchema ?? null,
     inputSchema: s.inputSchema ?? null,
+    // Interaction/payment shape + input-file requirement, so a buyer/agent knows
+    // HOW to hire this service (sync vs async/human/metered) and what to attach.
+    // null = sync/escrow with no required attachments (back-compat).
+    interaction: s.interaction ?? null,
+    paymentModel: s.paymentModel ?? null,
+    attachmentsIn: s.attachmentsIn ?? null,
     // Settlement-gated trust, surfaced for the marketplace: the trust level, the
     // count of real settled jobs, and whether we've curated/vouched for it.
     trust: trustTier(settlements, score, uniquePayers, disputesUpheld, totalJobs),

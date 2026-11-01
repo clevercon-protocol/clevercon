@@ -13,6 +13,16 @@ const verificationSchema = z.object({
   spec: z.record(z.unknown()).optional(),
 });
 
+// Interaction/payment shape (marketplace v2). Absent = sync/escrow (back-compat).
+const interactionSchema = z.enum(['sync', 'async', 'human', 'metered']);
+const paymentModelSchema = z.enum(['escrow', 'x402', 'mpp-session', 'subscription']);
+const attachmentSpecSchema = z.object({
+  required: z.boolean().optional(),
+  accept: z.array(z.string().max(120)).max(20).optional(),
+  maxSizeBytes: z.number().int().positive().optional(),
+  maxCount: z.number().int().positive().max(20).optional(),
+});
+
 // Methods valid for each tier: T1 is trustless, T2 is attested (schema + dispute),
 // T3 is human/milestone. A manifest whose method does not match its tier is rejected.
 const TIER_METHODS: Record<string, string[]> = {
@@ -36,6 +46,9 @@ const registerSchema = z
     inputSchema: jsonSchemaObj.optional(),
     outputSchema: jsonSchemaObj.optional(),
     verification: verificationSchema.optional(),
+    interaction: interactionSchema.optional(),
+    paymentModel: paymentModelSchema.optional(),
+    attachmentsIn: attachmentSpecSchema.optional(),
     // Required only when the payout address is not the caller's own wallet: a
     // signature by that address's key over a challenge from GET /payout-challenge.
     payoutProof: z.object({ challenge: z.string(), signature: z.string() }).optional(),
@@ -54,6 +67,9 @@ const updateSchema = z
     pricePerCall: z.number().nonnegative().optional(),
     endpoint: z.string().url().optional(),
     stellarAddress: z.string().min(1).max(120).optional(),
+    interaction: interactionSchema.optional(),
+    paymentModel: paymentModelSchema.optional(),
+    attachmentsIn: attachmentSpecSchema.optional(),
   })
   .refine((o) => Object.keys(o).length > 0, { message: 'No fields to update' });
 
