@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { executeTask, isAcceptableOutput, releaseHeldStep } from './executor.js';
+import { executeTask, isAcceptableOutput, releaseHeldStep, pollStep } from './executor.js';
 
 interface Service {
   endpoint: string;
@@ -420,6 +420,250 @@ describe('releaseHeldStep', () => {
     expect(step.status).toBe('RELEASED');
     expect(step.task?.status).toBe('COMPLETED');
     expect(enqueueSettle).not.toHaveBeenCalled(); // no on-chain settlement
+  });
+});
+
+// ----- async / needs-input lifecycle -----
+
+function envelopeResp(fields: Record<string, unknown>) {
+  return new Response(
+    JSON.stringify({ ok: true, contentType: 'application/json', issuedAt: 1, ...fields }),
+    { status: 200 },
+  );
+}
+const workingResp = (handle = 'h1', progress?: object) =>
+  envelopeResp({ status: 'working', handle, ...(progress ? { progress } : {}) });
+const inputReqResp = (requestId = 'q1', prompt = 'Which format?') =>
+  envelopeResp({ status: 'input_required', inputRequest: { requestId, prompt } });
+const completedResp = (data: unknown = 'result') => envelopeResp({ status: 'completed', data });
+
+describe('executeTask async lifecycle', () => {
+  function oneAsync(id: string): Task {
+    return {
+      id,
+      status: 'PENDING',
+      steps: [
+        {
+          id: 's1',
+          index: 0,
+          action: 'x',
+          status: 'PENDING',
+          serviceId: 'svc1',
+          service: { endpoint: 'https://svc.test' },
+          input: {},
+        },
+      ],
+    };
+  }
+
+  it('parks a working step (RUNNING + handle) and schedules a poll; task stays RUNNING', async () => {
+    const task = oneAsync('a1');
+    const scheduleStepPoll = vi.fn(async () => {});
+    const res = await executeTask(
+      mockPrisma(task),
+      (() => workingResp('h1', { pct: 10 })) as unknown as typeof fetch,
+      'a1',
+      { scheduleStepPoll },
+    );
+    expect(res.status).toBe('awaiting');
+    expect(task.status).toBe('RUNNING');
+    expect(task.steps[0].status).toBe('RUNNING');
+    expect((task.steps[0] as { providerJobHandle?: string }).providerJobHandle).toBe('h1');
+    expect(scheduleStepPoll).toHaveBeenCalledWith('s1', expect.any(Number));
+  });
+
+  it('parks an input_required step with the question and schedules a poll', async () => {
+    const task = oneAsync('a2');
+    const scheduleStepPoll = vi.fn(async () => {});
+    const res = await executeTask(
+      mockPrisma(task),
+      (() => inputReqResp('q9', 'PNG or JPG?')) as unknown as typeof fetch,
+      'a2',
+      { scheduleStepPoll },
+    );
+    expect(res.status).toBe('awaiting');
+    expect(task.steps[0].status).toBe('INPUT_REQUIRED');
+    expect((task.steps[0] as { inputRequest?: { requestId: string } }).inputRequest).toMatchObject({
+      requestId: 'q9',
+    });
+    expect(scheduleStepPoll).toHaveBeenCalled();
+  });
+
+  it('fails a working reply that omits a job handle', async () => {
+    const task = oneAsync('a3');
+    const res = await executeTask(
+      mockPrisma(task),
+      (() => envelopeResp({ status: 'working' })) as unknown as typeof fetch,
+      'a3',
+      { scheduleStepPoll: vi.fn(async () => {}) },
+    );
+    expect(res.status).toBe('failed');
+    expect(task.steps[0].status).toBe('FAILED');
+  });
+});
+
+interface PolledStep {
+  id: string;
+  index: number;
+  action: string;
+  status: string;
+  serviceId?: string | null;
+  providerJobHandle?: string | null;
+  input?: Record<string, unknown> | null;
+  inputRequest?: unknown;
+  inputResponse?: unknown;
+  createdAt: Date;
+  service: { endpoint: string; tier?: string; outputSchema?: Record<string, unknown> | null } | null;
+  task: { id: string; status: string; buyerId: string; vaultTaskId: bigint | null } | null;
+}
+
+function mockPollPrisma(step: PolledStep) {
+  return {
+    taskStep: {
+      findUnique: vi.fn(async () => step),
+      update: vi.fn(async ({ data }: { data: Partial<PolledStep> }) => {
+        Object.assign(step, data);
+        return step;
+      }),
+    },
+    // recordOutcome's $transaction is intentionally absent: it throws inside its own
+    // try/catch and is swallowed (reputation is best-effort), so polls stay hermetic.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
+describe('pollStep', () => {
+  function parked(over: Partial<PolledStep> = {}): PolledStep {
+    return {
+      id: 's1',
+      index: 0,
+      action: 'x',
+      status: 'RUNNING',
+      serviceId: 'svc1',
+      providerJobHandle: 'h1',
+      input: {},
+      inputRequest: null,
+      inputResponse: null,
+      createdAt: new Date(),
+      service: { endpoint: 'https://svc.test' },
+      task: { id: 't1', status: 'RUNNING', buyerId: 'u1', vaultTaskId: null },
+      ...over,
+    };
+  }
+
+  it('completes a working step on poll (kind:poll + handle) and re-enqueues the task', async () => {
+    const step = parked();
+    const reEnqueueTask = vi.fn(async () => {});
+    const fetchDone = vi.fn(async () => completedResp('done'));
+    const res = await pollStep(mockPollPrisma(step), fetchDone as unknown as typeof fetch, 's1', {
+      reEnqueueTask,
+      scheduleStepPoll: vi.fn(async () => {}),
+    });
+    expect(res.status).toBe('completed');
+    expect(step.status).toBe('RELEASED');
+    expect(reEnqueueTask).toHaveBeenCalledWith('t1');
+    const body = JSON.parse((fetchDone.mock.calls[0][1] as { body: string }).body);
+    expect(body.kind).toBe('poll');
+    expect(body.handle).toBe('h1');
+  });
+
+  it('keeps polling while the provider is still working', async () => {
+    const step = parked();
+    const scheduleStepPoll = vi.fn(async () => {});
+    const res = await pollStep(
+      mockPollPrisma(step),
+      (() => workingResp('h1', { pct: 50 })) as unknown as typeof fetch,
+      's1',
+      { scheduleStepPoll, reEnqueueTask: vi.fn(async () => {}) },
+    );
+    expect(res.status).toBe('working');
+    expect(step.status).toBe('RUNNING');
+    expect(scheduleStepPoll).toHaveBeenCalled();
+  });
+
+  it('re-arms the deadline watch while awaiting an answer (no provider call)', async () => {
+    const step = parked({
+      status: 'INPUT_REQUIRED',
+      inputRequest: { requestId: 'q1', prompt: 'fmt?' },
+      inputResponse: null,
+    });
+    const scheduleStepPoll = vi.fn(async () => {});
+    const spy = vi.fn(async () => completedResp());
+    const res = await pollStep(mockPollPrisma(step), spy as unknown as typeof fetch, 's1', {
+      scheduleStepPoll,
+    });
+    expect(res.status).toBe('input_required');
+    expect(spy).not.toHaveBeenCalled();
+    expect(scheduleStepPoll).toHaveBeenCalled();
+  });
+
+  it('relays a stored answer as kind:answer and completes', async () => {
+    const step = parked({
+      status: 'INPUT_REQUIRED',
+      inputRequest: { requestId: 'q1', prompt: 'fmt?' },
+      inputResponse: { format: 'png' },
+    });
+    const fetchDone = vi.fn(async () => completedResp('ok'));
+    const res = await pollStep(mockPollPrisma(step), fetchDone as unknown as typeof fetch, 's1', {
+      reEnqueueTask: vi.fn(async () => {}),
+      scheduleStepPoll: vi.fn(async () => {}),
+    });
+    expect(res.status).toBe('completed');
+    const body = JSON.parse((fetchDone.mock.calls[0][1] as { body: string }).body);
+    expect(body.kind).toBe('answer');
+    expect(body.requestId).toBe('q1');
+    expect(body.inputResponse).toMatchObject({ format: 'png' });
+  });
+
+  it('fails the step when the provider reports failed', async () => {
+    const step = parked();
+    const reEnqueueTask = vi.fn(async () => {});
+    const res = await pollStep(
+      mockPollPrisma(step),
+      (() => envelopeResp({ ok: false, status: 'failed', error: 'boom' })) as unknown as typeof fetch,
+      's1',
+      { reEnqueueTask, scheduleStepPoll: vi.fn(async () => {}) },
+    );
+    expect(res.status).toBe('failed');
+    expect(step.status).toBe('FAILED');
+    expect(reEnqueueTask).toHaveBeenCalledWith('t1');
+  });
+
+  it('fails a step that exceeds the max async duration (no provider call)', async () => {
+    const step = parked({ createdAt: new Date(Date.now() - 2 * 3600 * 1000) });
+    const spy = vi.fn(async () => completedResp());
+    const res = await pollStep(mockPollPrisma(step), spy as unknown as typeof fetch, 's1', {
+      reEnqueueTask: vi.fn(async () => {}),
+      scheduleStepPoll: vi.fn(async () => {}),
+    });
+    expect(res.status).toBe('failed');
+    expect(step.status).toBe('FAILED');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('stays working (retries) on a transient provider HTTP error', async () => {
+    const step = parked();
+    const scheduleStepPoll = vi.fn(async () => {});
+    const res = await pollStep(
+      mockPollPrisma(step),
+      (() => new Response('err', { status: 503 })) as unknown as typeof fetch,
+      's1',
+      { scheduleStepPoll, reEnqueueTask: vi.fn(async () => {}) },
+    );
+    expect(res.status).toBe('working');
+    expect(step.status).toBe('RUNNING');
+    expect(scheduleStepPoll).toHaveBeenCalled();
+  });
+
+  it('skips a step that is no longer awaiting a poll', async () => {
+    const step = parked({ status: 'RELEASED' });
+    const res = await pollStep(
+      mockPollPrisma(step),
+      (() => completedResp()) as unknown as typeof fetch,
+      's1',
+      {},
+    );
+    expect(res.status).toBe('skipped');
   });
 });
 

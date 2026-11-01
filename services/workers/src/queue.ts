@@ -19,6 +19,10 @@ export const BATCH_SETTLEMENT_QUEUE = 'batch-settlement';
 // AWAITING_APPROVAL for a dispute window; a delayed job on this queue auto-releases
 // it once the window elapses with no dispute.
 export const STEP_RELEASE_QUEUE = 'step-release';
+// The step-poll queue: a long-running (async) or needs-input step is parked, and a
+// delayed job on this queue polls the provider / enforces the deadline until the
+// step reaches a terminal state.
+export const STEP_POLL_QUEUE = 'step-poll';
 
 export interface TaskExecutionJob {
   taskId: string;
@@ -36,6 +40,10 @@ export interface SettlementJob {
 }
 
 export interface StepReleaseJob {
+  stepId: string;
+}
+
+export interface StepPollJob {
   stepId: string;
 }
 
@@ -148,6 +156,37 @@ export async function enqueueStepRelease(stepId: string, delayMs: number): Promi
       backoff: { type: 'exponential', delay: 5000 },
       removeOnComplete: 200,
       removeOnFail: 1000,
+    },
+  );
+}
+
+let stepPollQueueInstance: Queue<StepPollJob> | null = null;
+
+export function stepPollQueue(): Queue<StepPollJob> {
+  if (!stepPollQueueInstance)
+    stepPollQueueInstance = new Queue<StepPollJob>(STEP_POLL_QUEUE, {
+      connection: redisConnection(),
+    });
+  return stepPollQueueInstance;
+}
+
+/**
+ * Schedule the next poll of a parked async / needs-input step after `delayMs`.
+ * Unlike the release queue, the jobId is unique per enqueue (polls recur over
+ * time, so they must NOT dedupe); pollStep is idempotent and no-ops a step that
+ * has already resolved, so an occasional double-schedule is harmless.
+ */
+export async function enqueueStepPoll(stepId: string, delayMs: number): Promise<void> {
+  await stepPollQueue().add(
+    'poll',
+    { stepId },
+    {
+      jobId: `poll-${stepId}-${Date.now()}`,
+      delay: Math.max(0, delayMs),
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 3000 },
+      removeOnComplete: 200,
+      removeOnFail: 500,
     },
   );
 }

@@ -11,14 +11,16 @@ import {
   SETTLEMENT_QUEUE,
   BATCH_SETTLEMENT_QUEUE,
   STEP_RELEASE_QUEUE,
+  STEP_POLL_QUEUE,
   redisConnection,
   redisUrl,
   type TaskExecutionJob,
   type ProofGenerationJob,
   type SettlementJob,
   type StepReleaseJob,
+  type StepPollJob,
 } from './queue.js';
-import { executeTask, releaseHeldStep } from './executor.js';
+import { executeTask, releaseHeldStep, pollStep } from './executor.js';
 import { generateProof } from './prover.js';
 import {
   settleStep,
@@ -231,6 +233,34 @@ function main(): void {
     logger.error({ stepId: job?.data.stepId, err: err.message }, 'step-release job failed'),
   );
 
+  // Async / needs-input polling: a parked step is driven by delayed jobs on this
+  // queue until it reaches a terminal state (pollStep polls the provider, relays a
+  // buyer's answer, or fails the step on its deadline). On a terminal outcome it
+  // re-enqueues task execution so dependents run and the task finalizes.
+  const pollWorker = new Worker<StepPollJob>(
+    STEP_POLL_QUEUE,
+    async (job) => {
+      const result = await pollStep(prisma, fetch, job.data.stepId);
+      // Nudge the buyer in real time so the dapp reflects progress / a pending
+      // question / the terminal step state without waiting for the task event.
+      if (result.buyerId) {
+        emitter.to(`user:${result.buyerId}`).emit('task.updated', {
+          taskId: result.taskId,
+          stepId: result.stepId,
+          stepStatus: result.status,
+        });
+      }
+      return result;
+    },
+    { connection: redisConnection(), concurrency: CONCURRENCY },
+  );
+  pollWorker.on('completed', (job, result) =>
+    logger.info({ stepId: job.data.stepId, result }, 'step-poll processed'),
+  );
+  pollWorker.on('failed', (job, err) =>
+    logger.error({ stepId: job?.data.stepId, err: err.message }, 'step-poll job failed'),
+  );
+
   // pp/2 batch settlement: the client proved; this relayer submits the batch.
   const batchWorker = new Worker<BatchSettlePayload>(
     BATCH_SETTLEMENT_QUEUE,
@@ -257,7 +287,7 @@ function main(): void {
 
   logger.info(
     { concurrency: CONCURRENCY },
-    'task-execution + proof-generation + settlement + step-release + batch workers up',
+    'task-execution + proof-generation + settlement + step-release + step-poll + batch workers up',
   );
 
   const shutdown = async () => {
@@ -265,6 +295,7 @@ function main(): void {
     await proofWorker.close();
     await settlementWorker.close();
     await releaseWorker.close();
+    await pollWorker.close();
     await batchWorker.close();
     await prisma.$disconnect();
     process.exit(0);
