@@ -12,6 +12,9 @@ export interface ListParams {
   category?: string;
   capability?: string;
   tier?: string;
+  paymentModel?: string;
+  interaction?: string;
+  maxPrice?: number;
   sort?: ServiceSort;
   limit?: number;
   offset?: number;
@@ -183,6 +186,26 @@ export class ServicesService {
     if (params.category) where.category = params.category;
     if (params.tier) where.tier = params.tier;
     if (params.capability) where.capabilities = { has: params.capability };
+    if (params.maxPrice != null) where.pricePerCall = { lte: new Prisma.Decimal(params.maxPrice) };
+    // Manifest-v2 axes. A null column means the default (sync/escrow), so filtering
+    // by the default value must also match legacy rows that never set it. Composed
+    // via AND so it never clobbers the search OR above.
+    const and: Prisma.ServiceWhereInput[] = [];
+    if (params.interaction) {
+      and.push(
+        params.interaction === 'sync'
+          ? { OR: [{ interaction: 'sync' }, { interaction: null }] }
+          : { interaction: params.interaction },
+      );
+    }
+    if (params.paymentModel) {
+      and.push(
+        params.paymentModel === 'escrow'
+          ? { OR: [{ paymentModel: 'escrow' }, { paymentModel: null }] }
+          : { paymentModel: params.paymentModel },
+      );
+    }
+    if (and.length) where.AND = and;
     // Server-side search so it composes correctly with pagination.
     if (params.q)
       where.OR = [

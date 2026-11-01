@@ -8,6 +8,11 @@ const listQuery = z.object({
   category: z.string().optional(),
   capability: z.string().optional(),
   tier: z.enum(['T1', 'T2', 'T3']).optional(),
+  // Manifest-v2 discovery axes: how the service is paid / how it interacts.
+  paymentModel: z.enum(['escrow', 'x402', 'mpp-session', 'subscription']).optional(),
+  interaction: z.enum(['sync', 'async', 'human', 'metered']).optional(),
+  // Price ceiling (USDC per call) for budget-bounded discovery.
+  maxPrice: z.coerce.number().positive().optional(),
   sort: z.enum(['trust', 'recent', 'rating', 'price_asc', 'price_desc']).optional(),
   limit: z.coerce.number().int().positive().optional(),
   offset: z.coerce.number().int().nonnegative().optional(),

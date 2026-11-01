@@ -1149,6 +1149,8 @@ export function Marketplace() {
   const [debouncedQ, setDebouncedQ] = useState('');
   const [cat, setCat] = useState<string>('All');
   const [tier, setTier] = useState<Tier | 'All'>('All');
+  const [payment, setPayment] = useState<string>('All');
+  const [interaction, setInteraction] = useState<string>('All');
   const [sort, setSort] = useState<ServiceSort>('recent');
   const [page, setPage] = useState(0);
 
@@ -1159,15 +1161,17 @@ export function Marketplace() {
   }, [q]);
 
   // Any filter/sort/search change resets to the first page.
-  useEffect(() => setPage(0), [debouncedQ, cat, tier, sort]);
+  useEffect(() => setPage(0), [debouncedQ, cat, tier, payment, interaction, sort]);
 
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['services', { q: debouncedQ, cat, tier, sort, page }],
+    queryKey: ['services', { q: debouncedQ, cat, tier, payment, interaction, sort, page }],
     queryFn: () =>
       getServices({
         q: debouncedQ,
         category: cat,
         tier,
+        paymentModel: payment,
+        interaction,
         sort,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
@@ -1230,6 +1234,30 @@ export function Marketplace() {
             <option value="T1">Verifiable (trustless)</option>
             <option value="T2">Attestable</option>
             <option value="T3">Human</option>
+          </select>
+          <select
+            value={payment}
+            onChange={(e) => setPayment(e.target.value)}
+            className={`w-auto ${inputCls}`}
+            aria-label="Filter by payment model"
+          >
+            <option value="All">Any payment</option>
+            <option value="escrow">Escrow (pay on delivery)</option>
+            <option value="x402">Pay-per-call (x402)</option>
+            <option value="mpp-session">Streaming (MPP)</option>
+            <option value="subscription">Subscription</option>
+          </select>
+          <select
+            value={interaction}
+            onChange={(e) => setInteraction(e.target.value)}
+            className={`w-auto ${inputCls}`}
+            aria-label="Filter by interaction"
+          >
+            <option value="All">Any interaction</option>
+            <option value="sync">Instant</option>
+            <option value="async">Long-running</option>
+            <option value="human">Human</option>
+            <option value="metered">Metered</option>
           </select>
           <select
             value={sort}

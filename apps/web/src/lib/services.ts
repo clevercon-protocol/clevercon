@@ -138,6 +138,10 @@ export interface ServiceQuery {
   q?: string;
   category?: string;
   tier?: Tier | 'All';
+  /** Filter by payment model; 'All' (or omitted) means any. */
+  paymentModel?: string;
+  /** Filter by interaction shape; 'All' (or omitted) means any. */
+  interaction?: string;
   sort?: ServiceSort;
   limit?: number;
   offset?: number;
@@ -185,7 +189,16 @@ function sortClient(list: Service[], sort: ServiceSort): Service[] {
  * demo list client-side so the UI behaves identically.
  */
 export async function getServices(params: ServiceQuery = {}): Promise<ServicePage> {
-  const { q = '', category, tier, sort = 'trust', limit = 12, offset = 0 } = params;
+  const {
+    q = '',
+    category,
+    tier,
+    paymentModel,
+    interaction,
+    sort = 'trust',
+    limit = 12,
+    offset = 0,
+  } = params;
   if (isDemo()) {
     let list: Service[] = demoServices.map((d) => ({
       id: d.id,
@@ -217,6 +230,8 @@ export async function getServices(params: ServiceQuery = {}): Promise<ServicePag
   if (q) usp.set('q', q);
   if (category && category !== 'All') usp.set('category', category);
   if (tier && tier !== 'All') usp.set('tier', tier);
+  if (paymentModel && paymentModel !== 'All') usp.set('paymentModel', paymentModel);
+  if (interaction && interaction !== 'All') usp.set('interaction', interaction);
   usp.set('sort', sort);
   usp.set('limit', String(limit));
   usp.set('offset', String(offset));
