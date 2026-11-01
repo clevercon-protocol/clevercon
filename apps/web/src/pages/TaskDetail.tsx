@@ -26,6 +26,7 @@ import {
   type TaskStepView,
 } from '../lib/tasks';
 import { getDelegate } from '../lib/vault';
+import { PrivacyReveal } from '../components/PrivacyReveal';
 import { config } from '../config';
 
 const NON_TERMINAL = (status: string) =>
@@ -579,12 +580,12 @@ export function TaskDetail() {
                       </div>
                     </div>
                     {r.method === 'VAULT_RELEASE' && (
-                      <div className="mt-2 flex items-start gap-1.5 text-[11px] text-violet-300">
-                        <ShieldCheck size={12} className="mt-0.5 shrink-0" />
-                        Proof-gated release: the ledger shows this payment and that it passed your
-                        policy check. The rule itself is committed as a hash and never published.
+                      <div className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-violet-300">
+                        <ShieldCheck size={12} className="shrink-0" />
+                        Proof-gated release (your rule stayed private)
                       </div>
                     )}
+                    <PrivacyReveal method={r.method} />
                   </div>
                 ))}
               </div>
