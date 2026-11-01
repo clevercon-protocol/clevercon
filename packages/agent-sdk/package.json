@@ -90,7 +90,8 @@
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "prepublishOnly": "npm run build",
     "example:oracle": "npx tsx examples/stellar-oracle/agent.ts",
-    "example:mpp": "npx tsx examples/minimal-mpp/agent.ts"
+    "example:mpp": "npx tsx examples/minimal-mpp/agent.ts",
+    "example:providers": "npx tsx examples/reference-services/providers.ts"
   },
   "dependencies": {
     "@stellar/mpp": "^0.3.0",
