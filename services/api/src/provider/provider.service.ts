@@ -484,4 +484,70 @@ export class ProviderService {
       count: payments.length,
     };
   }
+
+  /**
+   * Aggregate performance across the provider's services, from REAL reputation
+   * counts (incremented only on genuine execution; see workers/executor.ts). Rates
+   * are honest ratios over total jobs; avg latency is weighted by successful jobs.
+   * Unique payers is DISTINCT buyers across all the provider's services (one query),
+   * not the sum of per-service counts, so a buyer hiring two services is not double
+   * counted. Never fabricated: zero services -> all zeros.
+   */
+  async metrics(userId: string) {
+    const services = await this.prisma.service.findMany({
+      where: { providerId: userId },
+      select: { id: true, status: true, reputation: true },
+    });
+    const activeServices = services.filter((s) => s.status === ServiceStatus.ACTIVE).length;
+    let totalJobs = 0;
+    let successfulJobs = 0;
+    let failedJobs = 0;
+    let disputes = 0;
+    let disputesUpheld = 0;
+    let latencyWeighted = 0; // sum(avgLatencyMs * successfulJobs) for a weighted mean
+    for (const s of services) {
+      const r = s.reputation;
+      if (!r) continue;
+      totalJobs += r.totalJobs;
+      successfulJobs += r.successfulJobs;
+      failedJobs += r.failedJobs;
+      disputes += r.disputes;
+      disputesUpheld += r.disputesUpheld;
+      latencyWeighted += r.avgLatencyMs * r.successfulJobs;
+    }
+
+    // Distinct paying counterparties across ALL the provider's services (real
+    // CONFIRMED settlements). Best-effort: never fail metrics over the stats query.
+    let uniquePayers = 0;
+    const ids = services.map((s) => s.id);
+    if (ids.length) {
+      try {
+        const rows = await this.prisma.$queryRaw<{ payers: bigint }[]>`
+          SELECT COUNT(DISTINCT t."buyerId") AS payers
+          FROM "payments" p
+          JOIN "task_steps" ts ON p."stepId" = ts.id
+          JOIN "tasks" t ON p."taskId" = t.id
+          WHERE p.status = 'CONFIRMED' AND ts."serviceId" IN (${Prisma.join(ids)})
+        `;
+        uniquePayers = Number(rows[0]?.payers ?? 0);
+      } catch {
+        // degrade to zero rather than fail the panel
+      }
+    }
+
+    const pct = (num: number, den: number) => (den > 0 ? Math.round((num / den) * 1000) / 10 : 0);
+    return {
+      services: services.length,
+      activeServices,
+      totalJobs,
+      successfulJobs,
+      failedJobs,
+      successRate: pct(successfulJobs, totalJobs), // percent, 1 decimal
+      avgLatencyMs: successfulJobs > 0 ? Math.round(latencyWeighted / successfulJobs) : 0,
+      disputes,
+      disputesUpheld,
+      disputeRate: pct(disputesUpheld, totalJobs),
+      uniquePayers,
+    };
+  }
 }

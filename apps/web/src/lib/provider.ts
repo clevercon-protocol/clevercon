@@ -60,6 +60,20 @@ export interface ProviderPayouts {
   count: number;
 }
 
+export interface ProviderMetrics {
+  services: number;
+  activeServices: number;
+  totalJobs: number;
+  successfulJobs: number;
+  failedJobs: number;
+  successRate: number; // percent (1 decimal)
+  avgLatencyMs: number;
+  disputes: number;
+  disputesUpheld: number;
+  disputeRate: number; // percent (1 decimal)
+  uniquePayers: number;
+}
+
 interface ApiProviderService {
   id: string;
   name: string;
@@ -322,6 +336,26 @@ export async function getProviderPayouts(): Promise<ProviderPayouts> {
     return { items, settledTotal, pendingTotal: 0, count: items.length };
   }
   return apiFetch<ProviderPayouts>('/provider/payouts');
+}
+
+/** The provider's aggregate performance: demo stub in demo mode, live API otherwise. */
+export async function getProviderMetrics(): Promise<ProviderMetrics> {
+  if (isDemo()) {
+    return {
+      services: demoServices.length,
+      activeServices: demoServices.length,
+      totalJobs: demoEarnings.jobs,
+      successfulJobs: demoEarnings.jobs,
+      failedJobs: 0,
+      successRate: 100,
+      avgLatencyMs: 820,
+      disputes: 0,
+      disputesUpheld: 0,
+      disputeRate: 0,
+      uniquePayers: 3,
+    };
+  }
+  return apiFetch<ProviderMetrics>('/provider/metrics');
 }
 
 /** Build a CSV string from payout rows (client-side; no server round-trip). */

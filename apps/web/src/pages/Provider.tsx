@@ -10,6 +10,7 @@ import {
   Receipt,
   Download,
   ExternalLink,
+  Activity,
 } from 'lucide-react';
 import {
   getProviderServices,
@@ -17,6 +18,7 @@ import {
   getProviderJobs,
   getProviderDisputes,
   getProviderPayouts,
+  getProviderMetrics,
   payoutsToCsv,
   respondToDispute,
   registerService,
@@ -602,6 +604,7 @@ export function Provider() {
         subtitle="Register services, handle jobs, and track earnings and reputation."
       />
       <Stats />
+      <Performance />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <ServicesCard />
@@ -610,6 +613,61 @@ export function Provider() {
       <PayoutsCard />
       <DisputesCard />
     </section>
+  );
+}
+
+/**
+ * Aggregate performance across the provider's services, from real settled-job
+ * reputation counts. Hidden until there is at least one real job, so a new provider
+ * never sees a wall of zeros (honest: nothing to show yet).
+ */
+function Performance() {
+  const { data: m, isLoading } = useQuery({
+    queryKey: ['provider-metrics'],
+    queryFn: getProviderMetrics,
+  });
+  const cell = (label: string, value: string, tone = 'text-slate-200') => (
+    <div className="rounded-xl bg-white/[0.04] p-3">
+      <div className={`text-lg font-bold ${tone}`}>{value}</div>
+      <div className="text-xs text-slate-500">{label}</div>
+    </div>
+  );
+  if (isLoading) {
+    return (
+      <Card className="p-5">
+        <Loading rows={2} />
+      </Card>
+    );
+  }
+  if (!m || m.totalJobs === 0) return null;
+  return (
+    <Card className="p-0">
+      <CardHeader
+        icon={Activity}
+        title="Performance"
+        hint="Real rates from settled on-chain jobs across your services."
+      />
+      <div className="grid grid-cols-2 gap-3 p-5 pt-4 sm:grid-cols-3 lg:grid-cols-6">
+        {cell('Jobs', String(m.totalJobs))}
+        {cell(
+          'Success',
+          `${m.successRate}%`,
+          m.successRate >= 90
+            ? 'text-emerald-300'
+            : m.successRate >= 70
+              ? 'text-amber-300'
+              : 'text-red-400',
+        )}
+        {cell('Avg latency', m.avgLatencyMs ? `${m.avgLatencyMs}ms` : 'n/a')}
+        {cell(
+          'Disputes upheld',
+          `${m.disputeRate}%`,
+          m.disputeRate > 5 ? 'text-red-400' : 'text-slate-200',
+        )}
+        {cell('Unique payers', String(m.uniquePayers))}
+        {cell('Active services', `${m.activeServices}/${m.services}`)}
+      </div>
+    </Card>
   );
 }
 

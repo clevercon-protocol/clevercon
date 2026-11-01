@@ -131,4 +131,10 @@ export class ProviderController {
   payouts(@CurrentUser() user: AuthUser) {
     return this.provider.payouts(user.userId);
   }
+
+  /** Aggregate performance (success/dispute rates, latency, unique payers). */
+  @Get('metrics')
+  metrics(@CurrentUser() user: AuthUser) {
+    return this.provider.metrics(user.userId);
+  }
 }
