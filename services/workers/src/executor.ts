@@ -646,6 +646,12 @@ export async function pollStep(
   const base = { buyerId: task.buyerId, taskId: task.id, stepId };
   if (TERMINAL.includes(task.status))
     return { status: 'skipped', reason: `task ${task.status.toLowerCase()}`, ...base };
+  // A dispute freezes the task on-chain: pause polling so an async job is never
+  // polled-to-completion or settled while disputed, mirroring releaseHeldStep's
+  // guard for held T2 steps. Resumption on resolution is the resolver's job (same
+  // as the sync path); the async deadline still bounds a never-resolved dispute.
+  if (task.status === TaskStatus.DISPUTED)
+    return { status: 'skipped', reason: 'task disputed', ...base };
   if (step.status !== StepStatus.RUNNING && step.status !== StepStatus.INPUT_REQUIRED)
     return { status: 'skipped', reason: 'step not awaiting a poll', ...base };
 

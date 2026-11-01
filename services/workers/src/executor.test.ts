@@ -665,6 +665,20 @@ describe('pollStep', () => {
     );
     expect(res.status).toBe('skipped');
   });
+
+  it('does not poll (or settle) an async step on a disputed task', async () => {
+    const step = parked({ task: { id: 't1', status: 'DISPUTED', buyerId: 'u1', vaultTaskId: null } });
+    const spy = vi.fn(async () => completedResp());
+    const reEnqueueTask = vi.fn(async () => {});
+    const res = await pollStep(mockPollPrisma(step), spy as unknown as typeof fetch, 's1', {
+      reEnqueueTask,
+      scheduleStepPoll: vi.fn(async () => {}),
+    });
+    expect(res.status).toBe('skipped');
+    expect(res.reason).toBe('task disputed');
+    expect(spy).not.toHaveBeenCalled(); // provider never contacted while frozen
+    expect(step.status).toBe('RUNNING'); // step untouched (not released)
+  });
 });
 
 describe('isAcceptableOutput', () => {
