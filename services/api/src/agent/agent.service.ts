@@ -117,7 +117,12 @@ export class AgentService {
    * so a bad or adversarial plan cannot move funds outside the caps. Falls back
    * to a deterministic parser when no API key is configured.
    */
-  async plan(userId: string, instruction: string): Promise<AgentPlan> {
+  async plan(
+    userId: string,
+    instruction: string,
+    opts: { hasAttachment?: boolean } = {},
+  ): Promise<AgentPlan> {
+    const hasAttachment = !!opts.hasAttachment;
     const text = (instruction ?? '').trim();
     if (!text) {
       return {
@@ -133,21 +138,24 @@ export class AgentService {
 
     const provider = this.provider();
     const raw =
-      provider === 'none' ? fallbackParse(text) : await this.parseWithLlm(userId, text, provider);
+      provider === 'none'
+        ? fallbackParse(text)
+        : await this.parseWithLlm(userId, text, provider, hasAttachment);
     const available = await this.vault
       .getForUser(userId)
       .then((v) => v.available)
       .catch(() => 0);
-    return this.validate(raw.plan, raw.source, available);
+    return this.validate(raw.plan, raw.source, available, hasAttachment);
   }
 
   private async parseWithLlm(
     userId: string,
     instruction: string,
     provider: Provider,
+    hasAttachment: boolean,
   ): Promise<{ plan: RawPlan; source: AgentPlan['source'] }> {
     try {
-      const context = await this.buildContext(userId);
+      const context = await this.buildContext(userId, hasAttachment);
       const input =
         provider === 'anthropic'
           ? await this.callAnthropic(instruction, context)
@@ -232,23 +240,35 @@ export class AgentService {
     return JSON.parse(args);
   }
 
-  private async buildContext(userId: string): Promise<string> {
+  private async buildContext(userId: string, hasAttachment = false): Promise<string> {
     // The planner is deliberately NOT told about the user's rules. It only needs
     // the available budget (for realism) and the hireable services. The human
     // selects the rule the vault enforces; private rules never reach the model.
     const [vault, services] = await Promise.all([
       this.vault.getForUser(userId).catch(() => ({ available: 0 })),
       this.prisma.service.findMany({
-        where: { status: 'ACTIVE' },
-        select: { name: true, pricePerCall: true },
+        // Only healthy, listable services (same gate as the public directory).
+        where: { status: 'ACTIVE', healthy: true },
+        select: { name: true, pricePerCall: true, attachmentsIn: true },
         take: 8,
       }),
     ]);
-    const svc = services.map((s) => `- ${s.name} ($${Number(s.pricePerCall)}/call)`).join('\n');
-    return [
+    const svc = services
+      .map(
+        (s) =>
+          `- ${s.name} ($${Number(s.pricePerCall)}/call)${s.attachmentsIn ? ' [accepts a file]' : ''}`,
+      )
+      .join('\n');
+    const parts = [
       `Available budget: ${(vault as { available: number }).available} USDC.`,
       svc ? `Services you can hire:\n${svc}` : 'No services available.',
-    ].join('\n\n');
+    ];
+    if (hasAttachment) {
+      parts.push(
+        'The user attached a file. If the task needs it, prefer a service marked [accepts a file]; if none fits, still plan the best service and note the file may be unused.',
+      );
+    }
+    return parts.join('\n\n');
   }
 
   /** Re-validate the proposed plan server-side (the model is never trusted). */
@@ -256,6 +276,7 @@ export class AgentService {
     raw: RawPlan,
     source: AgentPlan['source'],
     available: number,
+    hasAttachment = false,
   ): Promise<AgentPlan> {
     const warnings: string[] = [];
     const lines = (raw.lines ?? [])
@@ -304,12 +325,19 @@ export class AgentService {
 
     if (raw.kind === 'hire') {
       const q = (raw.serviceQuery ?? '').trim();
-      const svc = q
-        ? await this.prisma.service.findFirst({
-            where: { status: 'ACTIVE', name: { contains: q, mode: 'insensitive' } },
-            select: { id: true, name: true, pricePerCall: true },
+      const matches = q
+        ? await this.prisma.service.findMany({
+            where: { status: 'ACTIVE', healthy: true, name: { contains: q, mode: 'insensitive' } },
+            select: { id: true, name: true, pricePerCall: true, attachmentsIn: true },
+            take: 5,
           })
-        : null;
+        : [];
+      // When the user attached a file, prefer a service that declares it accepts one;
+      // otherwise take the best name match.
+      const svc =
+        (hasAttachment ? matches.find((m) => m.attachmentsIn != null) : undefined) ??
+        matches[0] ??
+        null;
       if (!svc) {
         warnings.push(
           'No matching service found. Pick one from Services, or name it more specifically.',

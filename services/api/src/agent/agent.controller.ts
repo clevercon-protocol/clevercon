@@ -6,7 +6,12 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import { parseBody } from '../auth/validate.js';
 import type { AuthUser } from '../auth/types.js';
 
-const planSchema = z.object({ instruction: z.string().min(1).max(2000) });
+const planSchema = z.object({
+  instruction: z.string().min(1).max(2000),
+  // Whether the user attached a file to the instruction, so the planner can prefer
+  // a service that accepts files. The file itself is attached to the hire later.
+  hasAttachment: z.boolean().optional(),
+});
 
 /**
  * The chat agent's brain: parse a natural-language instruction into a structured
@@ -20,7 +25,7 @@ export class AgentController {
 
   @Post('plan')
   plan(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    const { instruction } = parseBody(planSchema, body);
-    return this.agent.plan(user.userId, instruction);
+    const { instruction, hasAttachment } = parseBody(planSchema, body);
+    return this.agent.plan(user.userId, instruction, { hasAttachment });
   }
 }

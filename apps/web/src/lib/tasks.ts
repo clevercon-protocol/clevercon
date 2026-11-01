@@ -200,7 +200,10 @@ export interface AgentPlanResult {
  * Parse a natural-language instruction into a structured, pre-validated plan.
  * The agent only proposes; the human approves and the vault enforces limits.
  */
-export async function planInstruction(instruction: string): Promise<AgentPlanResult> {
+export async function planInstruction(
+  instruction: string,
+  hasAttachment = false,
+): Promise<AgentPlanResult> {
   if (isDemo()) {
     return {
       kind: 'none',
@@ -212,7 +215,7 @@ export async function planInstruction(instruction: string): Promise<AgentPlanRes
       source: 'fallback',
     };
   }
-  return apiPost<AgentPlanResult>('/agent/plan', { instruction });
+  return apiPost<AgentPlanResult>('/agent/plan', { instruction, hasAttachment });
 }
 
 /** Raise a dispute on one of the caller's tasks. */

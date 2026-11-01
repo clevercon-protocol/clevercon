@@ -403,7 +403,8 @@ export function CommandChat() {
   }
 
   const planMut = useMutation({
-    mutationFn: (instruction: string) => planInstruction(instruction),
+    mutationFn: (vars: { instruction: string; hasAttachment: boolean }) =>
+      planInstruction(vars.instruction, vars.hasAttachment),
   });
 
   // A clear reason the current lane can't act, or null when it's ready. Nothing (not
@@ -433,7 +434,7 @@ export function CommandChat() {
     setNl('');
     let result: Awaited<ReturnType<typeof planInstruction>>;
     try {
-      result = await planMut.mutateAsync(instruction);
+      result = await planMut.mutateAsync({ instruction, hasAttachment: !!file });
     } catch (e) {
       push({
         id: nextId(),
@@ -449,23 +450,35 @@ export function CommandChat() {
     const bind = currentBind();
     const appliedLimit = applied;
     if (result.kind === 'hire' && result.service) {
-      // A service that requires an input file can't be hired from the free-text box
-      // (no attacher here); point the user at the structured action that has one.
+      // Reconcile any attached file with what the PLANNED service declares it takes,
+      // so a file only goes to a service that accepts it and the UI is honest.
       const svc = services.find((s) => s.id === result.service!.id);
-      if (svc?.attachmentsIn?.required && !file) {
-        push({
-          id: nextId(),
-          role: 'agent',
-          ok: false,
-          text: `${result.service.name} needs a file to run. Use the “Hire a service” quick action to pick it and attach the file.`,
-        });
+      const spec = svc?.attachmentsIn ?? null;
+      const err = (text: string) => {
+        push({ id: nextId(), role: 'agent', ok: false, text });
+      };
+      if (file && !spec) {
+        err(
+          `I planned ${result.service.name}, but it doesn’t accept files, so I can’t attach your document. Remove the file, or ask for a service that processes documents.`,
+        );
         return;
+      }
+      if (!file && spec?.required) {
+        err(`${result.service.name} needs a file to run. Attach one to your message, then plan again.`);
+        return;
+      }
+      if (file && spec) {
+        const v = validateAttachment(file, spec);
+        if (v) {
+          err(`${result.service.name}: ${v}`);
+          return;
+        }
       }
       let attachments: ArtifactRef[] | undefined;
       try {
         attachments = await takeAttachments();
       } catch {
-        push({ id: nextId(), role: 'agent', ok: false, text: 'Could not upload the attachment. Please try again.' });
+        err('Could not upload the attachment. Please try again.');
         return;
       }
       setFile(null);
@@ -825,6 +838,39 @@ export function CommandChat() {
               placeholder="e.g. Pay GC3F… 420 USDC for design and MEI… 275 for docs — max 500 each. Or: split 900 USDC evenly between these three addresses."
               className="cc-input mt-1.5 min-h-[5.5rem] w-full resize-none text-base leading-relaxed"
             />
+
+            {/* Attach a document/image to the instruction. The agent attaches it only
+                when the service it plans actually accepts files; otherwise it says so. */}
+            {file ? (
+              <div className="mt-2 flex items-center gap-2 rounded-lg bg-black/30 px-3 py-2 text-xs text-slate-300">
+                <Paperclip size={12} className="shrink-0 text-violet-300" />
+                <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFile(null);
+                    setFileErr(null);
+                  }}
+                  className="shrink-0 text-slate-500 hover:text-white"
+                  aria-label="Remove attachment"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            ) : (
+              <label className="mt-2 inline-flex cursor-pointer items-center gap-1.5 text-[11px] text-slate-400 hover:text-slate-200">
+                <Paperclip size={12} /> Attach a file
+                <input
+                  type="file"
+                  className="hidden"
+                  onChange={(e) => {
+                    setFile(e.target.files?.[0] ?? null);
+                    setFileErr(null);
+                  }}
+                />
+              </label>
+            )}
+            {fileErr && <p className="mt-1 text-[11px] text-red-400">{fileErr}</p>}
 
             <div className="mt-3 space-y-2.5">
               <RuleLanePicker
