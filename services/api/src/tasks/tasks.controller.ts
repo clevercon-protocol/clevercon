@@ -29,6 +29,10 @@ const createSchema = z.object({
 
 const disputeSchema = z.object({ reason: z.string().max(1000).optional() });
 
+// Answer a needs-input step. The response object is validated against the
+// provider's question schema (if any) server-side before it is relayed.
+const answerSchema = z.object({ response: z.record(z.unknown()) });
+
 /** The current session's tasks (buyer-scoped). Works with a JWT (console) or an
  *  x-api-key (programmatic/SDK), so developers can hire + query on the rail. */
 @Controller('tasks')
@@ -68,5 +72,17 @@ export class TasksController {
   @Post(':id/approve')
   approve(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.tasks.approve(user.userId, id);
+  }
+
+  /** Answer a step a provider parked as INPUT_REQUIRED (an elicitation), resuming it. */
+  @Post(':id/steps/:stepId/answer')
+  answer(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('stepId') stepId: string,
+    @Body() body: unknown,
+  ) {
+    const { response } = parseBody(answerSchema, body);
+    return this.tasks.answerStep(user.userId, id, stepId, response);
   }
 }

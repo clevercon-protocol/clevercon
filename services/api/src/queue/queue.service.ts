@@ -9,6 +9,7 @@ const TASK_QUEUE = 'task-execution';
 const PROOF_QUEUE = 'proof-generation';
 const SETTLEMENT_QUEUE = 'settlement';
 const BATCH_SETTLEMENT_QUEUE = 'batch-settlement';
+const STEP_POLL_QUEUE = 'step-poll';
 
 export interface ProofGenerationJob {
   proofId: string;
@@ -56,6 +57,7 @@ export class QueueService implements OnModuleDestroy {
   private proofQueue: Queue | null = null;
   private settlementQueue: Queue | null = null;
   private batchQueue: Queue | null = null;
+  private stepPollQueue: Queue | null = null;
   private connection: Redis | null = null;
 
   private getConnection(): Redis | null {
@@ -190,6 +192,44 @@ export class QueueService implements OnModuleDestroy {
     }
   }
 
+  private getStepPollQueue(): Queue | null {
+    const connection = this.getConnection();
+    if (!connection) return null;
+    if (!this.stepPollQueue) this.stepPollQueue = new Queue(STEP_POLL_QUEUE, { connection });
+    return this.stepPollQueue;
+  }
+
+  /**
+   * Enqueue a poll of a parked async / needs-input step (same queue + job shape as
+   * the worker's producer). Used to relay a buyer's answer immediately rather than
+   * waiting for the next scheduled poll. The jobId is unique per enqueue (polls
+   * recur), and pollStep is idempotent, so a double-enqueue is harmless. Non-fatal:
+   * if Redis is unavailable the already-scheduled poll still drives the step.
+   */
+  async enqueueStepPoll(stepId: string, delayMs = 0): Promise<void> {
+    const queue = this.getStepPollQueue();
+    if (!queue) {
+      this.logger.warn(`REDIS_URL not set; step ${stepId} not enqueued for poll`);
+      return;
+    }
+    try {
+      await queue.add(
+        'poll',
+        { stepId },
+        {
+          jobId: `poll-${stepId}-${Date.now()}`,
+          delay: Math.max(0, delayMs),
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 3000 },
+          removeOnComplete: 200,
+          removeOnFail: 500,
+        },
+      );
+    } catch (err) {
+      this.logger.error(`enqueue step-poll failed for step ${stepId}: ${(err as Error).message}`);
+    }
+  }
+
   /**
    * Enqueue binding-proof generation for a release. Non-fatal like task
    * enqueue: the Proof row is already persisted (REQUESTED), so a queue hiccup
@@ -219,6 +259,7 @@ export class QueueService implements OnModuleDestroy {
     await this.proofQueue?.close();
     await this.settlementQueue?.close();
     await this.batchQueue?.close();
+    await this.stepPollQueue?.close();
     await this.connection?.quit();
   }
 }

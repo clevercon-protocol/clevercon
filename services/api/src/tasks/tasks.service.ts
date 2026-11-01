@@ -6,6 +6,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { Prisma, PaymentStatus, StepStatus, TaskMode, TaskStatus } from '@clevercon/db';
+import { validateSchema, type InputRequest, type JsonSchema } from '@clevercon/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueueService } from '../queue/queue.service.js';
 import { VaultContractService } from '../vault/vault-contract.service.js';
@@ -474,6 +475,41 @@ export class TasksService {
     return { approved: held.length };
   }
 
+  /**
+   * Answer a step that a provider parked as INPUT_REQUIRED mid-job (an elicitation).
+   * Validates the answer against the question's schema (if any), stores it, and
+   * enqueues an immediate poll so the worker relays it to the provider now rather
+   * than waiting for the next scheduled poll. Ownership is enforced (the task must
+   * be the caller's), and only an INPUT_REQUIRED step can be answered.
+   */
+  async answerStep(userId: string, taskId: string, stepId: string, response: Record<string, unknown>) {
+    const task = await this.prisma.task.findFirst({
+      where: { id: taskId, buyerId: userId },
+      select: { id: true },
+    });
+    if (!task) throw new NotFoundException('Task not found');
+    const step = await this.prisma.taskStep.findFirst({
+      where: { id: stepId, taskId },
+      select: { id: true, status: true, inputRequest: true },
+    });
+    if (!step) throw new NotFoundException('Step not found');
+    if (step.status !== StepStatus.INPUT_REQUIRED)
+      throw new BadRequestException('This step is not awaiting an answer');
+    // If the provider's question carried a JSON Schema, hold the answer to it so a
+    // malformed response never reaches the provider (it would just re-ask anyway).
+    const ir = step.inputRequest as InputRequest | null;
+    if (ir?.schema) {
+      const check = validateSchema(response, ir.schema as JsonSchema);
+      if (!check.ok) throw new BadRequestException(`answer does not match the question: ${check.reason}`);
+    }
+    await this.prisma.taskStep.update({
+      where: { id: stepId },
+      data: { inputResponse: response as Prisma.InputJsonValue },
+    });
+    await this.queue?.enqueueStepPoll(stepId, 0);
+    return { ok: true, stepId };
+  }
+
   /** The current user's tasks, newest first. */
   async listForUser(userId: string, params: ListTasksParams) {
     const where: Prisma.TaskWhereInput = { buyerId: userId };
@@ -523,9 +559,14 @@ export class TasksService {
       // At least one T2 step is in its dispute window: the buyer can approve early
       // (release now) or dispute before it auto-releases.
       awaitingApproval: t.steps.some((s) => s.status === StepStatus.AWAITING_APPROVAL),
+      // At least one async step is asking the buyer a question mid-job: the dapp
+      // surfaces it and POSTs the answer to .../steps/:stepId/answer.
+      awaitingInput: t.steps.some((s) => s.status === StepStatus.INPUT_REQUIRED),
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
       steps: t.steps.map((s) => ({
+        // The step id, so the dapp/agent can answer a needs-input step.
+        id: s.id,
         index: s.index,
         action: s.action,
         status: s.status,
@@ -538,6 +579,11 @@ export class TasksService {
         qualityNote: s.qualityNote,
         // A file the provider delivered: {url, hash, contentType, size} (downloadable + hash-verifiable).
         artifact: s.artifact,
+        // Async progress a working step last reported: { pct?, message? }.
+        progress: s.progress,
+        // The question a provider asked mid-job (set while status is INPUT_REQUIRED):
+        // { requestId, prompt, schema? }. The buyer answers it to resume the job.
+        inputRequest: s.inputRequest,
         // When held, the moment it auto-releases if left undisputed (the countdown).
         releaseAt: s.releaseAt,
         // The provider's returned result for this step, so the buyer sees what
