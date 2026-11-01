@@ -6,7 +6,11 @@ import {
   Optional,
 } from '@nestjs/common';
 import { Prisma, PaymentStatus, StepStatus, TaskMode, TaskStatus } from '@clevercon/db';
-import { validateSchema, type InputRequest, type JsonSchema } from '@clevercon/common';
+// Type-only import: @clevercon/common ships as raw TS source and the compiled API
+// (node dist/src/main.js) cannot load a `.ts` at runtime, so we must not import a
+// VALUE from it here. Schema validation uses an API-local copy (./schema-check).
+import type { InputRequest } from '@clevercon/common';
+import { validateAgainstSchema, type SchemaDoc } from './schema-check.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueueService } from '../queue/queue.service.js';
 import { VaultContractService } from '../vault/vault-contract.service.js';
@@ -499,7 +503,7 @@ export class TasksService {
     // malformed response never reaches the provider (it would just re-ask anyway).
     const ir = step.inputRequest as InputRequest | null;
     if (ir?.schema) {
-      const check = validateSchema(response, ir.schema as JsonSchema);
+      const check = validateAgainstSchema(response, ir.schema as SchemaDoc);
       if (!check.ok) throw new BadRequestException(`answer does not match the question: ${check.reason}`);
     }
     await this.prisma.taskStep.update({
