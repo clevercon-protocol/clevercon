@@ -11,7 +11,7 @@ import {
   setServiceStatus,
   type RegisterServiceInput,
 } from '../lib/provider';
-import { getPlatformFeeBps } from '../lib/services';
+import { getPlatformFeeBps, interactionLabel, paymentModelLabel } from '../lib/services';
 import { refreshRoles } from '../lib/sessionSync';
 import {
   PageHeader,
@@ -468,6 +468,13 @@ function ServicesCard() {
                         {s.trust === 'trusted' ? 'Trusted' : s.trust === 'active' ? 'Active' : 'New'}
                       </span>
                       <span>{s.tier}</span>
+                      {paymentModelLabel(s.paymentModel) && (
+                        <span className="text-violet-300">{paymentModelLabel(s.paymentModel)}</span>
+                      )}
+                      {interactionLabel(s.interaction) && (
+                        <span className="text-sky-300">{interactionLabel(s.interaction)}</span>
+                      )}
+                      {s.requiresFile && <span className="text-amber-300">needs file</span>}
                       <span>{s.settlements} settled</span>
                       <span>{s.uniquePayers} payers</span>
                       {s.disputes > 0 && (

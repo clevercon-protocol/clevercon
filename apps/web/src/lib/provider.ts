@@ -17,6 +17,10 @@ export interface ProviderServiceItem {
   disputesUpheld: number;
   // Whether the payout wallet can receive USDC (has a trustline). null = unknown.
   payoutReady: boolean | null;
+  // Declared shape (manifest v2); null = sync/escrow.
+  interaction: string | null;
+  paymentModel: string | null;
+  requiresFile: boolean;
 }
 
 export interface ProviderJob {
@@ -49,6 +53,9 @@ interface ApiProviderService {
   disputes?: number;
   disputesUpheld?: number;
   payoutReady?: boolean | null;
+  interaction?: string | null;
+  paymentModel?: string | null;
+  attachmentsIn?: { required?: boolean } | null;
   reputation: { score: number } | null;
 }
 
@@ -69,24 +76,13 @@ export async function getProviderServices(): Promise<ProviderServiceItem[]> {
       disputes: 0,
       disputesUpheld: 0,
       payoutReady: true,
+      interaction: null,
+      paymentModel: null,
+      requiresFile: false,
     }));
   }
   const res = await apiFetch<{ items: ApiProviderService[] }>('/provider/services');
-  return res.items.map((s) => ({
-    id: s.id,
-    name: s.name,
-    category: s.category,
-    pricePerCall: s.pricePerCall,
-    status: s.status,
-    rating: s.reputation?.score ?? 0,
-    tier: s.tier ?? 'T2',
-    trust: s.trust ?? 'new',
-    settlements: s.settlements ?? 0,
-    uniquePayers: s.uniquePayers ?? 0,
-    disputes: s.disputes ?? 0,
-    disputesUpheld: s.disputesUpheld ?? 0,
-    payoutReady: s.payoutReady ?? null,
-  }));
+  return res.items.map(mapService);
 }
 
 export interface ProviderDispute {
@@ -168,6 +164,9 @@ const DEMO_TRUST = {
   disputes: 0,
   disputesUpheld: 0,
   payoutReady: true,
+  interaction: null,
+  paymentModel: null,
+  requiresFile: false,
 };
 
 function mapService(s: ApiProviderService): ProviderServiceItem {
@@ -185,6 +184,9 @@ function mapService(s: ApiProviderService): ProviderServiceItem {
     disputes: s.disputes ?? 0,
     disputesUpheld: s.disputesUpheld ?? 0,
     payoutReady: s.payoutReady ?? null,
+    interaction: s.interaction ?? null,
+    paymentModel: s.paymentModel ?? null,
+    requiresFile: !!s.attachmentsIn?.required,
   };
 }
 
