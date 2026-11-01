@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -12,15 +13,22 @@ import {
   Sparkles,
   Download,
   AlertTriangle,
+  Loader2,
+  MessageCircleQuestion,
 } from 'lucide-react';
 import {
   getTask,
   raiseDispute,
   approveTask,
+  answerStep,
   type TaskDetail as TaskDetailData,
+  type TaskStepView,
 } from '../lib/tasks';
 import { getDelegate } from '../lib/vault';
 import { config } from '../config';
+
+const NON_TERMINAL = (status: string) =>
+  !['COMPLETED', 'FAILED', 'CANCELLED'].includes(status);
 
 const EXPLORER_NET = config.network === 'mainnet' ? 'public' : 'testnet';
 const explorerTx = (hash: string) => `https://stellar.expert/explorer/${EXPLORER_NET}/tx/${hash}`;
@@ -158,6 +166,122 @@ function UnpaidBanner({ task }: { task: TaskDetailData }) {
   );
 }
 
+/** Coerce a text field to the JSON type the question's schema declares. */
+function coerce(value: string, type: unknown): unknown {
+  if (type === 'number' || type === 'integer') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : value;
+  }
+  if (type === 'boolean') return value === 'true' || value === 'yes';
+  return value;
+}
+
+/**
+ * Inline form to answer a step a provider parked as INPUT_REQUIRED. If the
+ * question carries a JSON Schema with named properties, render one field each;
+ * otherwise a single free-text box (parsed as JSON when it looks like an object).
+ */
+function AnswerForm({ taskId, step }: { taskId: string; step: TaskStepView }) {
+  const qc = useQueryClient();
+  const ir = step.inputRequest;
+  const schemaProps =
+    ir?.schema && typeof ir.schema === 'object'
+      ? ((ir.schema as { properties?: Record<string, { type?: unknown }> }).properties ?? null)
+      : null;
+  const fieldNames = schemaProps ? Object.keys(schemaProps) : [];
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [raw, setRaw] = useState('');
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const submit = useMutation({
+    mutationFn: () => {
+      let response: Record<string, unknown>;
+      if (fieldNames.length) {
+        response = {};
+        for (const k of fieldNames) {
+          const v = values[k];
+          if (v !== undefined && v !== '') response[k] = coerce(v, schemaProps?.[k]?.type);
+        }
+      } else {
+        const t = raw.trim();
+        if (t.startsWith('{')) {
+          response = JSON.parse(t) as Record<string, unknown>;
+        } else {
+          response = { answer: t };
+        }
+      }
+      return answerStep(taskId, step.id ?? '', response);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['task', taskId] }),
+  });
+
+  const onSubmit = () => {
+    setLocalError(null);
+    if (!step.id) {
+      setLocalError('This step cannot be answered (missing id).');
+      return;
+    }
+    if (!fieldNames.length) {
+      const t = raw.trim();
+      if (t.startsWith('{')) {
+        try {
+          JSON.parse(t);
+        } catch {
+          setLocalError('Enter valid JSON, or plain text (sent as { answer }).');
+          return;
+        }
+      }
+    }
+    submit.mutate();
+  };
+
+  return (
+    <div className="mt-3 rounded-xl border border-violet-500/30 bg-violet-500/[0.06] p-3">
+      <div className="flex items-start gap-1.5 text-violet-200">
+        <MessageCircleQuestion size={14} className="mt-0.5 shrink-0" />
+        <span className="text-sm font-medium">{ir?.prompt ?? 'The provider needs more input'}</span>
+      </div>
+      <div className="mt-3 space-y-2">
+        {fieldNames.length ? (
+          fieldNames.map((k) => (
+            <label key={k} className="block text-xs text-slate-400">
+              {k}
+              <input
+                value={values[k] ?? ''}
+                onChange={(e) => setValues((v) => ({ ...v, [k]: e.target.value }))}
+                className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-2.5 py-1.5 text-sm text-slate-200 outline-none focus:border-violet-500/50"
+                placeholder={String(schemaProps?.[k]?.type ?? 'text')}
+              />
+            </label>
+          ))
+        ) : (
+          <textarea
+            value={raw}
+            onChange={(e) => setRaw(e.target.value)}
+            rows={3}
+            className="w-full rounded-lg border border-white/10 bg-black/30 px-2.5 py-1.5 text-sm text-slate-200 outline-none focus:border-violet-500/50"
+            placeholder='Your answer (plain text, or a JSON object like {"format":"png"})'
+          />
+        )}
+      </div>
+      <div className="mt-2 flex items-center gap-3">
+        <button
+          onClick={onSubmit}
+          disabled={submit.isPending}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
+        >
+          {submit.isPending ? 'Sending…' : 'Send answer'}
+        </button>
+        {(localError || submit.error) && (
+          <span className="text-xs text-amber-300">
+            {localError || (submit.error as Error).message || 'Could not send the answer.'}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const STATUS_TINT: Record<string, string> = {
   RUNNING: 'text-sky-300',
   RELEASED: 'text-emerald-300',
@@ -165,6 +289,7 @@ const STATUS_TINT: Record<string, string> = {
   COMPLETED: 'text-emerald-300',
   PENDING: 'text-amber-300',
   SUBMITTED: 'text-sky-300',
+  INPUT_REQUIRED: 'text-violet-300',
   AWAITING_APPROVAL: 'text-amber-300',
   DRAFT: 'text-slate-400',
   CANCELLED: 'text-slate-500',
@@ -202,6 +327,9 @@ export function TaskDetail() {
   } = useQuery({
     queryKey: ['task', id],
     queryFn: () => getTask(id),
+    // While a job is running, waiting on an answer, or in its dispute window, poll
+    // so live progress and a pending question appear without a manual refresh.
+    refetchInterval: (query) => (query.state.data && NON_TERMINAL(query.state.data.status) ? 4000 : false),
   });
 
   return (
@@ -232,6 +360,20 @@ export function TaskDetail() {
             </p>
           </div>
 
+          {task.awaitingInput && (
+            <div className="rounded-2xl border border-violet-500/30 bg-violet-500/[0.06] p-4">
+              <div className="flex items-start gap-2">
+                <MessageCircleQuestion size={18} className="mt-0.5 shrink-0 text-violet-300" />
+                <div className="text-sm text-slate-300">
+                  <div className="font-medium text-violet-200">A provider needs your input</div>
+                  <p className="mt-1 text-xs text-slate-400">
+                    One of this job&apos;s steps is waiting on an answer from you. Scroll to the
+                    highlighted step below to respond; the job resumes as soon as you send it.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
           {task.awaitingApproval && <ReviewBanner task={task} />}
           <UnpaidBanner task={task} />
 
@@ -260,7 +402,14 @@ export function TaskDetail() {
             ) : (
               <div className="mt-4 space-y-2">
                 {task.steps.map((s) => (
-                  <div key={s.index} className="rounded-xl bg-white/[0.04] p-3 text-sm">
+                  <div
+                    key={s.index}
+                    className={`rounded-xl p-3 text-sm ${
+                      s.status === 'INPUT_REQUIRED'
+                        ? 'border border-violet-500/30 bg-violet-500/[0.05]'
+                        : 'bg-white/[0.04]'
+                    }`}
+                  >
                     <div className="flex items-center justify-between">
                       <div className="min-w-0">
                         <div className="truncate font-medium">
@@ -274,9 +423,30 @@ export function TaskDetail() {
                       </div>
                       <div className="text-right">
                         <div className="text-slate-300">${s.estimatedCost.toFixed(2)}</div>
-                        <div className={`text-xs ${tint(s.status)}`}>{s.status}</div>
+                        <div className={`inline-flex items-center gap-1 text-xs ${tint(s.status)}`}>
+                          {s.status === 'RUNNING' && <Loader2 size={11} className="animate-spin" />}
+                          {s.status}
+                        </div>
                       </div>
                     </div>
+                    {s.status === 'RUNNING' && s.progress && (
+                      <div className="mt-2">
+                        {typeof s.progress.pct === 'number' && (
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                            <div
+                              className="h-full rounded-full bg-sky-400/70 transition-all"
+                              style={{ width: `${Math.max(0, Math.min(100, s.progress.pct))}%` }}
+                            />
+                          </div>
+                        )}
+                        {s.progress.message && (
+                          <div className="mt-1 text-[11px] text-sky-300">{s.progress.message}</div>
+                        )}
+                      </div>
+                    )}
+                    {s.status === 'INPUT_REQUIRED' && s.inputRequest && (
+                      <AnswerForm taskId={task.id} step={s} />
+                    )}
                     {s.qualityRating != null && (
                       <div className="mt-2 flex items-start gap-1.5 text-[11px] text-sky-300">
                         <Sparkles size={12} className="mt-0.5 shrink-0" />

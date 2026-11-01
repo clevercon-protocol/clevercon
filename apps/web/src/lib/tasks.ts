@@ -57,7 +57,15 @@ export async function getTasks(): Promise<Task[]> {
   return res.items;
 }
 
+export interface InputRequestView {
+  requestId: string;
+  prompt: string;
+  schema?: Record<string, unknown> | null;
+}
+
 export interface TaskStepView {
+  // Step id, needed to answer a needs-input step.
+  id?: string;
   index: number;
   action: string;
   status: string;
@@ -73,6 +81,10 @@ export interface TaskStepView {
   qualityNote?: string | null;
   // A file the provider delivered (downloadable + hash-verifiable).
   artifact?: { url: string; hash: string | null; contentType: string; size: number } | null;
+  // Live progress of a long-running (async) step.
+  progress?: { pct?: number; message?: string } | null;
+  // The question a provider asked mid-job (set while status is INPUT_REQUIRED).
+  inputRequest?: InputRequestView | null;
 }
 
 export interface Receipt {
@@ -92,6 +104,8 @@ export interface TaskDetail extends Task {
   receipts: Receipt[];
   // True while a T2 step is in its dispute window (buyer can approve early / dispute).
   awaitingApproval?: boolean;
+  // True while an async step is asking the buyer a question mid-job.
+  awaitingInput?: boolean;
 }
 
 /** One task's full detail (steps + receipts): demo synthesises from local data. */
@@ -227,6 +241,22 @@ export async function raiseDispute(
 export async function approveTask(taskId: string): Promise<{ approved: number }> {
   if (isDemo()) return { approved: 1 };
   return apiPost<{ approved: number }>(`/tasks/${taskId}/approve`, {});
+}
+
+/**
+ * Answer a step a provider parked as INPUT_REQUIRED (an elicitation), resuming the
+ * job. The response is validated against the question's schema server-side.
+ */
+export async function answerStep(
+  taskId: string,
+  stepId: string,
+  response: Record<string, unknown>,
+): Promise<{ ok: boolean; stepId: string }> {
+  if (isDemo()) return { ok: true, stepId };
+  return apiPost<{ ok: boolean; stepId: string }>(
+    `/tasks/${taskId}/steps/${stepId}/answer`,
+    { response },
+  );
 }
 
 /** The buyer's disputes, newest first. */
