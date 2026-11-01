@@ -12,6 +12,8 @@ import {
   BATCH_SETTLEMENT_QUEUE,
   STEP_RELEASE_QUEUE,
   STEP_POLL_QUEUE,
+  HEALTH_QUEUE,
+  healthQueue,
   redisConnection,
   redisUrl,
   type TaskExecutionJob,
@@ -21,6 +23,7 @@ import {
   type StepPollJob,
 } from './queue.js';
 import { executeTask, releaseHeldStep, pollStep } from './executor.js';
+import { sweepHealth } from './health.js';
 import { generateProof } from './prover.js';
 import {
   settleStep,
@@ -285,9 +288,28 @@ function main(): void {
     logger.error({ buyerId: job?.data.buyerId, err: err.message }, 'batch settlement job failed'),
   );
 
+  // Service health: one repeatable scheduler across all worker instances (BullMQ
+  // dedups by scheduler id) pings every listable service's /health on an interval
+  // and records an auto-recovering health flag. The public directory hides unhealthy
+  // services, so a dead endpoint stops taking hires until it recovers.
+  const HEALTH_SWEEP_MS = Math.max(60, Number(process.env.HEALTH_SWEEP_SECONDS ?? 300)) * 1000;
+  const healthQ = healthQueue();
+  void healthQ
+    .upsertJobScheduler('health-sweep', { every: HEALTH_SWEEP_MS }, { name: 'sweep' })
+    .catch((err) => logger.error({ err: (err as Error).message }, 'failed to schedule health sweep'));
+  const healthWorker = new Worker(
+    HEALTH_QUEUE,
+    async () => sweepHealth(prisma, fetch),
+    { connection: redisConnection(), concurrency: 1 },
+  );
+  healthWorker.on('completed', (_job, result) => logger.info({ result }, 'health sweep processed'));
+  healthWorker.on('failed', (_job, err) =>
+    logger.error({ err: err.message }, 'health sweep failed'),
+  );
+
   logger.info(
     { concurrency: CONCURRENCY },
-    'task-execution + proof-generation + settlement + step-release + step-poll + batch workers up',
+    'task-execution + proof-generation + settlement + step-release + step-poll + health + batch workers up',
   );
 
   const shutdown = async () => {
@@ -296,6 +318,7 @@ function main(): void {
     await settlementWorker.close();
     await releaseWorker.close();
     await pollWorker.close();
+    await healthWorker.close();
     await batchWorker.close();
     await prisma.$disconnect();
     process.exit(0);

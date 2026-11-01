@@ -141,6 +141,10 @@ function serializeService(s: ServiceWithRep, uniquePayers = 0, payoutReady: bool
     disputesUpheld,
     // Whether the payout wallet can receive USDC (has the trustline). null = unknown.
     payoutReady,
+    // System-managed endpoint health (auto-recovering). An unhealthy service is
+    // hidden from the public directory until its /health check passes again.
+    healthy: s.healthy,
+    lastHealthyAt: s.lastHealthyAt,
     reputation: rep
       ? { score: rep.score, totalJobs: rep.totalJobs, avgLatencyMs: rep.avgLatencyMs }
       : null,

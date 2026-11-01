@@ -23,6 +23,10 @@ export const STEP_RELEASE_QUEUE = 'step-release';
 // delayed job on this queue polls the provider / enforces the deadline until the
 // step reaches a terminal state.
 export const STEP_POLL_QUEUE = 'step-poll';
+// The service-health queue: a repeatable job sweeps every listable service and pings
+// its /health endpoint, recording an auto-recovering health flag. One scheduler
+// across all worker instances (BullMQ dedups), so the sweep runs once per interval.
+export const HEALTH_QUEUE = 'service-health';
 
 export interface TaskExecutionJob {
   taskId: string;
@@ -168,6 +172,16 @@ export function stepPollQueue(): Queue<StepPollJob> {
       connection: redisConnection(),
     });
   return stepPollQueueInstance;
+}
+
+let healthQueueInstance: Queue<Record<string, never>> | null = null;
+
+export function healthQueue(): Queue<Record<string, never>> {
+  if (!healthQueueInstance)
+    healthQueueInstance = new Queue<Record<string, never>>(HEALTH_QUEUE, {
+      connection: redisConnection(),
+    });
+  return healthQueueInstance;
 }
 
 /**

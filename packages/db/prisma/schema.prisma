@@ -212,6 +212,13 @@ model Service {
   attachmentsIn   Json? // AttachmentSpec {required,accept,maxSizeBytes,maxCount} for required input files
   registeredAt    DateTime      @default(now())
   lastSeen        DateTime?
+  // System-managed health (a periodic worker pings the endpoint's /health). This is
+  // AUTO-RECOVERING and distinct from the provider-controlled `status`: an unhealthy
+  // service drops out of the public directory but flips back to healthy on its own
+  // when the endpoint recovers, so a transient blip never requires manual action.
+  healthy         Boolean       @default(true)
+  lastHealthyAt   DateTime?
+  healthFailures  Int           @default(0) // consecutive failed checks
   updatedAt       DateTime      @updatedAt
 
   provider   User?              @relation("ProviderServices", fields: [providerId], references: [id])

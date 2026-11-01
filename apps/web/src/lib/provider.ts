@@ -21,6 +21,9 @@ export interface ProviderServiceItem {
   interaction: string | null;
   paymentModel: string | null;
   requiresFile: boolean;
+  // System-managed endpoint health (auto-recovering); false = hidden from directory.
+  healthy: boolean;
+  lastHealthyAt: string | null;
 }
 
 export interface ProviderJob {
@@ -90,6 +93,8 @@ interface ApiProviderService {
   interaction?: string | null;
   paymentModel?: string | null;
   attachmentsIn?: { required?: boolean } | null;
+  healthy?: boolean;
+  lastHealthyAt?: string | null;
   reputation: { score: number } | null;
 }
 
@@ -113,6 +118,8 @@ export async function getProviderServices(): Promise<ProviderServiceItem[]> {
       interaction: null,
       paymentModel: null,
       requiresFile: false,
+      healthy: true,
+      lastHealthyAt: null,
     }));
   }
   const res = await apiFetch<{ items: ApiProviderService[] }>('/provider/services');
@@ -201,6 +208,8 @@ const DEMO_TRUST = {
   interaction: null,
   paymentModel: null,
   requiresFile: false,
+  healthy: true,
+  lastHealthyAt: null,
 };
 
 function mapService(s: ApiProviderService): ProviderServiceItem {
@@ -221,6 +230,8 @@ function mapService(s: ApiProviderService): ProviderServiceItem {
     interaction: s.interaction ?? null,
     paymentModel: s.paymentModel ?? null,
     requiresFile: !!s.attachmentsIn?.required,
+    healthy: s.healthy ?? true,
+    lastHealthyAt: s.lastHealthyAt ?? null,
   };
 }
 

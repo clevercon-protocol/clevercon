@@ -182,6 +182,11 @@ export class ServicesService {
   async list(params: ListParams) {
     const where: Prisma.ServiceWhereInput = {
       status: { in: [ServiceStatus.ACTIVE, ServiceStatus.NEW] },
+      // Hide services whose endpoint is failing its health check, so a buyer never
+      // hires a dead service. Fail-open + auto-recovering: `healthy` defaults true
+      // (a never-checked service stays listed), and the sweep flips it back on when
+      // the endpoint recovers, so this never requires provider action.
+      healthy: true,
     };
     if (params.category) where.category = params.category;
     if (params.tier) where.tier = params.tier;

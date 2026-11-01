@@ -508,6 +508,14 @@ function ServicesCard() {
                           ⚠ no USDC trustline (can&apos;t be paid)
                         </span>
                       )}
+                      {!s.healthy && (
+                        <span
+                          className="font-semibold text-red-400"
+                          title="This service's /health endpoint is failing, so it is hidden from the marketplace until it responds again. Fix the endpoint; it relists automatically."
+                        >
+                          ⚠ endpoint unhealthy (hidden from directory)
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
