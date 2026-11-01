@@ -130,10 +130,31 @@ export async function disbursePrivateHandler(
     const readAccum = (c: string) => client.get<Accum>(`/vault/accumulator/${c}`);
     const art = { wasmPath, zkeyPath, poseidon };
 
-    // Read the vault's per-commitment R2/R7 accumulator so the proof binds to the
-    // window state the vault re-derives at settlement (cumulative across tasks).
     const commitment = await commitmentForBundle(bundle, { wasmPath, poseidon });
 
+    // Fail fast if this rule is not pinned on-chain for the account, BEFORE the
+    // expensive proof. The vault rejects an unpinned commitment anyway, but only after
+    // the proof is built; checking here saves the proving work on the single most
+    // common misconfiguration (a policy key copied before the rule was pinned). A read
+    // failure does not block: the vault stays the authoritative check.
+    try {
+      const { commitments } = await client.get<{ commitments: string[] }>(
+        '/vault/pinned-commitments',
+      );
+      if (!commitments.map((c) => c.toLowerCase()).includes(commitment.toLowerCase())) {
+        return toolError(
+          'disburse_private failed',
+          new Error(
+            'This rule is not pinned on-chain for your account, so it cannot authorize a spend. Pin it on the Rules tab, then try again.',
+          ),
+        );
+      }
+    } catch {
+      // network/read error: proceed and let the vault be authoritative
+    }
+
+    // Read the vault's per-commitment R2/R7 accumulator so the proof binds to the
+    // window state the vault re-derives at settlement (cumulative across tasks).
     // Prove the owner's private policy locally (shared with the SDK spender's
     // disbursePrivate) and relay only the proof. The plaintext policy never leaves
     // this process; the server can neither read nor forge it.

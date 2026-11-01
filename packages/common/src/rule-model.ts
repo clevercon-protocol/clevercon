@@ -104,13 +104,17 @@ export interface ClauseEnforcement {
 }
 
 /**
- * The single source of truth for per-clause enforcement badges. The deployed
- * circuit enforces R1/R3/R5 (so perPaymentMax, allowlist, and the per-payee cap on
- * an allowlist entry are live); R2/R4/R6/R7/R8 and the R1 floor are committed into
- * the commitment but their enforcement is pending (circuit increments in Phase D).
- * Eligibility signals that are stable on-chain facts can be chain-enforced via the
- * registry/bonds; soft signals (reputation, price) are app-enforced and must never
- * be badged trustless. The `Record<ClauseType, ...>` type makes this exhaustive.
+ * The single source of truth for per-clause enforcement badges. The deployed pp/2
+ * circuit and the public-rule vault check now enforce, on-chain in both lanes, the
+ * per-payment ceiling (R1 max), rolling cap (R2, via the per-commitment window on the
+ * private lane and the cleartext window on the public lane), allowlist (R3), deny-list
+ * (R4), per-payee cap (R5), calendar (R6), and velocity (R7). R8 per-category ceilings
+ * are enforced in the PRIVATE lane only (no category axis on the cleartext public rule).
+ * Still pending: the R1 per-payment FLOOR (min), not yet in-circuit. Eligibility signals
+ * that are stable on-chain facts can be chain-enforced via the registry/bonds; soft
+ * signals (reputation, price, tier, service allow/deny, provider criteria) are
+ * app-enforced and must never be badged trustless. The `Record<ClauseType, ...>` type
+ * makes this exhaustive.
  */
 export const CLAUSE_ENFORCEMENT: Record<ClauseType, ClauseEnforcement> = {
   perPaymentMax: { status: 'enforced-now', modes: ['private', 'public'], label: 'Max per payment' },

@@ -289,9 +289,31 @@ export function createSpender(options: SpenderOptions): CleverConClient {
       const payLines = lines.map((l) => ({ payee: l.payee, amount: l.amount }));
       const readAccum = (c: string) => request<Accum>('GET', `/vault/accumulator/${c}`);
 
+      const commitment = await commitmentForBundle(bundle, artifacts);
+
+      // Fail fast if this rule is not pinned on-chain for the account, BEFORE the
+      // expensive proof. The vault rejects an unpinned commitment anyway, but only
+      // after the proof is built; checking here saves the proving work on the single
+      // most common misconfiguration (a policy key copied before the rule was pinned).
+      // A read failure does not block: the vault stays the authoritative check.
+      try {
+        const { commitments } = await request<{ commitments: string[] }>(
+          'GET',
+          '/vault/pinned-commitments',
+        );
+        if (!commitments.map((c) => c.toLowerCase()).includes(commitment.toLowerCase())) {
+          throw new CleverConError(
+            400,
+            'This rule is not pinned on-chain for your account, so it cannot authorize a spend. Pin it on the Rules tab, then try again.',
+          );
+        }
+      } catch (e) {
+        if (e instanceof CleverConError) throw e;
+        // network/read error: proceed and let the vault be authoritative
+      }
+
       // Read the vault's per-commitment R2/R7 accumulator so the proof binds to the
       // window state the vault re-derives at settlement (cumulative across tasks).
-      const commitment = await commitmentForBundle(bundle, artifacts);
       const {
         request: batchRequest,
         totalUsdc,
