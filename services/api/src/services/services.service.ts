@@ -108,6 +108,9 @@ function serialize(s: ServiceWithRep, verified: Set<string>, stat?: PayerStat) {
     interaction: s.interaction ?? null,
     paymentModel: s.paymentModel ?? null,
     attachmentsIn: s.attachmentsIn ?? null,
+    // System-managed endpoint health (auto-recovering). The directory already hides
+    // unhealthy services; this lets a direct link show it is temporarily unavailable.
+    healthy: s.healthy,
     // Settlement-gated trust, surfaced for the marketplace: the trust level, the
     // count of real settled jobs, and whether we've curated/vouched for it.
     trust: trustTier(settlements, score, uniquePayers, disputesUpheld, totalJobs),

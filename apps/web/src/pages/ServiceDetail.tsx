@@ -418,7 +418,19 @@ export function ServiceDetail() {
               </dl>
             </div>
 
-            {isMetered(service) ? (
+            {service.healthy === false ? (
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-6">
+                <div className="flex items-center gap-2 text-amber-200">
+                  <Clock size={16} />
+                  <h2 className="font-semibold">Temporarily unavailable</h2>
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                  This service&apos;s endpoint is not responding to its health check, so it is
+                  hidden from the marketplace and cannot be hired right now. It relists
+                  automatically once the provider&apos;s endpoint recovers.
+                </p>
+              </div>
+            ) : isMetered(service) ? (
               <MeteredHireBox paymentModel={service.paymentModel} />
             ) : (
               <HireBox

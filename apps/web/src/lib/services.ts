@@ -46,6 +46,8 @@ export interface Service {
   paymentModel?: string | null;
   /** Required input files, when the service needs an attachment to be hired. */
   attachmentsIn?: AttachmentSpec | null;
+  /** System-managed endpoint health (auto-recovering); false = temporarily unavailable. */
+  healthy?: boolean;
 }
 
 interface ApiService {
@@ -63,6 +65,7 @@ interface ApiService {
   interaction?: string | null;
   paymentModel?: string | null;
   attachmentsIn?: AttachmentSpec | null;
+  healthy?: boolean;
   reputation: { score: number } | null;
 }
 
@@ -170,6 +173,7 @@ function mapApiService(s: ApiService): Service {
     interaction: s.interaction ?? null,
     paymentModel: s.paymentModel ?? null,
     attachmentsIn: s.attachmentsIn ?? null,
+    healthy: s.healthy ?? true,
   };
 }
 
@@ -310,6 +314,7 @@ export async function getService(id: string): Promise<ServiceDetail> {
     interaction: s.interaction ?? null,
     paymentModel: s.paymentModel ?? null,
     attachmentsIn: s.attachmentsIn ?? null,
+    healthy: s.healthy ?? true,
     capabilities: s.capabilities ?? [],
     pricingModel: s.pricingModel,
     currency: s.currency,
