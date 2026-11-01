@@ -453,6 +453,44 @@ export function RuleBuilder({ value, onChange }: { value: Draft; onChange: (d: D
         </div>
       }
 
+      {/* Marketplace eligibility (app-enforced at hire, NOT a circuit input): which
+          service verification tiers this rule may hire. The on-chain payee allowlist
+          is the hard backstop; this is the soft curation filter. */}
+      <div>
+        <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
+          <ShieldCheck size={13} className="text-emerald-300" /> Allowed service tiers (optional)
+        </span>
+        <div className="flex flex-wrap gap-2">
+          {(['T1', 'T2', 'T3'] as const).map((t) => {
+            const on = value.allowedTiers?.includes(t) ?? false;
+            const label = { T1: 'Verifiable', T2: 'Attestable', T3: 'Human' }[t];
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => {
+                  const cur = value.allowedTiers ?? [];
+                  const next = on ? cur.filter((x) => x !== t) : [...cur, t];
+                  set({ allowedTiers: next.length ? next : undefined });
+                }}
+                className={`rounded-lg border px-2.5 py-1 text-xs ${
+                  on
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                    : 'border-white/10 bg-white/[0.03] text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {t} · {label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-1 text-[11px] text-slate-500">
+          Blank = any tier. Your agent may only hire services whose verification tier you allow; a
+          disallowed hire is refused before any payment. The on-chain payee allowlist stays the hard
+          backstop.
+        </p>
+      </div>
+
       {/* R6 calendar window (both lanes: proven by the circuit in private, checked in
           the clear in public). A release must fall inside [start, end]. */}
       <div>
@@ -844,6 +882,15 @@ function RuleCard({
               >
                 {priv ? 'Private' : 'Public'}
               </span>
+              {Array.isArray(p.eligibility?.allowedTiers) &&
+                p.eligibility.allowedTiers.length > 0 && (
+                  <span
+                    className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300"
+                    title="Marketplace eligibility: under this rule your agent may only hire services of these verification tiers."
+                  >
+                    {p.eligibility.allowedTiers.join('/')} only
+                  </span>
+                )}
               {live ? (
                 <span
                   title={
@@ -1178,6 +1225,11 @@ export function RulesManager() {
       // The single wallet signature happens later at Pin (set_public_rule), which is
       // what makes it live on-chain and usable - symmetric with pinning a private
       // rule. There is no salt (the clauses are public by design).
+      // Soft eligibility (allowed tiers) rides with the rule in both lanes; it is
+      // non-sensitive, so the server stores + enforces it in cleartext at hire.
+      const eligibility = draft.allowedTiers?.length
+        ? { allowedTiers: draft.allowedTiers }
+        : undefined;
       if (!draft.isPrivate) {
         const existing = editingId
           ? policies.find((x) => x.id === editingId)?.commitment
@@ -1189,6 +1241,7 @@ export function RulesManager() {
           form: 'public',
           commitment: ruleId,
           supersedes: editingId ?? undefined,
+          ...(eligibility ? { eligibility } : {}),
         });
         return { kind: 'public' as const, policy, ruleId };
       }
@@ -1215,6 +1268,7 @@ export function RulesManager() {
         ...base,
         commitment,
         ...(encryptedBackup ? { encryptedBackup } : {}),
+        ...(eligibility ? { eligibility } : {}),
       });
       return { kind: 'private' as const, policy, salt };
     },

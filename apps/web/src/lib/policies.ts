@@ -10,6 +10,13 @@ export interface PolicyRules {
   denylistThresholdUsdc?: number;
 }
 
+/** Soft marketplace eligibility (app-enforced at hire; cleartext in both lanes). */
+export interface EligibilityRules {
+  allowedTiers?: ('T1' | 'T2' | 'T3')[];
+  serviceAllow?: string[];
+  serviceDeny?: string[];
+}
+
 export interface Policy {
   id: string;
   commitment: string;
@@ -24,6 +31,8 @@ export interface Policy {
   version?: number;
   supersedes?: string | null;
   global?: boolean;
+  /** Soft marketplace eligibility curation (cleartext, app-enforced at hire). */
+  eligibility?: EligibilityRules | null;
   createdAt: string;
 }
 
@@ -55,6 +64,8 @@ export interface CreatePolicyOpts {
   commitment?: string;
   /** Private rules: opaque wallet-encrypted {clauses, salt} backup the server stores but cannot read. */
   encryptedBackup?: string;
+  /** Soft marketplace eligibility (service allow/deny, allowed tiers). */
+  eligibility?: EligibilityRules;
 }
 
 /**

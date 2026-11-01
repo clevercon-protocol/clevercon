@@ -66,6 +66,16 @@ export interface SpendLimit {
   rollingWindowSecs?: number;
   allowlist?: string[];
   isPrivate?: boolean;
+  /**
+   * Soft marketplace eligibility (service allow/deny, allowed tiers) the app enforces
+   * at hire. Non-sensitive, so it is stored in cleartext in both lanes; the on-chain
+   * payee allowlist remains the hard backstop.
+   */
+  eligibility?: {
+    allowedTiers?: ('T1' | 'T2' | 'T3')[];
+    serviceAllow?: string[];
+    serviceDeny?: string[];
+  };
 }
 
 export interface Budget {
@@ -398,8 +408,13 @@ export function createSpender(options: SpenderOptions): CleverConClient {
     getBudget: () => request<Budget>('GET', '/vault'),
     getActivity: () => request<unknown>('GET', '/activity'),
     setLimit: (limit) => {
-      const { isPrivate, ...rules } = limit;
-      return request<SavedLimit>('POST', '/policies', { rules, isPrivate: isPrivate === true });
+      // Eligibility is a sibling of the spend rules on the wire, not a spend clause.
+      const { isPrivate, eligibility, ...rules } = limit;
+      return request<SavedLimit>('POST', '/policies', {
+        rules,
+        isPrivate: isPrivate === true,
+        ...(eligibility ? { eligibility } : {}),
+      });
     },
     listLimits: () => request<{ items: SavedLimit[]; total: number }>('GET', '/policies'),
   };

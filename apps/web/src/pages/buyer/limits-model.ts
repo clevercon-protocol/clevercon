@@ -42,6 +42,10 @@ export type Draft = {
   // blank = no calendar constraint. Enforced on-chain in both lanes.
   calendarStart?: string;
   calendarEnd?: string;
+  // Soft marketplace eligibility: only services whose verification tier is in this
+  // set may be hired under this rule (empty/absent = any). App-enforced at hire; the
+  // on-chain payee allowlist stays the hard backstop. Cleartext in both lanes.
+  allowedTiers?: ('T1' | 'T2' | 'T3')[];
 };
 
 /** A local datetime string ("YYYY-MM-DDTHH:mm") to unix seconds; 0 when blank/invalid. */
