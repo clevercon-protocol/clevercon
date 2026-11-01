@@ -1,11 +1,23 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { DollarSign, Briefcase, Star, Boxes, Plus, Flag } from 'lucide-react';
+import {
+  DollarSign,
+  Briefcase,
+  Star,
+  Boxes,
+  Plus,
+  Flag,
+  Receipt,
+  Download,
+  ExternalLink,
+} from 'lucide-react';
 import {
   getProviderServices,
   getProviderEarnings,
   getProviderJobs,
   getProviderDisputes,
+  getProviderPayouts,
+  payoutsToCsv,
   respondToDispute,
   registerService,
   setServiceStatus,
@@ -13,6 +25,10 @@ import {
 } from '../lib/provider';
 import { getPlatformFeeBps, interactionLabel, paymentModelLabel } from '../lib/services';
 import { refreshRoles } from '../lib/sessionSync';
+import { config } from '../config';
+
+const EXPLORER_NET = config.network === 'mainnet' ? 'public' : 'testnet';
+const explorerTx = (hash: string) => `https://stellar.expert/explorer/${EXPLORER_NET}/tx/${hash}`;
 import {
   PageHeader,
   StatCard,
@@ -591,8 +607,128 @@ export function Provider() {
         <ServicesCard />
         <JobsCard />
       </div>
+      <PayoutsCard />
       <DisputesCard />
     </section>
+  );
+}
+
+/**
+ * The provider's payout ledger: every payment to their services (settled + pending),
+ * each verifiable on-chain, with a client-side CSV export for accounting. Amounts are
+ * the real on-chain payments as recorded; the protocol fee rate is disclosed in Stats.
+ */
+function PayoutsCard() {
+  const { data, isLoading } = useQuery({
+    queryKey: ['provider-payouts'],
+    queryFn: getProviderPayouts,
+  });
+  const items = data?.items ?? [];
+  const download = () => {
+    const blob = new Blob([payoutsToCsv(items)], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `clevercon-payouts-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <Card className="p-0">
+      <CardHeader
+        icon={Receipt}
+        title="Payouts"
+        hint="Every payment to your services, verifiable on-chain. Export for accounting."
+      />
+      <div className="p-5 pt-4">
+        <div className="flex flex-wrap items-center gap-6">
+          <div>
+            <div className="text-lg font-bold text-emerald-300">
+              ${(data?.settledTotal ?? 0).toFixed(2)}
+            </div>
+            <div className="text-xs text-slate-500">Settled</div>
+          </div>
+          <div>
+            <div className="text-lg font-bold text-amber-300">
+              ${(data?.pendingTotal ?? 0).toFixed(2)}
+            </div>
+            <div className="text-xs text-slate-500">Pending</div>
+          </div>
+          <button
+            type="button"
+            onClick={download}
+            disabled={items.length === 0}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-3 py-1.5 text-xs text-slate-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Download size={13} /> Download CSV
+          </button>
+        </div>
+        {isLoading ? (
+          <div className="mt-4">
+            <Loading rows={3} />
+          </div>
+        ) : items.length === 0 ? (
+          <div className="mt-4">
+            <EmptyState>No payouts yet. They appear here once buyers hire and settle.</EmptyState>
+          </div>
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="text-[11px] uppercase tracking-wide text-slate-500">
+                  <th className="pb-2 pr-3 font-medium">Date</th>
+                  <th className="pb-2 pr-3 font-medium">Service</th>
+                  <th className="pb-2 pr-3 font-medium">Amount</th>
+                  <th className="pb-2 pr-3 font-medium">Status</th>
+                  <th className="pb-2 font-medium">Tx</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.slice(0, 50).map((p) => (
+                  <tr key={p.id} className="border-t border-white/[0.04]">
+                    <td className="py-2 pr-3 text-slate-400">{when(p.createdAt)}</td>
+                    <td className="max-w-[12rem] truncate py-2 pr-3 text-slate-300">{p.service}</td>
+                    <td className="cc-num py-2 pr-3 text-slate-200">
+                      ${p.amount.toFixed(2)} {p.asset}
+                    </td>
+                    <td
+                      className={`py-2 pr-3 text-xs ${
+                        p.status === 'CONFIRMED'
+                          ? 'text-emerald-300'
+                          : p.status === 'FAILED'
+                            ? 'text-red-400'
+                            : 'text-amber-300'
+                      }`}
+                    >
+                      {p.status}
+                    </td>
+                    <td className="py-2 text-xs">
+                      {p.txHash ? (
+                        <a
+                          href={explorerTx(p.txHash)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-violet-300 hover:text-violet-200"
+                        >
+                          {p.txHash.slice(0, 8)}… <ExternalLink size={11} />
+                        </a>
+                      ) : (
+                        <span className="text-slate-600">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {items.length > 50 && (
+              <p className="mt-2 text-xs text-slate-500">
+                Showing 50 of {items.length}. Download CSV for the full ledger.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 

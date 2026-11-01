@@ -434,4 +434,54 @@ export class ProviderService {
       })),
     };
   }
+
+  /**
+   * Full payout ledger for the provider: every payment to any of their service
+   * addresses, newest first, with the tx hash so each is verifiable on-chain, plus
+   * settled vs pending totals. This is the accounting view (CSV is built client-
+   * side from these rows). Honest and real: amounts are the on-chain payments as
+   * recorded, not estimates. Capped so one call stays bounded; paginate later.
+   */
+  async payouts(userId: string, limit = 500) {
+    const services = await this.prisma.service.findMany({
+      where: { providerId: userId },
+      select: { stellarAddress: true, name: true },
+    });
+    const addresses = services.map((s) => s.stellarAddress);
+    const byAddress = new Map(services.map((s) => [s.stellarAddress, s.name]));
+    if (addresses.length === 0) {
+      return { items: [], settledTotal: 0, pendingTotal: 0, count: 0 };
+    }
+
+    const payments = await this.prisma.payment.findMany({
+      where: { toAddress: { in: addresses } },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(limit, 1000),
+    });
+
+    let settled = ZERO;
+    let pending = ZERO;
+    for (const p of payments) {
+      if (p.status === PaymentStatus.CONFIRMED) settled = settled.add(p.amount);
+      else if (p.status !== PaymentStatus.FAILED) pending = pending.add(p.amount);
+    }
+
+    return {
+      items: payments.map((p) => ({
+        id: p.id,
+        service: byAddress.get(p.toAddress) ?? p.toAddress,
+        toAddress: p.toAddress,
+        from: p.fromAddress,
+        amount: Number(p.amount),
+        asset: p.asset,
+        status: p.status,
+        method: p.method,
+        txHash: p.txHash,
+        createdAt: p.createdAt,
+      })),
+      settledTotal: Number(settled),
+      pendingTotal: Number(pending),
+      count: payments.length,
+    };
+  }
 }

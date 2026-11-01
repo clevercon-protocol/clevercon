@@ -125,4 +125,10 @@ export class ProviderController {
   earnings(@CurrentUser() user: AuthUser) {
     return this.provider.earnings(user.userId);
   }
+
+  /** The provider's full payout ledger (for the payouts view + CSV export). */
+  @Get('payouts')
+  payouts(@CurrentUser() user: AuthUser) {
+    return this.provider.payouts(user.userId);
+  }
 }

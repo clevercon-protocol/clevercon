@@ -40,6 +40,26 @@ export interface ProviderEarnings {
   recent: ProviderJob[];
 }
 
+export interface Payout {
+  id: string;
+  service: string;
+  toAddress: string;
+  from: string;
+  amount: number;
+  asset: string;
+  status: string;
+  method: string;
+  txHash: string | null;
+  createdAt: string;
+}
+
+export interface ProviderPayouts {
+  items: Payout[];
+  settledTotal: number;
+  pendingTotal: number;
+  count: number;
+}
+
 interface ApiProviderService {
   id: string;
   name: string;
@@ -279,4 +299,48 @@ export async function getProviderEarnings(): Promise<ProviderEarnings> {
     };
   }
   return apiFetch<ProviderEarnings>('/provider/earnings');
+}
+
+/** The provider's full payout ledger (for the payouts view + CSV export). */
+export async function getProviderPayouts(): Promise<ProviderPayouts> {
+  if (isDemo()) {
+    const items: Payout[] = demoJobs.map((j) => ({
+      id: j.id,
+      service: j.service,
+      toAddress: 'GPROVIDER000DEMO',
+      from: j.buyer,
+      amount: j.amountUsdc,
+      asset: 'USDC',
+      status: j.status.toUpperCase(),
+      method: 'VAULT_RELEASE',
+      txHash: null,
+      createdAt: j.when,
+    }));
+    const settledTotal = items
+      .filter((i) => i.status === 'CONFIRMED')
+      .reduce((a, i) => a + i.amount, 0);
+    return { items, settledTotal, pendingTotal: 0, count: items.length };
+  }
+  return apiFetch<ProviderPayouts>('/provider/payouts');
+}
+
+/** Build a CSV string from payout rows (client-side; no server round-trip). */
+export function payoutsToCsv(items: Payout[]): string {
+  const header = ['Date', 'Service', 'From', 'Amount', 'Asset', 'Status', 'Method', 'TxHash'];
+  const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  const rows = items.map((i) =>
+    [
+      new Date(i.createdAt).toISOString(),
+      i.service,
+      i.from,
+      i.amount.toFixed(7),
+      i.asset,
+      i.status,
+      i.method,
+      i.txHash ?? '',
+    ]
+      .map((c) => esc(String(c)))
+      .join(','),
+  );
+  return [header.join(','), ...rows].join('\n');
 }
