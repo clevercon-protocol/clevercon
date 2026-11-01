@@ -27,7 +27,7 @@ import {
 } from '../lib/services';
 import { createTask } from '../lib/tasks';
 import { getDelegate } from '../lib/vault';
-import { uploadFile } from '../lib/uploads';
+import { uploadFile, validateAttachment } from '../lib/uploads';
 
 /** Turn an input-schema key into a readable label: "walletAddress" -> "Wallet address". */
 function humanizeField(k: string): string {
@@ -115,6 +115,7 @@ function HireBox({
   const navigate = useNavigate();
   const [budget, setBudget] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   // Values the buyer types for the service's declared inputs (e.g. data, address).
   const [fields, setFields] = useState<Record<string, string>>({});
   const { data: feeBps = 0 } = useQuery({ queryKey: ['platform-fee'], queryFn: getPlatformFeeBps });
@@ -214,36 +215,55 @@ function HireBox({
           ))}
         </div>
       )}
-      {file ? (
-        <div className="mt-3 flex items-center gap-2 rounded-lg bg-black/30 px-3 py-2 text-xs text-slate-300">
-          <Paperclip size={12} className="shrink-0 text-violet-300" />
-          <span className="min-w-0 flex-1 truncate">{file.name}</span>
-          <button
-            type="button"
-            onClick={() => setFile(null)}
-            className="shrink-0 text-slate-500 hover:text-white"
-            aria-label="Remove attachment"
-          >
-            <X size={13} />
-          </button>
-        </div>
-      ) : (
-        <label
-          className={`mt-3 flex cursor-pointer items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs hover:border-violet-500/40 hover:text-slate-300 ${
-            fileRequired ? 'border-amber-500/40 text-amber-300' : 'border-white/10 text-slate-400'
-          }`}
-        >
-          <Paperclip size={12} />
-          {fileRequired ? 'Attach a file (required)' : 'Attach a file (optional)'}
-          {acceptHint && <span className="text-slate-500">· {acceptHint}</span>}
-          <input
-            type="file"
-            className="hidden"
-            {...(attachmentsIn?.accept?.length ? { accept: attachmentsIn.accept.join(',') } : {})}
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          />
-        </label>
-      )}
+      {/* Only a service that DECLARES it takes input files (attachmentsIn) shows an
+          attacher; otherwise attaching a file the provider ignores would mislead. */}
+      {attachmentsIn &&
+        (file ? (
+          <div className="mt-3 flex items-center gap-2 rounded-lg bg-black/30 px-3 py-2 text-xs text-slate-300">
+            <Paperclip size={12} className="shrink-0 text-violet-300" />
+            <span className="min-w-0 flex-1 truncate">{file.name}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setFile(null);
+                setFileError(null);
+              }}
+              className="shrink-0 text-slate-500 hover:text-white"
+              aria-label="Remove attachment"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        ) : (
+          <div className="mt-3">
+            <label
+              className={`flex cursor-pointer items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs hover:border-violet-500/40 hover:text-slate-300 ${
+                fileRequired ? 'border-amber-500/40 text-amber-300' : 'border-white/10 text-slate-400'
+              }`}
+            >
+              <Paperclip size={12} />
+              {fileRequired ? 'Attach a file (required)' : 'Attach a file (optional)'}
+              {acceptHint && <span className="text-slate-500">· {acceptHint}</span>}
+              <input
+                type="file"
+                className="hidden"
+                {...(attachmentsIn.accept?.length ? { accept: attachmentsIn.accept.join(',') } : {})}
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  const err = f ? validateAttachment(f, attachmentsIn) : null;
+                  if (err) {
+                    setFileError(err);
+                    setFile(null);
+                  } else {
+                    setFileError(null);
+                    setFile(f);
+                  }
+                }}
+              />
+            </label>
+            {fileError && <p className="mt-1 text-[11px] text-red-400">{fileError}</p>}
+          </div>
+        ))}
       <button
         type="submit"
         disabled={!canSubmit}

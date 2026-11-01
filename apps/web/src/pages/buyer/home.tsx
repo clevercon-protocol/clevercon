@@ -34,7 +34,7 @@ import {
 import { getServices } from '../../lib/services';
 import { getPolicies, type Policy } from '../../lib/policies';
 import { getTasks, createTask, planInstruction, type HireMode } from '../../lib/tasks';
-import { uploadFile, type ArtifactRef } from '../../lib/uploads';
+import { uploadFile, validateAttachment, type ArtifactRef } from '../../lib/uploads';
 import { getActivity } from '../../lib/activity';
 import { proveAndReleaseBatch } from '../../lib/prove';
 import { Card, CardHeader, EmptyState, PageHeader, controls } from '../../components/ui';
@@ -288,8 +288,10 @@ export function CommandChat() {
   const [lines, setLines] = useState<Line[]>([{ payee: '', amount: '', reason: '' }]);
   const [serviceId, setServiceId] = useState('');
   const [budget, setBudget] = useState('');
-  // Optional input file for a hire (e.g. a doc/image the service processes).
+  // Input file for a hire, shown ONLY when the chosen service declares it takes
+  // files (attachmentsIn); fileErr holds a client-side validation message.
   const [file, setFile] = useState<File | null>(null);
+  const [fileErr, setFileErr] = useState<string | null>(null);
 
   // Which lane the vault enforces this spend in: private (a ZK proof hides the rule,
   // keyless, the safe default) or public (the Managed Session's on-chain scope,
@@ -447,6 +449,18 @@ export function CommandChat() {
     const bind = currentBind();
     const appliedLimit = applied;
     if (result.kind === 'hire' && result.service) {
+      // A service that requires an input file can't be hired from the free-text box
+      // (no attacher here); point the user at the structured action that has one.
+      const svc = services.find((s) => s.id === result.service!.id);
+      if (svc?.attachmentsIn?.required && !file) {
+        push({
+          id: nextId(),
+          role: 'agent',
+          ok: false,
+          text: `${result.service.name} needs a file to run. Use the “Hire a service” quick action to pick it and attach the file.`,
+        });
+        return;
+      }
       let attachments: ArtifactRef[] | undefined;
       try {
         attachments = await takeAttachments();
@@ -511,6 +525,7 @@ export function CommandChat() {
     setServiceId('');
     setBudget('');
     setFile(null);
+    setFileErr(null);
   }
 
   function push(...msgs: Msg[]) {
@@ -969,38 +984,60 @@ export function CommandChat() {
                   />
                   {(() => {
                     const svc = services.find((s) => s.id === serviceId);
-                    const required = !!svc?.attachmentsIn?.required;
-                    const accept = svc?.attachmentsIn?.accept?.length
-                      ? svc.attachmentsIn.accept.join(',')
-                      : undefined;
-                    return file ? (
-                      <div className="flex items-center gap-2 rounded-lg bg-black/30 px-3 py-2 text-xs text-slate-300 sm:col-span-2">
-                        <Paperclip size={12} className="shrink-0 text-violet-300" />
-                        <span className="min-w-0 flex-1 truncate">{file.name}</span>
-                        <button
-                          type="button"
-                          onClick={() => setFile(null)}
-                          className="shrink-0 text-slate-500 hover:text-white"
-                          aria-label="Remove attachment"
-                        >
-                          <X size={13} />
-                        </button>
+                    // Only services that DECLARE they take input files show an attacher;
+                    // attaching a file to a service that ignores it would be misleading.
+                    const spec = svc?.attachmentsIn;
+                    if (!spec) return null;
+                    const required = !!spec.required;
+                    const accept = spec.accept?.length ? spec.accept.join(',') : undefined;
+                    return (
+                      <div className="sm:col-span-2">
+                        {file ? (
+                          <div className="flex items-center gap-2 rounded-lg bg-black/30 px-3 py-2 text-xs text-slate-300">
+                            <Paperclip size={12} className="shrink-0 text-violet-300" />
+                            <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFile(null);
+                                setFileErr(null);
+                              }}
+                              className="shrink-0 text-slate-500 hover:text-white"
+                              aria-label="Remove attachment"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                        ) : (
+                          <label
+                            className={`flex cursor-pointer items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs hover:border-violet-500/40 hover:text-slate-300 ${
+                              required ? 'border-amber-500/40 text-amber-300' : 'border-white/10 text-slate-400'
+                            }`}
+                          >
+                            <Paperclip size={12} />
+                            {required
+                              ? `Attach a file (required${accept ? ` · ${accept}` : ''})`
+                              : `Attach a file (optional${accept ? ` · ${accept}` : ''})`}
+                            <input
+                              type="file"
+                              className="hidden"
+                              {...(accept ? { accept } : {})}
+                              onChange={(e) => {
+                                const f = e.target.files?.[0] ?? null;
+                                const err = f ? validateAttachment(f, spec) : null;
+                                if (err) {
+                                  setFileErr(err);
+                                  setFile(null);
+                                } else {
+                                  setFileErr(null);
+                                  setFile(f);
+                                }
+                              }}
+                            />
+                          </label>
+                        )}
+                        {fileErr && <p className="mt-1 text-[11px] text-red-400">{fileErr}</p>}
                       </div>
-                    ) : (
-                      <label
-                        className={`flex cursor-pointer items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs hover:border-violet-500/40 hover:text-slate-300 sm:col-span-2 ${
-                          required ? 'border-amber-500/40 text-amber-300' : 'border-white/10 text-slate-400'
-                        }`}
-                      >
-                        <Paperclip size={12} />
-                        {required ? 'Attach a file (required by this service)' : 'Attach a file (optional)'}
-                        <input
-                          type="file"
-                          className="hidden"
-                          {...(accept ? { accept } : {})}
-                          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                        />
-                      </label>
                     );
                   })()}
                 </div>
