@@ -18,6 +18,7 @@ import {
   ArrowRight,
   SlidersHorizontal,
   Lock,
+  Paperclip,
 } from 'lucide-react';
 import { isDemo } from '../../config';
 import { useSession } from '../../store/session';
@@ -33,6 +34,7 @@ import {
 import { getServices } from '../../lib/services';
 import { getPolicies, type Policy } from '../../lib/policies';
 import { getTasks, createTask, planInstruction, type HireMode } from '../../lib/tasks';
+import { uploadFile, type ArtifactRef } from '../../lib/uploads';
 import { getActivity } from '../../lib/activity';
 import { proveAndReleaseBatch } from '../../lib/prove';
 import { Card, CardHeader, EmptyState, PageHeader, controls } from '../../components/ui';
@@ -102,6 +104,9 @@ type Plan = {
   bind: Bind;
   serviceName?: string;
   serviceId?: string;
+  // Buyer-supplied input files for a hire (uploaded to R2 as content-addressed
+  // refs at propose time, so they survive chat persistence and reach the provider).
+  attachments?: ArtifactRef[];
 };
 type Msg =
   | { id: number; role: 'user'; text: string }
@@ -283,6 +288,8 @@ export function CommandChat() {
   const [lines, setLines] = useState<Line[]>([{ payee: '', amount: '', reason: '' }]);
   const [serviceId, setServiceId] = useState('');
   const [budget, setBudget] = useState('');
+  // Optional input file for a hire (e.g. a doc/image the service processes).
+  const [file, setFile] = useState<File | null>(null);
 
   // Which lane the vault enforces this spend in: private (a ZK proof hides the rule,
   // keyless, the safe default) or public (the Managed Session's on-chain scope,
@@ -367,16 +374,31 @@ export function CommandChat() {
   const laneReady = lane === 'public' ? sessionActive : !!enforcedRule;
 
   const hire = useMutation({
-    mutationFn: (p: { title: string; serviceId: string; budget: number; policyId?: string }) =>
+    mutationFn: (p: {
+      title: string;
+      serviceId: string;
+      budget: number;
+      policyId?: string;
+      input?: Record<string, unknown>;
+    }) =>
       createTask({
         title: p.title,
         mode: 'DIRECT' as HireMode,
         budget: p.budget,
         serviceId: p.serviceId,
         policyId: p.policyId,
+        input: p.input,
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
   });
+
+  // Upload the attached file (if any) to a content-addressed ref; returns the
+  // attachments array for a job input, or undefined. Throws on upload failure.
+  async function takeAttachments(): Promise<ArtifactRef[] | undefined> {
+    if (!file) return undefined;
+    const ref = await uploadFile(file);
+    return [ref];
+  }
 
   const planMut = useMutation({
     mutationFn: (instruction: string) => planInstruction(instruction),
@@ -425,6 +447,14 @@ export function CommandChat() {
     const bind = currentBind();
     const appliedLimit = applied;
     if (result.kind === 'hire' && result.service) {
+      let attachments: ArtifactRef[] | undefined;
+      try {
+        attachments = await takeAttachments();
+      } catch {
+        push({ id: nextId(), role: 'agent', ok: false, text: 'Could not upload the attachment. Please try again.' });
+        return;
+      }
+      setFile(null);
       push({
         id: nextId(),
         role: 'plan',
@@ -438,6 +468,7 @@ export function CommandChat() {
           bind,
           serviceName: result.service.name,
           serviceId: result.service.id,
+          ...(attachments ? { attachments } : {}),
         },
       });
     } else if ((result.kind === 'pay' || result.kind === 'disburse') && result.lines.length) {
@@ -479,6 +510,7 @@ export function CommandChat() {
     setLines([{ payee: '', amount: '', reason: '' }]);
     setServiceId('');
     setBudget('');
+    setFile(null);
   }
 
   function push(...msgs: Msg[]) {
@@ -490,7 +522,7 @@ export function CommandChat() {
     return lane === 'private' ? { policyId: enforcedRule?.id } : {};
   }
 
-  function propose() {
+  async function propose() {
     if (!action) return;
     const blocked = laneBlockedReason();
     if (blocked) {
@@ -535,6 +567,23 @@ export function CommandChat() {
       const svc = services.find((s) => s.id === serviceId);
       const bud = Number(budget);
       if (!svc || !(bud > 0)) return;
+      // A service that declares a required input file cannot run without one.
+      if (svc.attachmentsIn?.required && !file) {
+        push({
+          id: nextId(),
+          role: 'agent',
+          ok: false,
+          text: `${svc.name} needs a file attached to run. Add one below, then propose again.`,
+        });
+        return;
+      }
+      let attachments: ArtifactRef[] | undefined;
+      try {
+        attachments = await takeAttachments();
+      } catch {
+        push({ id: nextId(), role: 'agent', ok: false, text: 'Could not upload the attachment. Please try again.' });
+        return;
+      }
       plan = {
         kind: 'hire',
         lane,
@@ -544,8 +593,9 @@ export function CommandChat() {
         bind,
         serviceName: svc.name,
         serviceId: svc.id,
+        ...(attachments ? { attachments } : {}),
       };
-      userText = `Hire ${svc.name} with a $${bud.toFixed(2)} budget.`;
+      userText = `Hire ${svc.name} with a $${bud.toFixed(2)} budget${attachments ? ' (with an attachment)' : ''}.`;
     }
     if (!plan) return;
     push(
@@ -569,6 +619,7 @@ export function CommandChat() {
           serviceId: plan.serviceId,
           budget: plan.lines[0].amount,
           policyId,
+          input: plan.attachments?.length ? { attachments: plan.attachments } : undefined,
         });
         push({
           id: nextId(),
@@ -916,6 +967,42 @@ export function CommandChat() {
                     placeholder="Budget USDC"
                     className={inputCls}
                   />
+                  {(() => {
+                    const svc = services.find((s) => s.id === serviceId);
+                    const required = !!svc?.attachmentsIn?.required;
+                    const accept = svc?.attachmentsIn?.accept?.length
+                      ? svc.attachmentsIn.accept.join(',')
+                      : undefined;
+                    return file ? (
+                      <div className="flex items-center gap-2 rounded-lg bg-black/30 px-3 py-2 text-xs text-slate-300 sm:col-span-2">
+                        <Paperclip size={12} className="shrink-0 text-violet-300" />
+                        <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => setFile(null)}
+                          className="shrink-0 text-slate-500 hover:text-white"
+                          aria-label="Remove attachment"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ) : (
+                      <label
+                        className={`flex cursor-pointer items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs hover:border-violet-500/40 hover:text-slate-300 sm:col-span-2 ${
+                          required ? 'border-amber-500/40 text-amber-300' : 'border-white/10 text-slate-400'
+                        }`}
+                      >
+                        <Paperclip size={12} />
+                        {required ? 'Attach a file (required by this service)' : 'Attach a file (optional)'}
+                        <input
+                          type="file"
+                          className="hidden"
+                          {...(accept ? { accept } : {})}
+                          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                        />
+                      </label>
+                    );
+                  })()}
                 </div>
               )}
 

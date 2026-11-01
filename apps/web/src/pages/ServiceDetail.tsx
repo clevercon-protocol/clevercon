@@ -135,7 +135,10 @@ function HireBox({
       // optional uploaded attachment (direct to R2). The provider receives this.
       const input: Record<string, unknown> = {};
       for (const k of propKeys) if (fields[k]?.trim()) input[k] = fields[k].trim();
-      if (file) input.attachment = await uploadFile(file);
+      // Plural `attachments` (an ArtifactRef[]) is what the worker lifts into the job
+      // envelope (JobRequestEnvelope.attachments) so the provider SDK receives it as
+      // req.attachments. (A singular `attachment` would stay buried in input.)
+      if (file) input.attachments = [await uploadFile(file)];
       const hasInput = Object.keys(input).length > 0;
       return createTask({
         title: `Pay ${serviceName}`,
