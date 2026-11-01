@@ -108,7 +108,12 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
   const [price, setPrice] = useState('');
   const [endpoint, setEndpoint] = useState('');
   const [address, setAddress] = useState('');
-  const [pricingModel, setPricingModel] = useState<'X402' | 'MPP'>('X402');
+  const [paymentModel, setPaymentModel] = useState<
+    'escrow' | 'x402' | 'mpp-session' | 'subscription'
+  >('escrow');
+  const [interaction, setInteraction] = useState<'sync' | 'async' | 'human'>('sync');
+  const [needsFile, setNeedsFile] = useState(false);
+  const [accept, setAccept] = useState('');
   // Acceptance contract: how delivery is judged before you are paid.
   const [tier, setTier] = useState<'T1' | 'T2' | 'T3'>('T2');
   const [vmethod, setVmethod] = useState<string>('onchain');
@@ -162,6 +167,19 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
     }
     setJsonErr(null);
     const method = tier === 'T2' ? 'attest' : tier === 'T3' ? 'manual' : vmethod;
+    // A metered payment model (x402/MPP/subscription) is paid per use, so its
+    // interaction is 'metered'; an escrow service keeps the chosen sync/async/human.
+    const metered = paymentModel !== 'escrow';
+    const pricingModel = paymentModel === 'mpp-session' ? 'MPP' : 'X402';
+    // Required input file (escrow services only; a metered call carries its own input).
+    const acceptList = accept
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const attachmentsIn =
+      !metered && needsFile
+        ? { required: true, ...(acceptList.length ? { accept: acceptList } : {}) }
+        : undefined;
     return {
       name: name.trim(),
       description: description.trim(),
@@ -174,6 +192,9 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
       verification: { method, spec },
       inputSchema,
       outputSchema,
+      interaction: metered ? 'metered' : interaction,
+      paymentModel,
+      ...(attachmentsIn ? { attachmentsIn } : {}),
     };
   };
 
@@ -245,14 +266,61 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
           {hint(!addressOk, 'Must be a valid Stellar public key (G… , 56 chars).')}
         </div>
         <select
-          value={pricingModel}
-          onChange={(e) => setPricingModel(e.target.value as 'X402' | 'MPP')}
+          value={paymentModel}
+          onChange={(e) =>
+            setPaymentModel(e.target.value as 'escrow' | 'x402' | 'mpp-session' | 'subscription')
+          }
           className={controls.field}
-          aria-label="Charging model"
+          aria-label="Payment model"
         >
-          <option value="X402">x402 (per call)</option>
-          <option value="MPP">MPP (metered)</option>
+          <option value="escrow">Escrow (pay on delivery)</option>
+          <option value="x402">Pay-per-call (x402)</option>
+          <option value="mpp-session">Streaming (MPP session)</option>
+          <option value="subscription">Subscription</option>
         </select>
+      </div>
+
+      <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+          How your service works
+        </p>
+        {paymentModel === 'escrow' ? (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <select
+                value={interaction}
+                onChange={(e) => setInteraction(e.target.value as 'sync' | 'async' | 'human')}
+                className={controls.field}
+                aria-label="Interaction shape"
+              >
+                <option value="sync">Instant (one request, one response)</option>
+                <option value="async">Long-running (the job runs, then completes)</option>
+                <option value="human">Human (a person does or approves the work)</option>
+              </select>
+              <label className="flex items-center gap-2 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={needsFile}
+                  onChange={(e) => setNeedsFile(e.target.checked)}
+                />
+                Requires an input file
+              </label>
+            </div>
+            {needsFile && (
+              <input
+                value={accept}
+                onChange={(e) => setAccept(e.target.value)}
+                placeholder="Accepted file types (optional), e.g. application/pdf, image/*"
+                className={controls.field}
+              />
+            )}
+          </>
+        ) : (
+          <p className="text-[11px] leading-relaxed text-slate-500">
+            Metered: buyers pay your endpoint per use from their agent wallet (not an escrowed job).
+            Make sure your endpoint settles the chosen scheme.
+          </p>
+        )}
       </div>
 
       <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3">

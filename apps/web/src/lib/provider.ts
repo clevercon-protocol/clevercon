@@ -127,6 +127,10 @@ export interface RegisterServiceInput {
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   verification?: { method: string; spec?: Record<string, unknown> };
+  // Interaction/payment shape (manifest v2); absent = sync/escrow.
+  interaction?: 'sync' | 'async' | 'human' | 'metered';
+  paymentModel?: 'escrow' | 'x402' | 'mpp-session' | 'subscription';
+  attachmentsIn?: { required?: boolean; accept?: string[]; maxSizeBytes?: number; maxCount?: number };
 }
 
 /** Register a service (grants PROVIDER). Demo returns a local stand-in. */
