@@ -103,6 +103,7 @@ async function testListTools() {
       'get_task',
       'approve_task',
       'answer_step',
+      'upload_file',
       'dispute_task',
     ];
 

@@ -29,6 +29,7 @@ import { listTasksHandler, listTasksSchema } from './tools/list-tasks.js';
 import { getTaskHandler, getTaskSchema } from './tools/get-task.js';
 import { approveTaskHandler, approveTaskSchema } from './tools/approve-task.js';
 import { answerStepHandler, answerStepSchema } from './tools/answer-step.js';
+import { uploadFileHandler, uploadFileSchema } from './tools/upload-file.js';
 import { disputeTaskHandler, disputeTaskSchema } from './tools/dispute-task.js';
 import {
   payHandler,
@@ -93,6 +94,7 @@ class CleverConMCPServer {
         getTaskSchema,
         approveTaskSchema,
         answerStepSchema,
+        uploadFileSchema,
         disputeTaskSchema,
       ],
     }));
@@ -133,6 +135,8 @@ class CleverConMCPServer {
             return await approveTaskHandler(args || {}, this.config);
           case 'answer_step':
             return await answerStepHandler(args || {}, this.config);
+          case 'upload_file':
+            return await uploadFileHandler(args || {}, this.config);
           case 'dispute_task':
             return await disputeTaskHandler(args || {}, this.config);
           default:
