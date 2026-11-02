@@ -20,13 +20,13 @@ What an AI agent can do with money on Stellar: pay a vendor, disburse to many, h
 
 CleverCon lets an AI agent do real things with money on Stellar: pay a vendor, disburse to many recipients, hire services and pay per call, hand a service a file to work on, or pay other agents, all within limits only you set. You fund a vault, set the rules the agent must obey (a budget, per-payment caps, an allowlist of who it may pay, time windows, how often it may pay), and keep those rules private. It runs non-custodially, and the platform never takes custody of your funds.
 
-The vault holds your funds non-custodially and releases a payment only when a zero-knowledge proof shows it obeys your committed rules. The rules are enforced on-chain but never published, and the platform never takes custody of your funds.
+The vault holds your funds non-custodially and releases a payment only when it passes your rule on-chain: a private rule is checked by a zero-knowledge proof (so the rule itself is never published), a public rule by a session key under a cleartext scope. Either way the platform never takes custody of your funds.
 
 Three things define it:
 
 1. **Bounded and non-custodial.** The agent decides who to pay, when, and how much, but the vault releases a payment only if it passes an on-chain policy check. Even a compromised or careless agent cannot exceed the budget or pay someone you did not approve, and the platform never holds your money.
-2. **Private.** Your caps, allowlist, and limits are committed and verified on-chain with zero-knowledge proofs, without being published. The ledger shows that a payment was allowed without revealing the rule that allowed it. (What stays private is the policy; amounts and destinations are public on the ledger, like any Stellar payment.)
-3. **A real economy, not just a wallet.** Direct payments and disbursements to any allowlisted address, plus a service directory where agents hire and pay per call, with on-chain reputation. Reachable from a web app, an SDK, or an MCP server.
+2. **Private by choice.** A rule can be private (its caps, allowlist, and limits committed and verified on-chain with zero-knowledge, without being published) or public (a cleartext scope a session key runs under). A private rule shows the ledger that a payment was allowed without revealing the rule that allowed it. (What stays private is the policy; amounts and destinations are public on the ledger, like any Stellar payment.)
+3. **A real economy, not just a wallet.** Direct payments and disbursements to allowlisted addresses are the base; on top is an open directory where anyone, a person or a bot, lists a service of any kind (APIs, bots, human work) across countless categories, and agents hire and pay per use, with settlement-earned reputation. Reachable from a web app, an SDK, or an MCP server.
 
 ## Why it matters
 

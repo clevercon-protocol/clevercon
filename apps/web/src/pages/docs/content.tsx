@@ -39,9 +39,10 @@ function Introduction() {
       </Lead>
       <P>
         You set the rules once (a budget, who it may pay, how much, how often). They are enforced
-        on-chain and kept private, and the platform never holds your money. So the agent spends on
-        its own and can never overspend, pay someone you did not approve, or leak your limits. The
-        rules are the guardrail you set once, not the daily work.
+        on-chain, and you choose whether to keep them private with zero-knowledge or make them
+        public; either way the platform never holds your money. So the agent spends on its own and
+        can never overspend or pay someone you did not approve, and a private rule never leaks your
+        limits. The rules are the guardrail you set once, not the daily work.
       </P>
 
       <H2 id="do">What you can do</H2>
@@ -71,7 +72,10 @@ function Introduction() {
         </LI>
       </UL>
       <P>
-        Each of these works by prompt, in the app, or in code. See{' '}
+        Direct payments and disbursements need no service at all; they are the base. Hiring a
+        service is that same payment extended to get a task done, paid within the same rule. And the
+        set of services is open and ever-growing, not a fixed list: anyone can publish one. Each of
+        these works by prompt, in the app, or in code. See{' '}
         <A to="/docs/what-you-can-do">What you can do</A> for every action step by step, with
         snippets.
       </P>
@@ -580,6 +584,11 @@ function Walkthrough() {
           <B>Grants or bounties:</B> a private rule with an allowlist, a per-payee cap, and a
           program total.
         </LI>
+        <LI>
+          <B>Hire a service to do a task:</B> a rule with a per-job cap, a weekly cap, and
+          eligibility limited to the categories or tiers you trust. The agent finds and hires a
+          fitting service (data, research, file or image processing) and pays on delivery.
+        </LI>
       </UL>
       <P>
         Each is a copyable clause set in <A to="/docs/rules">Rules by example</A>.
@@ -697,6 +706,16 @@ function RulesDoc() {
         Pay approved recipients up to a fixed amount each, with a hard program total.
         <br />
         Clauses: allowlist = recipients; per-payee cap = $500; rolling cap = $5,000 per 90 days.
+      </UseCase>
+
+      <UseCase label="Private" title="A service budget for an agent">
+        Let an agent hire services to get work done, but only the kinds you trust, capped per job
+        and per week.
+        <br />
+        Clauses: eligibility = allow certain categories (for example Data &amp; Oracles, Media &amp;
+        Files) or specific services, allowed tiers = T1 and T2; per-payment max = $1; rolling cap =
+        $25 per week. The agent discovers and hires within this; a service outside the allowed set
+        is never even attempted.
       </UseCase>
 
       <H2 id="edit">Editing replaces the rule</H2>
@@ -846,6 +865,31 @@ function Marketplace() {
           <B>Agents</B> are the ones doing the hiring and paying, over the app, the SDK, or MCP.
         </LI>
       </UL>
+
+      <H2 id="open">An open directory, not a fixed list</H2>
+      <P>
+        Anyone can publish a service, so the directory is open and ever-growing. There is no closed
+        menu of what CleverCon does; what varies is three independent things:
+      </P>
+      <UL>
+        <LI>
+          <B>Who provides it:</B> a person, a bot, an API, or an x402 / MPP endpoint.
+        </LI>
+        <LI>
+          <B>How it runs:</B> instant, long-running, needs-input, human (approval), or metered (see
+          interaction shapes below).
+        </LI>
+        <LI>
+          <B>What it does:</B> any category a provider invents, trading signals, buying other
+          crypto, research for a student, file and image processing, freelance development, data
+          feeds, and more. These are examples, not the boundary.
+        </LI>
+      </UL>
+      <P>
+        Your agent finds a fitting service (or you pick one yourself), gets the task done, and pays
+        for it within your rule. Hiring is an extension of the same bounded payment, so the
+        guarantees are identical whether you pay an address directly or hire a service.
+      </P>
 
       <H2 id="hire">Hiring a service</H2>
       <P>Hiring runs the same bounded, pay-on-accepted-delivery flow every time:</P>

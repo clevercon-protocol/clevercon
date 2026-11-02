@@ -90,7 +90,7 @@ const PILLARS = [
     ring: 'text-cyan-300',
     border: 'border-cyan-800/40',
     tag: 'Bounded & non-custodial',
-    title: "A spending account it can't abuse",
+    title: "Money it can't misuse",
     body: 'Fund a non-custodial vault and set your limits. The contract holds the money and refuses any payment that breaks a rule, so the platform never has custody and the agent cannot overspend or pay anyone you did not approve.',
   },
   {
@@ -98,9 +98,9 @@ const PILLARS = [
     tint: 'from-violet-500/20 to-transparent',
     ring: 'text-violet-300',
     border: 'border-violet-800/40',
-    tag: 'Private',
+    tag: 'Private by choice',
     title: 'Rules only you can see',
-    body: 'Your limits are committed and checked on-chain without being published. Your budget and approved payees stay yours, enforced by a real zero-knowledge proof verified on-chain (live on testnet), not a trusted server.',
+    body: 'Choose a private rule and your limits are committed and checked on-chain without being published, enforced by a real zero-knowledge proof verified on-chain (live on testnet), not a trusted server. Or go public with a session key. Either way your budget and approved payees stay bounded on-chain.',
   },
   {
     icon: Boxes,
@@ -109,16 +109,21 @@ const PILLARS = [
     border: 'border-emerald-800/40',
     tag: 'A real economy',
     title: 'An economy to act in',
-    body: 'Pay vendors, disburse to many, hire services, pay per call for APIs, or pay other agents, via dApp, SDK, or MCP. Direct payments plus a registered service market, all inside your policy.',
+    body: 'Pay vendors, disburse to many, hire services, pay per call for APIs, or pay other agents, via dApp, SDK, or MCP. Direct payments are the base; on top is an open market of services anyone can list, across countless categories, all inside your policy.',
   },
 ];
 
+// Illustrative, not exhaustive: the directory is open, so categories grow as
+// providers list new kinds of services.
 const CATEGORIES = [
   'Data & Oracles',
   'AI & Analysis',
   'Web & Research',
+  'Media & Files',
   'Finance & DeFi',
+  'Trading & Crypto',
   'Risk & Compliance',
+  'Developers & Freelance',
   'Human Services',
   'Business Services',
 ];
@@ -209,7 +214,7 @@ const OFFERINGS: {
     icon: Boxes,
     name: 'Agent SDK',
     status: 'live',
-    body: 'Embed a bounded spending account, or agent-key mode for external x402 services, into any app or agent in a few lines.',
+    body: 'Embed bounded, non-custodial spending (pay, disburse, hire), or agent-key mode for external x402 services, into any app or agent in a few lines.',
     href: 'https://www.npmjs.com/package/@clevercon/agent-sdk',
     hrefLabel: 'npm install @clevercon/agent-sdk',
   },
@@ -217,7 +222,7 @@ const OFFERINGS: {
     icon: Layers,
     name: 'Stellar MCP server',
     status: 'live',
-    body: 'Give any MCP-capable agent a bounded spending account: pay, disburse, hire, set limits, and read its budget, natively over MCP.',
+    body: 'Give any MCP-capable agent the ability to pay, disburse, hire, attach a file, set limits, and read its budget, bounded by your rules, natively over MCP.',
     href: 'https://www.npmjs.com/package/@clevercon/mcp',
     hrefLabel: 'npm install @clevercon/mcp',
   },
@@ -446,7 +451,7 @@ export function Landing() {
           <Reveal>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-400">
               <Sparkles size={12} className="text-violet-400" />
-              Private, non-custodial money for AI agents on Stellar
+              Non-custodial money for AI agents on Stellar
             </span>
           </Reveal>
           <Reveal delay={80}>
@@ -458,10 +463,10 @@ export function Landing() {
           </Reveal>
           <Reveal delay={160}>
             <p className="mt-6 text-base sm:text-lg text-slate-400 max-w-2xl mx-auto leading-relaxed">
-              CleverCon lets an AI agent pay a vendor, disburse to many, hire a service, and pay per
-              call for APIs on Stellar, always within limits only you set and no one else can see,
-              non-custodially. And it is the economy on the other side: services any agent can find,
-              use, and pay for.
+              CleverCon lets an AI agent pay, disburse, or hire a service to get a task done on
+              Stellar, always inside rules you set and enforce on-chain, kept private with
+              zero-knowledge or public, your choice. Direct payments are the base; on top sits an
+              open, growing economy of services it connects you to.
             </p>
           </Reveal>
           <Reveal delay={240}>
@@ -604,9 +609,9 @@ export function Landing() {
               Everything CleverCon offers
             </h2>
             <p className="mt-3 text-slate-400">
-              The vault, private policies, SDK, and MCP server are live on Stellar testnet, with
-              every payment proven on-chain in zero-knowledge. Mainnet and published packages are on
-              the way, built in the open.
+              The vault, rules (private or public), SDK, and MCP server are live on Stellar testnet,
+              with every spend enforced on-chain and private payments proven in zero-knowledge.
+              Mainnet and published packages are on the way, built in the open.
             </p>
           </Reveal>
           <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -652,14 +657,15 @@ export function Landing() {
               Somewhere to spend
             </p>
             <h2 className="mt-2 text-2xl sm:text-3xl font-bold text-white tracking-tight text-balance">
-              A curated directory of services an agent can hire
+              An open directory of services an agent can hire
             </h2>
             <p className="mt-4 text-slate-400 leading-relaxed">
-              Connect a wallet, fund a non-custodial vault, and hire from a curated directory of
-              automated services. Search, filter by category, and sort by rating, price, or speed.
-              The vault holds the funds and releases payment per step, so the platform never has
-              custody. The directory is for discovery: the spending control works whether you pay
-              one endpoint or many.
+              Connect a wallet, fund a non-custodial vault, and hire from an open directory of
+              services of every kind: bots, APIs, and human work, across countless categories, each
+              listed by whoever runs it. Search, filter by category, and sort by rating, price, or
+              speed. The vault releases payment on accepted delivery, so the platform never has
+              custody. The directory is for discovery; the spending control works whether you pay
+              one endpoint or many, or no service at all.
             </p>
             <ul className="mt-5 space-y-2 text-sm text-slate-300">
               {[
