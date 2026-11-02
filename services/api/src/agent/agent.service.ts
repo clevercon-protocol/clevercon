@@ -325,9 +325,21 @@ export class AgentService {
 
     if (raw.kind === 'hire') {
       const q = (raw.serviceQuery ?? '').trim();
-      const matches = q
+      // Match ANY significant word of the query against name/description/category, so
+      // "resize an image" finds "Image Resizer & Converter" (not just exact-name).
+      const words = q.split(/\s+/).filter((w) => w.length > 2);
+      const terms = words.length ? words : q ? [q] : [];
+      const matches = terms.length
         ? await this.prisma.service.findMany({
-            where: { status: 'ACTIVE', healthy: true, name: { contains: q, mode: 'insensitive' } },
+            where: {
+              status: 'ACTIVE',
+              healthy: true,
+              OR: terms.flatMap((w) => [
+                { name: { contains: w, mode: 'insensitive' as const } },
+                { description: { contains: w, mode: 'insensitive' as const } },
+                { category: { contains: w, mode: 'insensitive' as const } },
+              ]),
+            },
             select: { id: true, name: true, pricePerCall: true, attachmentsIn: true },
             take: 5,
           })

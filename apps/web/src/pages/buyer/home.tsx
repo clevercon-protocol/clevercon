@@ -19,8 +19,13 @@ import {
   SlidersHorizontal,
   Lock,
   Paperclip,
+  Loader2,
+  Download,
+  ExternalLink,
+  CheckCircle2,
+  AlertTriangle,
 } from 'lucide-react';
-import { isDemo } from '../../config';
+import { isDemo, config } from '../../config';
 import { useSession } from '../../store/session';
 import {
   getVault,
@@ -33,7 +38,15 @@ import {
 } from '../../lib/vault';
 import { getServices } from '../../lib/services';
 import { getPolicies, type Policy } from '../../lib/policies';
-import { getTasks, createTask, planInstruction, type HireMode } from '../../lib/tasks';
+import {
+  getTasks,
+  getTask,
+  answerStep,
+  createTask,
+  planInstruction,
+  type HireMode,
+  type TaskStepView,
+} from '../../lib/tasks';
 import { uploadFile, validateAttachment, type ArtifactRef } from '../../lib/uploads';
 import { getActivity } from '../../lib/activity';
 import { proveAndReleaseBatch } from '../../lib/prove';
@@ -111,7 +124,9 @@ type Plan = {
 type Msg =
   | { id: number; role: 'user'; text: string }
   | { id: number; role: 'plan'; plan: Plan; status: 'pending' | 'approved' | 'cancelled' }
-  | { id: number; role: 'agent'; text: string; ok?: boolean };
+  | { id: number; role: 'agent'; text: string; ok?: boolean }
+  // A live job: polls the task and shows status, progress, needs-input, and output.
+  | { id: number; role: 'job'; taskId: string; title: string };
 
 const short = (a: string) => (a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
 
@@ -637,24 +652,44 @@ export function CommandChat() {
     setMessages((m) => m.map((x) => (x.role === 'plan' && x.id === id ? { ...x, status } : x)));
   }
 
+  // Swap the service on a pending hire plan (the dropdown on the plan card), so the
+  // user can override the agent's pick before approving.
+  function pickService(msgId: number, serviceId: string) {
+    const svc = services.find((s) => s.id === serviceId);
+    if (!svc) return;
+    setMessages((m) =>
+      m.map((x) => {
+        if (x.role !== 'plan' || x.id !== msgId || x.plan.kind !== 'hire') return x;
+        const budget = x.plan.lines[0]?.amount ?? 0;
+        return {
+          ...x,
+          plan: {
+            ...x.plan,
+            serviceId: svc.id,
+            serviceName: svc.name,
+            summary: `Hire ${svc.name} (budget $${budget.toFixed(2)})`,
+            lines: [{ ...x.plan.lines[0], payee: svc.name }],
+          },
+        };
+      }),
+    );
+  }
+
   async function approve(id: number, plan: Plan) {
     setPlanStatus(id, 'approved');
     if (plan.kind === 'hire' && plan.serviceId) {
       try {
         const policyId = plan.bind.policyId;
-        await hire.mutateAsync({
+        const task = await hire.mutateAsync({
           title: `Hire ${plan.serviceName}`,
           serviceId: plan.serviceId,
           budget: plan.lines[0].amount,
           policyId,
           input: plan.attachments?.length ? { attachments: plan.attachments } : undefined,
         });
-        push({
-          id: nextId(),
-          role: 'agent',
-          ok: true,
-          text: `Hired ${plan.serviceName}${policyId ? ' under your limit' : ''}. The job is running; watch it in Activity.`,
-        });
+        // Drop a LIVE job card into the chat: it polls the task and shows progress,
+        // any question it needs answered, and the result/download inline.
+        push({ id: nextId(), role: 'job', taskId: task.id, title: plan.serviceName ?? 'Service' });
       } catch {
         push({
           id: nextId(),
@@ -812,6 +847,8 @@ export function CommandChat() {
                 msg={m}
                 onApprove={approve}
                 onCancel={(id) => setPlanStatus(id, 'cancelled')}
+                services={services}
+                onPickService={pickService}
               />
             ))}
           </div>
@@ -1122,14 +1159,158 @@ export function CommandChat() {
   );
 }
 
+const resolveArtifact = (url: string) => (/^https?:\/\//.test(url) ? url : `${config.apiUrl}${url}`);
+
+/** A compact answer box for a step the service parked as needs-input (in chat). */
+function InlineAnswer({ taskId, step }: { taskId: string; step: TaskStepView }) {
+  const qc = useQueryClient();
+  const [val, setVal] = useState('');
+  const send = useMutation({
+    mutationFn: () => {
+      const schema = step.inputRequest?.schema as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      const key = schema?.properties ? Object.keys(schema.properties)[0] : undefined;
+      return answerStep(taskId, step.id ?? '', key ? { [key]: val } : { answer: val });
+    },
+    onSuccess: () => {
+      setVal('');
+      qc.invalidateQueries({ queryKey: ['task', taskId] });
+    },
+  });
+  return (
+    <div className="mt-2 rounded-lg border border-violet-500/30 bg-violet-500/[0.06] p-2">
+      <div className="text-[11px] text-violet-200">
+        {step.inputRequest?.prompt ?? 'The service needs more input'}
+      </div>
+      <div className="mt-1.5 flex gap-1.5">
+        <input
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && val.trim() && send.mutate()}
+          className="min-w-0 flex-1 rounded-lg bg-black/30 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/40"
+          placeholder="Your answer…"
+        />
+        <button
+          onClick={() => send.mutate()}
+          disabled={send.isPending || !val.trim()}
+          className="shrink-0 rounded-lg bg-violet-600 px-2.5 py-1.5 text-xs text-white hover:bg-violet-500 disabled:opacity-50"
+        >
+          {send.isPending ? '…' : 'Send'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A live job card in the chat: polls the task and shows each stage visibly — a
+ * spinner while running, a progress bar, the question if it needs input, and the
+ * delivered output + a download for any result file. No more silent "watch it
+ * in Activity".
+ */
+function JobCard({ taskId, title }: { taskId: string; title: string }) {
+  const { data: task } = useQuery({
+    queryKey: ['task', taskId],
+    queryFn: () => getTask(taskId),
+    refetchInterval: (q) => {
+      const t = q.state.data;
+      return t && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(t.status) ? 3000 : false;
+    },
+  });
+  const status = task?.status ?? 'RUNNING';
+  const inputStep = task?.steps.find((s) => s.status === 'INPUT_REQUIRED');
+  const failed = status === 'FAILED';
+  const done = status === 'COMPLETED';
+  const awaiting = !!task?.awaitingApproval;
+  const running = !done && !failed && !inputStep && !awaiting;
+  const progress = task?.steps.find((s) => s.status === 'RUNNING' && s.progress)?.progress;
+  const results = task?.steps.filter((s) => s.output || s.artifact) ?? [];
+  const label = failed
+    ? 'Failed'
+    : done
+      ? 'Delivered'
+      : awaiting
+        ? 'Awaiting your approval'
+        : inputStep
+          ? 'Needs your input'
+          : 'Running';
+  return (
+    <div className="flex justify-start">
+      <div className="w-full max-w-[92%] rounded-2xl rounded-tl-sm border border-white/10 bg-surface-2 p-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-white">
+          {running && <Loader2 size={14} className="animate-spin text-sky-300" />}
+          {done && <CheckCircle2 size={14} className="text-emerald-300" />}
+          {failed && <AlertTriangle size={14} className="text-red-400" />}
+          <span className="truncate">{title}</span>
+          <span
+            className={`ml-auto shrink-0 text-[11px] ${done ? 'text-emerald-300' : failed ? 'text-red-400' : inputStep ? 'text-violet-300' : 'text-sky-300'}`}
+          >
+            {label}
+          </span>
+        </div>
+        {progress && (
+          <div className="mt-2">
+            {typeof progress.pct === 'number' && (
+              <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
+                <div
+                  className="h-full rounded-full bg-sky-400/70 transition-all"
+                  style={{ width: `${Math.max(0, Math.min(100, progress.pct))}%` }}
+                />
+              </div>
+            )}
+            {progress.message && <div className="mt-1 text-[11px] text-sky-300">{progress.message}</div>}
+          </div>
+        )}
+        {inputStep && <InlineAnswer taskId={taskId} step={inputStep} />}
+        {failed && (
+          <p className="mt-1 text-[11px] text-red-400">
+            {task?.steps.find((s) => s.error)?.error ?? 'The job failed.'}
+          </p>
+        )}
+        {results.map((s) => (
+          <div key={s.index} className="mt-2 space-y-1">
+            {s.artifact && (
+              <a
+                href={resolveArtifact(s.artifact.url)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.06] px-2.5 py-1 text-[11px] text-violet-300 hover:bg-white/10"
+              >
+                <Download size={12} /> Download result · {s.artifact.contentType}
+                {s.artifact.size ? ` · ${(s.artifact.size / 1024).toFixed(0)} KB` : ''}
+              </a>
+            )}
+            {s.output && (
+              <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg bg-black/30 p-2 text-[11px] text-slate-400">
+                {s.output}
+              </pre>
+            )}
+          </div>
+        ))}
+        <Link
+          to={`/app/tasks/${taskId}`}
+          className="mt-2 inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-300"
+        >
+          View details <ExternalLink size={10} />
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 function ChatBubble({
   msg,
   onApprove,
   onCancel,
+  services,
+  onPickService,
 }: {
   msg: Msg;
   onApprove: (id: number, plan: Plan) => void;
   onCancel: (id: number) => void;
+  services: { id: string; name: string; pricePerCall: number }[];
+  onPickService: (msgId: number, serviceId: string) => void;
 }) {
   if (msg.role === 'user') {
     return (
@@ -1149,6 +1330,9 @@ function ChatBubble({
       </div>
     );
   }
+  if (msg.role === 'job') {
+    return <JobCard taskId={msg.taskId} title={msg.title} />;
+  }
   // plan
   const { plan } = msg;
   const total = plan.lines.reduce((s, l) => s + l.amount, 0);
@@ -1158,6 +1342,22 @@ function ChatBubble({
         <div className="flex items-center gap-2 text-sm font-medium text-white">
           <ShieldCheck size={15} className="text-violet-300" /> Proposed plan: {plan.summary}
         </div>
+        {plan.kind === 'hire' && msg.status === 'pending' && services.length > 0 && (
+          <label className="mt-2 block">
+            <span className="text-[11px] text-slate-500">Service (change if the agent picked wrong)</span>
+            <select
+              value={plan.serviceId ?? ''}
+              onChange={(e) => onPickService(msg.id, e.target.value)}
+              className="mt-0.5 w-full rounded-lg bg-black/30 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/40"
+            >
+              {services.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} (${s.pricePerCall}/call)
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <div className="mt-2 space-y-1">
           {plan.lines.map((l, i) => (
             <div
