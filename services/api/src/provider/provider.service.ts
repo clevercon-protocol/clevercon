@@ -388,22 +388,25 @@ export class ProviderService {
 
   /**
    * Earnings + recent incoming jobs for the current provider. Earnings are the
-   * confirmed payments sent to any of the provider's service addresses.
+   * confirmed payments for REAL hires of this provider's services, attributed via
+   * the payment's step (payment -> step -> service), NOT by the payout address: the
+   * payout wallet may be the provider's own wallet that also received unrelated
+   * payments, which must never be counted as service earnings.
    */
   async earnings(userId: string) {
     const services = await this.prisma.service.findMany({
       where: { providerId: userId },
       include: { reputation: true },
     });
-    const addresses = services.map((s) => s.stellarAddress);
-    const byAddress = new Map(services.map((s) => [s.stellarAddress, s.name]));
-
-    if (addresses.length === 0) {
+    if (services.length === 0) {
       return { totalEarned: 0, thisWeek: 0, jobs: 0, rating: 0, recent: [] };
     }
+    const ids = services.map((s) => s.id);
+    const nameById = new Map(services.map((s) => [s.id, s.name]));
 
     const payments = await this.prisma.payment.findMany({
-      where: { toAddress: { in: addresses } },
+      where: { step: { serviceId: { in: ids } } },
+      include: { step: { select: { serviceId: true } } },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -430,7 +433,7 @@ export class ProviderService {
       rating: Math.round(rating * 10) / 10,
       recent: payments.slice(0, 10).map((p) => ({
         id: p.id,
-        service: byAddress.get(p.toAddress) ?? p.toAddress,
+        service: nameById.get(p.step?.serviceId ?? '') ?? 'service',
         from: p.fromAddress,
         amount: Number(p.amount),
         status: p.status,
@@ -449,16 +452,20 @@ export class ProviderService {
   async payouts(userId: string, limit = 500) {
     const services = await this.prisma.service.findMany({
       where: { providerId: userId },
-      select: { stellarAddress: true, name: true },
+      select: { id: true, name: true },
     });
-    const addresses = services.map((s) => s.stellarAddress);
-    const byAddress = new Map(services.map((s) => [s.stellarAddress, s.name]));
-    if (addresses.length === 0) {
+    if (services.length === 0) {
       return { items: [], settledTotal: 0, pendingTotal: 0, count: 0 };
     }
+    const ids = services.map((s) => s.id);
+    const nameById = new Map(services.map((s) => [s.id, s.name]));
 
+    // Attributed by the payment's step (a real hire of this provider's service), NOT
+    // by the payout wallet, so an unrelated payment to a shared payout address never
+    // appears here.
     const payments = await this.prisma.payment.findMany({
-      where: { toAddress: { in: addresses } },
+      where: { step: { serviceId: { in: ids } } },
+      include: { step: { select: { serviceId: true } } },
       orderBy: { createdAt: 'desc' },
       take: Math.min(limit, 1000),
     });
@@ -473,7 +480,7 @@ export class ProviderService {
     return {
       items: payments.map((p) => ({
         id: p.id,
-        service: byAddress.get(p.toAddress) ?? p.toAddress,
+        service: nameById.get(p.step?.serviceId ?? '') ?? 'service',
         toAddress: p.toAddress,
         from: p.fromAddress,
         amount: Number(p.amount),
