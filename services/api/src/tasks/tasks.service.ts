@@ -586,8 +586,8 @@ export class TasksService {
       budget: Number(t.budget),
       spent,
       asset: t.asset,
-      // The rule bounding this task, so the client can prove it (private) or spend
-      // under the Managed Session (public) when settling a delivered hire itself.
+      // The rule bounding this task (metadata; the client settles a delivered hire
+      // under the lane it already picked at hire time, not by re-deriving from here).
       policyId: t.policyId,
       stepCount: t.steps.length,
       completedSteps: t.steps.filter((s) => s.status === StepStatus.RELEASED).length,

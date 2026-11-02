@@ -108,8 +108,8 @@ export interface Receipt {
 
 export interface TaskDetail extends Task {
   description: string | null;
-  // The rule bounding this task, so the client knows how to settle a delivered hire
-  // (prove it when private, or spend under the Managed Session when public).
+  // The rule bounding this task (metadata only; the job card settles under the lane
+  // the buyer already picked at hire time).
   policyId?: string | null;
   steps: TaskStepView[];
   receipts: Receipt[];

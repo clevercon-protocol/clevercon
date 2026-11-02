@@ -129,7 +129,16 @@ type Msg =
   | { id: number; role: 'plan'; plan: Plan; status: 'pending' | 'approved' | 'cancelled' }
   | { id: number; role: 'agent'; text: string; ok?: boolean }
   // A live job: polls the task and shows status, progress, needs-input, and output.
-  | { id: number; role: 'job'; taskId: string; title: string };
+  // Carries the rule lane + id the chat already knows, so the card settles the hire
+  // under the SAME rule the buyer picked (authoritative; never a wrong-lane guess).
+  | {
+      id: number;
+      role: 'job';
+      taskId: string;
+      title: string;
+      policyId?: string;
+      lane?: 'private' | 'public';
+    };
 
 const short = (a: string) => (a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
 
@@ -806,7 +815,15 @@ export function CommandChat() {
         });
         // Drop a LIVE job card into the chat: it polls the task and shows progress,
         // any question it needs answered, and the result/download inline.
-        push({ id: nextId(), role: 'job', taskId: task.id, title: plan.serviceName ?? 'Service' });
+        push({
+          id: nextId(),
+          role: 'job',
+          taskId: task.id,
+          title: plan.serviceName ?? 'Service',
+          // Settle under the exact rule the buyer picked for this hire.
+          policyId: plan.bind.policyId,
+          lane: plan.lane,
+        });
       } catch (e) {
         push({
           id: nextId(),
@@ -832,92 +849,37 @@ export function CommandChat() {
       return;
     }
 
-    // PUBLIC lane: spend hands-off under the Managed Session (the server signs within
-    // its on-chain scope; no proof, no wallet prompt, instant).
-    if (plan.lane === 'public') {
-      try {
-        push({ id: nextId(), role: 'agent', text: 'Spending under your Managed Session…' });
-        for (const l of plan.lines) {
-          await managedSessionPay(l.payee, l.amount);
-        }
-        qc.invalidateQueries({ queryKey: ['tasks'] });
-        qc.invalidateQueries({ queryKey: ['vault'] });
-        qc.invalidateQueries({ queryKey: ['managed-session'] });
-        push({
-          id: nextId(),
-          role: 'agent',
-          ok: true,
-          text: `Sent $${planTotal.toFixed(2)} across ${plan.lines.length} payment${plan.lines.length > 1 ? 's' : ''} under your Managed Session. Watch it settle in Activity.`,
-        });
-      } catch (e) {
-        push({
-          id: nextId(),
-          role: 'agent',
-          ok: false,
-          text: e instanceof Error ? e.message : 'Could not send under the Managed Session.',
-        });
-      }
-      return;
-    }
-
-    // PRIVATE lane: KEYLESS, client-proven release under your pinned rule. The rule
-    // never leaves this device; the proof + the pinned commitment + a fresh nullifier
-    // authorize it on-chain, a fee-payer relayer only submits. One wallet signature,
-    // up front, pinned the rule; nothing signs per payment.
+    // Settle under the selected rule - the SAME path a job uses to pay a provider
+    // (see settleUnderRule): private proves your pinned rule and releases keyless,
+    // public spends under the Managed Session. Only the surrounding chat messages
+    // differ here.
     try {
-      const p = plan.bind.policyId ? policies.find((x) => x.id === plan.bind.policyId) : undefined;
-      if (!p) {
-        push({
-          id: nextId(),
-          role: 'agent',
-          ok: false,
-          text: 'No private rule selected. Pick one above (or create one on the Rules tab).',
-        });
-        return;
-      }
-      const pinned = await resolvePinnedBundle(p);
-      if (!pinned) {
-        push({
-          id: nextId(),
-          role: 'agent',
-          ok: false,
-          text: 'That rule was created on another device and has no backup, so it cannot be proven here. Re-create it on this device, or pick another.',
-        });
-        return;
-      }
-      // If a global-private rule is set, the vault requires a SECOND proof against it.
-      const globals = await getGlobals();
-      let globalBundle: Awaited<ReturnType<typeof resolveGlobalPrivateBundle>> = null;
-      if (globals.privateCommitment) {
-        globalBundle = await resolveGlobalPrivateBundle(policies, globals.privateCommitment);
-        if (!globalBundle) {
-          push({
-            id: nextId(),
-            role: 'agent',
-            ok: false,
-            text: 'Your global rule was created on another device and cannot be proven here. Re-create it on this device, or clear the global on the Rules tab.',
-          });
-          return;
-        }
-      }
       push({
         id: nextId(),
         role: 'agent',
-        text: 'Proving your plan in the browser with zero-knowledge (a few seconds)…',
+        text:
+          plan.lane === 'public'
+            ? 'Spending under your Managed Session…'
+            : 'Proving your plan in the browser with zero-knowledge (a few seconds)…',
       });
-      const result = await proveAndReleaseBatch({
-        bundle: pinned,
-        globalBundle,
+      const result = await settleUnderRule({
+        lane: plan.lane,
+        policyId: plan.bind.policyId,
         recipients: plan.lines.map((l) => ({ payee: l.payee, amount: l.amount })),
+        policies,
       });
       qc.invalidateQueries({ queryKey: ['tasks'] });
       qc.invalidateQueries({ queryKey: ['vault'] });
       qc.invalidateQueries({ queryKey: ['activity'] });
+      if (plan.lane === 'public') qc.invalidateQueries({ queryKey: ['managed-session'] });
       push({
         id: nextId(),
         role: 'agent',
         ok: true,
-        text: `Proved and sent $${result.total.toFixed(2)} across ${result.legs} payment${result.legs > 1 ? 's' : ''} in ${result.batches} on-chain proof${result.batches > 1 ? 's' : ''}, with your rule kept private. The chain verified each proof before releasing; watch it settle in Activity.`,
+        text:
+          plan.lane === 'public'
+            ? `Sent $${result.total.toFixed(2)} across ${result.legs} payment${result.legs > 1 ? 's' : ''} under your Managed Session. Watch it settle in Activity.`
+            : `Proved and sent $${result.total.toFixed(2)} across ${result.legs} payment${result.legs > 1 ? 's' : ''}, with your rule kept private. The chain verified each proof before releasing; watch it settle in Activity.`,
       });
     } catch (e) {
       push({
@@ -1327,17 +1289,77 @@ function InlineAnswer({ taskId, step }: { taskId: string; step: TaskStepView }) 
  * delivered output + a download for any result file. No more silent "watch it
  * in Activity".
  */
-// A step that has been delivered + accepted (RELEASED) but not yet paid: the client
-// settles it under the task's own rule (keyless proof for private, Managed Session
-// for public). A hire pays the provider ONLY after delivery, through the same path
-// a disburse uses, so no delegate/relayer is ever needed for a private rule.
+/**
+ * The ONE money path, shared by a manual pay/disburse and a job's provider payment:
+ * settle a set of recipients under the rule the buyer picked. Private proves the
+ * pinned rule in the browser and releases KEYLESS (no delegate); public spends under
+ * the Managed Session. A job passes `hireTaskId` + a `stepId` per recipient so the
+ * server links the provider's earnings to the step. Throws a human-readable error on
+ * any precondition (no rule, rule not provable on this device, no session).
+ */
+async function settleUnderRule(opts: {
+  lane: 'private' | 'public';
+  policyId?: string;
+  recipients: { payee: string; amount: number; stepId?: string }[];
+  policies: Policy[];
+  hireTaskId?: string;
+}): Promise<{ total: number; legs: number }> {
+  const { lane, policyId, recipients, policies, hireTaskId } = opts;
+  const total = recipients.reduce((s, r) => s + r.amount, 0);
+  if (lane === 'public') {
+    for (const r of recipients) {
+      await managedSessionPay(
+        r.payee,
+        r.amount,
+        undefined,
+        hireTaskId && r.stepId ? { taskId: hireTaskId, stepId: r.stepId } : undefined,
+      );
+    }
+    return { total, legs: recipients.length };
+  }
+  const p = policyId ? policies.find((x) => x.id === policyId) : undefined;
+  if (!p) throw new Error('No private rule selected. Pick one (or create one on the Rules tab).');
+  const pinned = await resolvePinnedBundle(p);
+  if (!pinned) {
+    throw new Error(
+      'That rule was created on another device and has no backup, so it cannot be proven here. Re-create it on this device, or pick another.',
+    );
+  }
+  // If a global-private rule is set, the vault requires a SECOND proof against it.
+  const globals = await getGlobals();
+  let globalBundle: Awaited<ReturnType<typeof resolveGlobalPrivateBundle>> = null;
+  if (globals.privateCommitment) {
+    globalBundle = await resolveGlobalPrivateBundle(policies, globals.privateCommitment);
+    if (!globalBundle) {
+      throw new Error(
+        'Your global rule was created on another device and cannot be proven here. Re-create it on this device, or clear the global on the Rules tab.',
+      );
+    }
+  }
+  const result = await proveAndReleaseBatch({ bundle: pinned, globalBundle, recipients, hireTaskId });
+  return { total: result.total, legs: result.legs };
+}
+
+// A step that has been delivered + accepted (RELEASED) but not yet paid: the job card
+// settles it with settleUnderRule under the rule the buyer picked at hire time, so a
+// hire pays the provider ONLY after delivery, through the SAME path a disburse uses.
 function unpaidReleased(task: TaskDetail | undefined) {
   return (task?.steps ?? []).filter(
     (s) => s.status === 'RELEASED' && !s.paid && !!s.payee,
   );
 }
 
-function JobCard({ taskId, title }: { taskId: string; title: string }) {
+function JobCard({
+  taskId,
+  title,
+  policyId: propPolicyId,
+  lane: propLane,
+}: {
+  taskId: string;
+  title: string;
+  policyId?: string;
+  lane?: 'private' | 'public';
+}) {
   const qc = useQueryClient();
   const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
   const { data: task } = useQuery({
@@ -1365,40 +1387,21 @@ function JobCard({ taskId, title }: { taskId: string; title: string }) {
     busyRef.current = true;
     setSettle({ phase: 'paying' });
     try {
-      const policy = task.policyId ? policies.find((p) => p.id === task.policyId) : undefined;
-      const isPrivate = policy ? policy.form === 'private' || (!policy.form && policy.isPrivate) : false;
-      const recipients = unpaid.map((s) => ({
-        payee: s.payee as string,
-        amount: s.estimatedCost,
-        stepId: s.id,
-      }));
-      if (isPrivate && policy) {
-        // Private: prove the pinned rule in the browser and release keyless. Many
-        // providers (compose) settle in one batched proof. No delegate.
-        const pinned = await resolvePinnedBundle(policy);
-        if (!pinned) {
-          throw new Error(
-            "This task's private rule has no backup on this device, so it can't be proven here. Open the chat on the device that created the rule.",
-          );
-        }
-        const globals = await getGlobals();
-        let globalBundle: Awaited<ReturnType<typeof resolveGlobalPrivateBundle>> = null;
-        if (globals.privateCommitment) {
-          globalBundle = await resolveGlobalPrivateBundle(policies, globals.privateCommitment);
-          if (!globalBundle) {
-            throw new Error("Your global rule can't be proven on this device.");
-          }
-        }
-        await proveAndReleaseBatch({ bundle: pinned, globalBundle, recipients, hireTaskId: taskId });
-      } else {
-        // Public (or no private rule pinned): pay each provider under the Managed Session.
-        for (const s of unpaid) {
-          await managedSessionPay(s.payee as string, s.estimatedCost, undefined, {
-            taskId,
-            stepId: s.id as string,
-          });
-        }
-      }
+      // Pay the hired provider(s) with the SAME settlement path a manual disburse
+      // uses, under the lane the buyer picked for THIS hire. The recipient is just
+      // the service's wallet; private proves + releases keyless, public uses the
+      // session. No re-deriving the lane from anywhere.
+      await settleUnderRule({
+        lane: propLane ?? 'private',
+        policyId: propPolicyId ?? task.policyId ?? undefined,
+        recipients: unpaid.map((s) => ({
+          payee: s.payee as string,
+          amount: s.estimatedCost,
+          stepId: s.id,
+        })),
+        policies,
+        hireTaskId: taskId,
+      });
       await qc.invalidateQueries({ queryKey: ['task', taskId] });
       qc.invalidateQueries({ queryKey: ['vault'] });
       qc.invalidateQueries({ queryKey: ['activity'] });
@@ -1413,7 +1416,7 @@ function JobCard({ taskId, title }: { taskId: string; title: string }) {
   useEffect(() => {
     if (settle.phase === 'idle' && unpaid.length > 0 && !busyRef.current) void paySteps();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unpaid.length, settle.phase, task?.policyId, policies.length]);
+  }, [unpaid.length, settle.phase, propLane, propPolicyId, policies.length]);
 
   const paidTotal = (task?.steps ?? [])
     .filter((s) => s.paid)
@@ -1552,7 +1555,9 @@ function ChatBubble({
     );
   }
   if (msg.role === 'job') {
-    return <JobCard taskId={msg.taskId} title={msg.title} />;
+    return (
+      <JobCard taskId={msg.taskId} title={msg.title} policyId={msg.policyId} lane={msg.lane} />
+    );
   }
   // plan
   const { plan } = msg;
