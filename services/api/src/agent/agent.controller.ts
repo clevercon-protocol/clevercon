@@ -14,6 +14,9 @@ const planSchema = z.object({
   // A service the user explicitly chose in the composer: forces a hire of it and
   // extracts its input params from the instruction.
   serviceId: z.string().optional(),
+  // The user's allow-list of services (the agent picks the best of these for the
+  // task). One = force it; several = constrain the choice.
+  serviceIds: z.array(z.string().min(1)).max(20).optional(),
 });
 
 /**
@@ -28,7 +31,7 @@ export class AgentController {
 
   @Post('plan')
   plan(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    const { instruction, hasAttachment, serviceId } = parseBody(planSchema, body);
-    return this.agent.plan(user.userId, instruction, { hasAttachment, serviceId });
+    const { instruction, hasAttachment, serviceId, serviceIds } = parseBody(planSchema, body);
+    return this.agent.plan(user.userId, instruction, { hasAttachment, serviceId, serviceIds });
   }
 }

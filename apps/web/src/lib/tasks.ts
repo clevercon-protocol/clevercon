@@ -205,7 +205,7 @@ export interface AgentPlanResult {
 export async function planInstruction(
   instruction: string,
   hasAttachment = false,
-  serviceId?: string,
+  serviceIds?: string[],
 ): Promise<AgentPlanResult> {
   if (isDemo()) {
     return {
@@ -221,7 +221,7 @@ export async function planInstruction(
   return apiPost<AgentPlanResult>('/agent/plan', {
     instruction,
     hasAttachment,
-    ...(serviceId ? { serviceId } : {}),
+    ...(serviceIds?.length ? { serviceIds } : {}),
   });
 }
 

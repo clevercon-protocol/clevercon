@@ -320,9 +320,11 @@ export function CommandChat() {
 
   // Natural-language box: the agent parses it into a plan you then approve.
   const [nl, setNl] = useState('');
-  // Optional: scope the prompt to a specific service (forces a hire of it + param
-  // extraction). Blank = let the agent choose. Mirrors the rule picker.
-  const [useServiceId, setUseServiceId] = useState('');
+  // Optional allow-list: the services the agent MAY use for this prompt. Empty = any.
+  // One = forced; several = the agent picks the best of them. Mirrors the rule picker.
+  const [allowedServiceIds, setAllowedServiceIds] = useState<string[]>([]);
+  const toggleAllowed = (id: string) =>
+    setAllowedServiceIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
 
   const { data: servicePage } = useQuery({
     queryKey: ['services', { picker: true }],
@@ -423,8 +425,8 @@ export function CommandChat() {
   }
 
   const planMut = useMutation({
-    mutationFn: (vars: { instruction: string; hasAttachment: boolean; serviceId?: string }) =>
-      planInstruction(vars.instruction, vars.hasAttachment, vars.serviceId),
+    mutationFn: (vars: { instruction: string; hasAttachment: boolean; serviceIds?: string[] }) =>
+      planInstruction(vars.instruction, vars.hasAttachment, vars.serviceIds),
   });
 
   // A clear reason the current lane can't act, or null when it's ready. Nothing (not
@@ -457,7 +459,7 @@ export function CommandChat() {
       result = await planMut.mutateAsync({
         instruction,
         hasAttachment: !!file,
-        serviceId: useServiceId || undefined,
+        serviceIds: allowedServiceIds.length ? allowedServiceIds : undefined,
       });
     } catch (e) {
       push({
@@ -936,22 +938,48 @@ export function CommandChat() {
                 publicGlobalActive={!!globals?.publicRuleId}
               />
               {services.length > 0 && (
-                <label className="flex items-center gap-2 text-[11px] text-slate-400">
-                  <SlidersHorizontal size={12} className="shrink-0 text-violet-300" />
-                  <span className="shrink-0">Use service (optional)</span>
-                  <select
-                    value={useServiceId}
-                    onChange={(e) => setUseServiceId(e.target.value)}
-                    className="min-w-0 flex-1 rounded-lg bg-black/30 px-2 py-1 text-xs text-slate-200 outline-none focus:border-violet-500/40"
-                  >
-                    <option value="">Let the agent choose</option>
-                    {services.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <div>
+                  <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                    <SlidersHorizontal size={12} className="shrink-0 text-violet-300" />
+                    <span>Allowed services (optional)</span>
+                    <span className="text-slate-600">
+                      {allowedServiceIds.length === 0
+                        ? '· the agent may use any'
+                        : allowedServiceIds.length === 1
+                          ? '· the agent will use this one'
+                          : `· the agent picks the best of ${allowedServiceIds.length}`}
+                    </span>
+                    {allowedServiceIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setAllowedServiceIds([])}
+                        className="ml-auto text-slate-500 hover:text-slate-300"
+                      >
+                        clear
+                      </button>
+                    )}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {services.map((s) => {
+                      const on = allowedServiceIds.includes(s.id);
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => toggleAllowed(s.id)}
+                          className={`rounded-lg border px-2 py-0.5 text-[11px] transition-colors ${
+                            on
+                              ? 'border-violet-500/50 bg-violet-500/15 text-violet-200'
+                              : 'border-white/10 bg-white/[0.03] text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          {on && <Check size={10} className="mr-1 inline" />}
+                          {s.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] leading-relaxed text-slate-500">

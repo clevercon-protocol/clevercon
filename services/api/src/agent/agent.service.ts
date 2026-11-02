@@ -89,8 +89,15 @@ const TOOL_DESC = 'Return the structured spending plan for the user to review.';
 
 type Provider = 'anthropic' | 'openai' | 'none';
 
-/** A service the user explicitly chose in the composer (forces a hire of it). */
-type ForcedService = { id: string; name: string; pricePerCall: unknown; inputSchema: unknown };
+/** A service the user allowed in the composer. One = force it; several = the agent
+ *  must pick the best of these for the task (an allow-list boundary). */
+type PlanService = {
+  id: string;
+  name: string;
+  pricePerCall: unknown;
+  inputSchema: unknown;
+  description?: string;
+};
 
 interface RawPlan {
   kind: AgentPlan['kind'];
@@ -136,7 +143,7 @@ export class AgentService {
   async plan(
     userId: string,
     instruction: string,
-    opts: { hasAttachment?: boolean; serviceId?: string } = {},
+    opts: { hasAttachment?: boolean; serviceId?: string; serviceIds?: string[] } = {},
   ): Promise<AgentPlan> {
     const hasAttachment = !!opts.hasAttachment;
     const text = (instruction ?? '').trim();
@@ -152,25 +159,30 @@ export class AgentService {
       };
     }
 
-    // A user-chosen service forces a hire of exactly that service, with its input
-    // parameters extracted from the instruction against the service's input schema.
-    const forced: ForcedService | null = opts.serviceId
-      ? await this.prisma.service.findFirst({
-          where: { id: opts.serviceId, status: 'ACTIVE' },
-          select: { id: true, name: true, pricePerCall: true, inputSchema: true },
+    // The user's allow-list: one service forces a hire of it; several constrain the
+    // agent to pick the best of them for the task. Params are extracted against the
+    // chosen service's input schema.
+    const ids = (opts.serviceIds?.length ? opts.serviceIds : opts.serviceId ? [opts.serviceId] : [])
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 20);
+    const allowed: PlanService[] = ids.length
+      ? await this.prisma.service.findMany({
+          where: { id: { in: ids }, status: 'ACTIVE' },
+          select: { id: true, name: true, pricePerCall: true, inputSchema: true, description: true },
         })
-      : null;
+      : [];
 
     const provider = this.provider();
     const raw =
       provider === 'none'
         ? fallbackParse(text)
-        : await this.parseWithLlm(userId, text, provider, hasAttachment, forced);
+        : await this.parseWithLlm(userId, text, provider, hasAttachment, allowed);
     const available = await this.vault
       .getForUser(userId)
       .then((v) => v.available)
       .catch(() => 0);
-    return this.validate(raw.plan, raw.source, available, hasAttachment, forced);
+    return this.validate(raw.plan, raw.source, available, hasAttachment, allowed);
   }
 
   private async parseWithLlm(
@@ -178,10 +190,10 @@ export class AgentService {
     instruction: string,
     provider: Provider,
     hasAttachment: boolean,
-    forced: ForcedService | null,
+    allowed: PlanService[],
   ): Promise<{ plan: RawPlan; source: AgentPlan['source'] }> {
     try {
-      const context = await this.buildContext(userId, hasAttachment, forced);
+      const context = await this.buildContext(userId, hasAttachment, allowed);
       const input =
         provider === 'anthropic'
           ? await this.callAnthropic(instruction, context)
@@ -269,7 +281,7 @@ export class AgentService {
   private async buildContext(
     userId: string,
     hasAttachment = false,
-    forced: ForcedService | null = null,
+    allowed: PlanService[] = [],
   ): Promise<string> {
     // The planner is deliberately NOT told about the user's rules. It only needs
     // the available budget (for realism) and the hireable services. The human
@@ -298,11 +310,23 @@ export class AgentService {
         'The user attached a file. If the task needs it, prefer a service marked [accepts a file]; if none fits, still plan the best service and note the file may be unused.',
       );
     }
-    if (forced) {
+    if (allowed.length === 1) {
       parts.push(
-        `The user CHOSE the service "${forced.name}". Set kind="hire" and extract its input ` +
-          `parameters from the instruction into serviceParams, matching this input schema:\n` +
-          JSON.stringify(forced.inputSchema ?? {}),
+        `The user CHOSE the service "${allowed[0].name}". Set kind="hire", put "${allowed[0].name}" ` +
+          `in serviceQuery, and extract its input parameters into serviceParams, matching this ` +
+          `input schema:\n${JSON.stringify(allowed[0].inputSchema ?? {})}`,
+      );
+    } else if (allowed.length > 1) {
+      const list = allowed
+        .map(
+          (a) =>
+            `- ${a.name}${a.description ? `: ${a.description}` : ''}\n  input schema: ${JSON.stringify(a.inputSchema ?? {})}`,
+        )
+        .join('\n');
+      parts.push(
+        `The user restricted you to ONLY these services (an allow-list). Set kind="hire", pick the ` +
+          `single best one for the instruction, put its exact name in serviceQuery, and extract its ` +
+          `input parameters into serviceParams matching THAT service's schema:\n${list}`,
       );
     }
     return parts.join('\n\n');
@@ -314,7 +338,7 @@ export class AgentService {
     source: AgentPlan['source'],
     available: number,
     hasAttachment = false,
-    forced: ForcedService | null = null,
+    allowed: PlanService[] = [],
   ): Promise<AgentPlan> {
     const warnings: string[] = [];
     const lines = (raw.lines ?? [])
@@ -334,7 +358,7 @@ export class AgentService {
         return true;
       });
 
-    if (!forced && (raw.kind === 'pay' || raw.kind === 'disburse')) {
+    if (!allowed.length && (raw.kind === 'pay' || raw.kind === 'disburse')) {
       if (lines.length === 0) {
         return this.none(
           source,
@@ -361,12 +385,24 @@ export class AgentService {
       };
     }
 
-    if (raw.kind === 'hire' || forced) {
-      // A user-chosen service wins outright; otherwise find the best match for the
-      // query (any significant word against name/description/category).
-      let svc: { id: string; name: string; pricePerCall: unknown } | null = forced
-        ? { id: forced.id, name: forced.name, pricePerCall: forced.pricePerCall }
-        : null;
+    if (raw.kind === 'hire' || allowed.length) {
+      // The allow-list wins: one service forces it; several -> pick the one the model
+      // chose (by name in serviceQuery), else the best word overlap, else the first.
+      let svc: { id: string; name: string; pricePerCall: unknown } | null = null;
+      if (allowed.length === 1) {
+        svc = { id: allowed[0].id, name: allowed[0].name, pricePerCall: allowed[0].pricePerCall };
+      } else if (allowed.length > 1) {
+        const q = (raw.serviceQuery ?? '').trim().toLowerCase();
+        const pick =
+          allowed.find(
+            (a) => q && (a.name.toLowerCase().includes(q) || q.includes(a.name.toLowerCase())),
+          ) ??
+          allowed.find((a) =>
+            q.split(/\s+/).some((w) => w.length > 2 && a.name.toLowerCase().includes(w)),
+          ) ??
+          allowed[0];
+        svc = { id: pick.id, name: pick.name, pricePerCall: pick.pricePerCall };
+      }
       if (!svc) {
         const q = (raw.serviceQuery ?? '').trim();
         const words = q.split(/\s+/).filter((w) => w.length > 2);
