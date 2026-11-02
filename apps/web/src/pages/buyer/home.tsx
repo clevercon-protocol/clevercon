@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   Vault as VaultIcon,
   Sparkles,
@@ -257,6 +257,108 @@ function RuleLanePicker({
   );
 }
 
+/**
+ * Search-driven allow-list of services for the agent (scales to a large directory:
+ * it never lists everything, searches on demand, and keeps only the selected set).
+ */
+function AllowedServicesPicker({
+  value,
+  onChange,
+}: {
+  value: { id: string; name: string }[];
+  onChange: (v: { id: string; name: string }[]) => void;
+}) {
+  const [q, setQ] = useState('');
+  const [debounced, setDebounced] = useState('');
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(q.trim()), 250);
+    return () => clearTimeout(t);
+  }, [q]);
+  const { data } = useQuery({
+    queryKey: ['svc-search', debounced],
+    queryFn: () => getServices({ q: debounced, limit: 8 }),
+    enabled: open,
+    placeholderData: keepPreviousData,
+  });
+  const results = (data?.items ?? []).filter((r) => !value.some((v) => v.id === r.id)).slice(0, 8);
+  const label =
+    value.length === 0
+      ? '· the agent may use any'
+      : value.length === 1
+        ? '· the agent will use this one'
+        : `· the agent picks the best of ${value.length}`;
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+        <SlidersHorizontal size={12} className="shrink-0 text-violet-300" />
+        <span>Allowed services (optional)</span>
+        <span className="text-slate-600">{label}</span>
+        {value.length > 0 && (
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className="ml-auto text-slate-500 hover:text-slate-300"
+          >
+            clear
+          </button>
+        )}
+      </div>
+      {value.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {value.map((s) => (
+            <span
+              key={s.id}
+              className="inline-flex items-center gap-1 rounded-lg border border-violet-500/50 bg-violet-500/15 px-2 py-0.5 text-[11px] text-violet-200"
+            >
+              {s.name}
+              <button
+                type="button"
+                onClick={() => onChange(value.filter((v) => v.id !== s.id))}
+                className="text-violet-300/70 hover:text-white"
+                aria-label={`Remove ${s.name}`}
+              >
+                <X size={10} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="relative mt-1.5">
+        <input
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          placeholder="Search services to allow…"
+          className="w-full rounded-lg bg-black/30 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/40"
+        />
+        {open && results.length > 0 && (
+          <div className="absolute z-20 mt-1 max-h-44 w-full overflow-y-auto rounded-lg border border-white/10 bg-surface-2 shadow-lg">
+            {results.map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onChange([...value, { id: r.id, name: r.name }]);
+                  setQ('');
+                }}
+                className="block w-full px-2.5 py-1.5 text-left text-xs text-slate-300 hover:bg-white/[0.05]"
+              >
+                {r.name} <span className="text-slate-500">· ${r.pricePerCall}/call</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function CommandChat() {
   const qc = useQueryClient();
   const address = useSession((s) => s.session?.address ?? '');
@@ -321,10 +423,10 @@ export function CommandChat() {
   // Natural-language box: the agent parses it into a plan you then approve.
   const [nl, setNl] = useState('');
   // Optional allow-list: the services the agent MAY use for this prompt. Empty = any.
-  // One = forced; several = the agent picks the best of them. Mirrors the rule picker.
-  const [allowedServiceIds, setAllowedServiceIds] = useState<string[]>([]);
-  const toggleAllowed = (id: string) =>
-    setAllowedServiceIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  // One = forced; several = the agent picks the best of them. Searched on demand so
+  // it scales to a large directory (never lists everything). Stores {id,name} so the
+  // selected chips render without re-fetching.
+  const [allowedServices, setAllowedServices] = useState<{ id: string; name: string }[]>([]);
 
   const { data: servicePage } = useQuery({
     queryKey: ['services', { picker: true }],
@@ -459,7 +561,7 @@ export function CommandChat() {
       result = await planMut.mutateAsync({
         instruction,
         hasAttachment: !!file,
-        serviceIds: allowedServiceIds.length ? allowedServiceIds : undefined,
+        serviceIds: allowedServices.length ? allowedServices.map((s) => s.id) : undefined,
       });
     } catch (e) {
       push({
@@ -937,50 +1039,7 @@ export function CommandChat() {
                 usingGlobalAsRule={usingGlobalAsRule}
                 publicGlobalActive={!!globals?.publicRuleId}
               />
-              {services.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-                    <SlidersHorizontal size={12} className="shrink-0 text-violet-300" />
-                    <span>Allowed services (optional)</span>
-                    <span className="text-slate-600">
-                      {allowedServiceIds.length === 0
-                        ? '· the agent may use any'
-                        : allowedServiceIds.length === 1
-                          ? '· the agent will use this one'
-                          : `· the agent picks the best of ${allowedServiceIds.length}`}
-                    </span>
-                    {allowedServiceIds.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setAllowedServiceIds([])}
-                        className="ml-auto text-slate-500 hover:text-slate-300"
-                      >
-                        clear
-                      </button>
-                    )}
-                  </div>
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {services.map((s) => {
-                      const on = allowedServiceIds.includes(s.id);
-                      return (
-                        <button
-                          key={s.id}
-                          type="button"
-                          onClick={() => toggleAllowed(s.id)}
-                          className={`rounded-lg border px-2 py-0.5 text-[11px] transition-colors ${
-                            on
-                              ? 'border-violet-500/50 bg-violet-500/15 text-violet-200'
-                              : 'border-white/10 bg-white/[0.03] text-slate-400 hover:text-slate-200'
-                          }`}
-                        >
-                          {on && <Check size={10} className="mr-1 inline" />}
-                          {s.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+              <AllowedServicesPicker value={allowedServices} onChange={setAllowedServices} />
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] leading-relaxed text-slate-500">
                   Your words decide <span className="text-slate-300">what</span> to do; the vault
