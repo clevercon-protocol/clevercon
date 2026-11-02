@@ -17,9 +17,12 @@ import { SERVICE_BY_ACTION, SERVICES } from './services.js';
  */
 const PORT = Number(process.env.PORT ?? process.env.PROVIDER_PORT ?? 8080);
 const NAME = process.env.PROVIDER_NAME ?? 'clevercon-reference-provider';
-// The public base URL used in artifact links. Defaults to the registered endpoint.
+// The public base URL used in artifact download links. Prefer an explicit override,
+// else Railway's injected public domain (so it is correct with no config), else the
+// registered endpoint, else localhost for local runs.
 const PUBLIC_URL = (
   process.env.PROVIDER_PUBLIC_URL ??
+  (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : undefined) ??
   process.env.PROVIDER_ENDPOINT ??
   `http://localhost:${PORT}`
 ).replace(/\/+$/, '');

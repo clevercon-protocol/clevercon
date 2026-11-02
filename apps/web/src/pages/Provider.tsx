@@ -125,6 +125,7 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
   const [category, setCategory] = useState('');
   const [price, setPrice] = useState('');
   const [endpoint, setEndpoint] = useState('');
+  const [capability, setCapability] = useState('');
   const [address, setAddress] = useState('');
   const [paymentModel, setPaymentModel] = useState<
     'escrow' | 'x402' | 'mpp-session' | 'subscription'
@@ -202,6 +203,7 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
       name: name.trim(),
       description: description.trim(),
       category: category.trim() || undefined,
+      capabilities: capability.trim() ? [capability.trim()] : undefined,
       pricingModel,
       pricePerCall: Number(price),
       endpoint: endpoint.trim(),
@@ -252,6 +254,19 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
         placeholder="What it does"
         className={controls.field}
       />
+      <div>
+        <input
+          value={capability}
+          onChange={(e) => setCapability(e.target.value)}
+          placeholder="Capability / action your endpoint handles (e.g. image.transform)"
+          className={`${controls.field} font-mono`}
+        />
+        <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+          The exact action the worker sends to your endpoint; it must match what your service
+          dispatches on. Leave blank only if your endpoint ignores the action and always does the
+          same thing.
+        </p>
+      </div>
       <div className="grid gap-3 sm:grid-cols-3">
         <div>
           <input
