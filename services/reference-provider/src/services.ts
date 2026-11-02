@@ -119,8 +119,34 @@ async function imageTransform({ input, attachments, hostArtifact }: HandlerCtx):
   const srcMeta = await sharp(src).metadata();
 
   const operation = String(input.operation ?? 'convert');
-  const width = input.width != null ? Math.max(1, Math.floor(Number(input.width))) : undefined;
-  const height = input.height != null ? Math.max(1, Math.floor(Number(input.height))) : undefined;
+  const srcW = srcMeta.width;
+  const srcH = srcMeta.height;
+
+  // A dimension can be given ABSOLUTELY (960 => 960px) or as a FRACTION of the source
+  // (0.5 => half). "Resize by half" has no known pixel size at plan time, so the agent
+  // sends a fraction; without this it floored 0.5 to a 1px image. 0<v<1 => fraction of
+  // the source dimension; v>=1 => absolute pixels.
+  const asDim = (v: unknown, srcDim: number | undefined): number | undefined => {
+    if (v == null) return undefined;
+    const nraw = Number(v);
+    if (!Number.isFinite(nraw) || nraw <= 0) return undefined;
+    if (nraw < 1 && srcDim) return Math.max(1, Math.round(srcDim * nraw));
+    return Math.max(1, Math.floor(nraw));
+  };
+  let width = asDim(input.width, srcW);
+  let height = asDim(input.height, srcH);
+
+  // `scale` is the natural way to say "half" / "50%": a factor (0.5) or a percent
+  // (50). It resizes BOTH sides proportionally from the source and overrides w/h.
+  if (input.scale != null) {
+    const raw = Number(input.scale);
+    if (Number.isFinite(raw) && raw > 0) {
+      const factor = raw <= 1 ? raw : raw <= 100 ? raw / 100 : 1;
+      if (srcW) width = Math.max(1, Math.round(srcW * factor));
+      if (srcH) height = Math.max(1, Math.round(srcH * factor));
+    }
+  }
+
   const quality = input.quality != null ? Math.min(100, Math.max(1, Math.floor(Number(input.quality)))) : 80;
   const format = pickFormat(input.format, srcMeta.format);
 
@@ -224,8 +250,21 @@ export const SERVICES: ServiceDef[] = [
       type: 'object',
       properties: {
         operation: { type: 'string', enum: ['resize', 'convert', 'compress'] },
-        width: { type: 'number', description: 'Target width in px (keeps aspect ratio)' },
-        height: { type: 'number', description: 'Target height in px (keeps aspect ratio)' },
+        scale: {
+          type: 'number',
+          description:
+            'Proportional resize when you do NOT know the pixel size: a factor (0.5 = half, 0.25 = quarter) or a percent (50 = 50%). Use this for "resize by half", "make it 50% smaller", etc. Preferred over width/height for relative resizing.',
+        },
+        width: {
+          type: 'number',
+          description:
+            'Absolute target width in px (keeps aspect ratio). Use only when an exact pixel size is given, e.g. "resize to 800px wide". For relative sizes use scale.',
+        },
+        height: {
+          type: 'number',
+          description:
+            'Absolute target height in px (keeps aspect ratio). Use only when an exact pixel size is given. For relative sizes use scale.',
+        },
         format: { type: 'string', enum: ['jpeg', 'png', 'webp'] },
         quality: { type: 'number', description: '1-100 (for jpeg/webp)' },
       },
