@@ -50,9 +50,21 @@ async function main(): Promise<void> {
   const endpoint = env('PROVIDER_ENDPOINT');
   const token = await login(api, kp);
   const headers = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
-  console.log(`Signed in as ${kp.publicKey()}; registering ${SERVICES.length} services at ${endpoint}`);
 
-  for (const s of SERVICES) {
+  // Register everything by default, or just the actions named in ONLY (comma-
+  // separated) so you can add ONE new service without re-creating the others.
+  const only = (process.env.ONLY ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const toRegister = only.length ? SERVICES.filter((s) => only.includes(s.action)) : SERVICES;
+  if (only.length && toRegister.length === 0) {
+    console.error(`No services match ONLY=${only.join(',')}. Known: ${SERVICES.map((s) => s.action).join(', ')}`);
+    process.exit(1);
+  }
+  console.log(`Signed in as ${kp.publicKey()}; registering ${toRegister.length} service(s) at ${endpoint}`);
+
+  for (const s of toRegister) {
     const res = await fetch(`${api}/provider/services`, {
       method: 'POST',
       headers,
@@ -69,6 +81,10 @@ async function main(): Promise<void> {
         inputSchema: s.inputSchema,
         outputSchema: s.outputSchema,
         verification: s.verification,
+        // Manifest-v2 shape (so the marketplace knows it takes a file, etc.).
+        ...(s.interaction ? { interaction: s.interaction } : {}),
+        ...(s.paymentModel ? { paymentModel: s.paymentModel } : {}),
+        ...(s.attachmentsIn ? { attachmentsIn: s.attachmentsIn } : {}),
       }),
     });
     if (!res.ok) {

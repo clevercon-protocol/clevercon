@@ -1,4 +1,7 @@
-import { createProvider } from '@clevercon/agent-sdk/provider';
+import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
+import { createProvider, artifactRef } from '@clevercon/agent-sdk/provider';
+import type { ArtifactRef } from '@clevercon/agent-sdk';
 import { SERVICE_BY_ACTION, SERVICES } from './services.js';
 
 /**
@@ -7,26 +10,62 @@ import { SERVICE_BY_ACTION, SERVICES } from './services.js';
  * to this endpoint; we dispatch to the matching service and return the standard
  * result envelope, which the worker verifies against the service's declared tier
  * before the vault pays. One endpoint, many services (see services.ts).
+ *
+ * Services that produce an OUTPUT file (e.g. the image tool) host the result here
+ * at GET /artifact/:id and return an ArtifactRef pointing to it, so the buyer can
+ * download + hash-verify it. Results are kept in memory with a short TTL.
  */
-// Use Railway's PORT when present; otherwise default to 8080 (the port its public
-// domains route to in this project), with PROVIDER_PORT as a local override.
 const PORT = Number(process.env.PORT ?? process.env.PROVIDER_PORT ?? 8080);
 const NAME = process.env.PROVIDER_NAME ?? 'clevercon-reference-provider';
+// The public base URL used in artifact links. Defaults to the registered endpoint.
+const PUBLIC_URL = (
+  process.env.PROVIDER_PUBLIC_URL ??
+  process.env.PROVIDER_ENDPOINT ??
+  `http://localhost:${PORT}`
+).replace(/\/+$/, '');
+
+// In-memory output store: id -> bytes. Evicted after the TTL (download promptly).
+const ARTIFACT_TTL_MS = 30 * 60 * 1000;
+const artifacts = new Map<string, { bytes: Buffer; contentType: string; at: number }>();
+
+function hostArtifact(bytes: Buffer, contentType: string): ArtifactRef {
+  const now = Date.now();
+  for (const [k, v] of artifacts) if (now - v.at > ARTIFACT_TTL_MS) artifacts.delete(k);
+  const id = randomUUID();
+  artifacts.set(id, { bytes, contentType, at: now });
+  return artifactRef(`${PUBLIC_URL}/artifact/${id}`, bytes, contentType);
+}
 
 const provider = createProvider({
   name: NAME,
-  port: PORT,
-  async fulfill({ action, body }) {
+  async fulfill({ action, input, attachments }) {
     const svc = SERVICE_BY_ACTION.get(action);
-    const input = ((body as { input?: Record<string, unknown> }).input ?? {}) as Record<
-      string,
-      unknown
-    >;
     // Unknown action: fall back to the market snapshot so a bare hire still works.
     const handler = svc?.handler ?? SERVICES.find((s) => s.action === 'market.snapshot')!.handler;
-    return handler(input);
+    return handler({ input, attachments, hostArtifact });
   },
 });
 
-provider.listen(PORT);
-console.log(`[${NAME}] serving ${SERVICES.length} services: ${SERVICES.map((s) => s.action).join(', ')}`);
+// Serve /artifact/:id from the store; delegate everything else (POST / and
+// /health) to the provider's own handler.
+const server = createServer((req, res) => {
+  if (req.method === 'GET' && req.url && req.url.startsWith('/artifact/')) {
+    const id = req.url.slice('/artifact/'.length).split(/[?#]/)[0];
+    const a = artifacts.get(id);
+    if (!a) {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      res.end('not found');
+      return;
+    }
+    res.writeHead(200, { 'content-type': a.contentType, 'content-length': String(a.bytes.length) });
+    res.end(a.bytes);
+    return;
+  }
+  void provider.handle(req, res);
+});
+
+server.listen(PORT, () => {
+  console.log(
+    `[${NAME}] serving ${SERVICES.length} services + /artifact on :${PORT}: ${SERVICES.map((s) => s.action).join(', ')}`,
+  );
+});
