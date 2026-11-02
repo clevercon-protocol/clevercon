@@ -31,10 +31,11 @@ function Introduction() {
   return (
     <>
       <Lead>
-        CleverCon gives an AI agent a spending account on Stellar that it cannot misuse, bounded by
-        private rules only you can see, with an economy to use it in. Your agent can pay a vendor,
-        disburse to many, hire a service, and pay per call for APIs and plugins, always within the
-        limits you set, enforced on-chain and kept private.
+        CleverCon lets an AI agent do real things with money for you on Stellar: pay a vendor,
+        disburse to many, hire a service, hand it a file to work on, and pay per call for APIs and
+        plugins, always strictly within limits you set, enforced on-chain and kept private, on an
+        account the platform never holds. And it is the economy on the other side: anyone can
+        publish a service for agents to find, use, and pay for.
       </Lead>
       <P>
         You set the rules once (a budget, who it may pay, how much, how often). They are enforced
@@ -54,8 +55,12 @@ function Introduction() {
           instruction.
         </LI>
         <LI>
-          <B>Hire a service.</B> Data, AI, research, or compute from the directory, paid per step on
-          delivery.
+          <B>Hire a service.</B> Data, AI, research, or compute from the directory, paid on accepted
+          delivery under your rule.
+        </LI>
+        <LI>
+          <B>Hand a service a file.</B> Attach an image or document to a hire; a service can return a
+          processed file you download.
         </LI>
         <LI>
           <B>Pay per call for APIs and plugins.</B> Give your agent a metered capability it pays for
@@ -113,8 +118,9 @@ function Introduction() {
           It uses the tools within your limits.
         </LI>
         <LI>
-          <B>In the app</B> at clevercon.xyz: do any of it by hand, fund, pay, disburse, hire, and
-          author rules, all in the browser.
+          <B>In the app</B> at clevercon.xyz: do any of it by hand (fund, pay, disburse, hire, and
+          author rules), or just tell the built-in agent what to do in plain language and approve
+          the plan it proposes, watching the job run and the result come back.
         </LI>
         <LI>
           <B>In code</B> with the SDK (<Code>@clevercon/agent-sdk</Code>): pay, disburse, hire, or
@@ -159,9 +165,9 @@ function WhatYouCanDo() {
   return (
     <>
       <Lead>
-        CleverCon is a bounded, private spending account plus an economy. Here is everything you (or
-        your agent) can do with it, and the two hands-on ways to do each: by prompt, or by hand in
-        the app. Every action is also callable from code; the snippets live in the SDK reference.
+        Here is everything you (or your agent) can do with CleverCon, and the two hands-on ways to
+        do each: by prompt (an MCP agent or the built-in chat), or by hand in the app. Every action
+        is also callable from code; the snippets live in the SDK reference.
       </Lead>
 
       <H2 id="overview">At a glance</H2>
@@ -171,6 +177,11 @@ function WhatYouCanDo() {
           ['Pay one address', '"Pay G... 5 USDC for the logo"', 'Agent tab'],
           ['Disburse to many', '"Split 30 USDC across these three"', 'Disburse tab'],
           ['Hire a service', '"Hire a price oracle with a 2 USDC budget"', 'Services tab'],
+          [
+            'Hand a service a file',
+            '"Resize this image by half" (attach the file)',
+            'Services tab, attach on hire',
+          ],
           [
             'Pay per call for an API or plugin',
             '"Pay the data API 0.05 for this call"',
@@ -227,6 +238,26 @@ function WhatYouCanDo() {
         </LI>
         <LI>
           <B>By hand:</B> the Services tab, pick a service, hire it under a rule.
+        </LI>
+      </UL>
+
+      <H2 id="files">Hand a service a file</H2>
+      <P>
+        When a service needs a file (an image to resize, a document to parse), attach it to the
+        hire. The file is uploaded as a content-addressed reference (the service fetches it and
+        verifies its hash), and a service can return a processed file for you to download. Only
+        services that declare they accept files show an attach control; the agent asks for the file
+        if it is required.
+      </P>
+      <UL>
+        <LI>
+          <B>By prompt:</B> "Resize this image by half" with the image attached. In the built-in
+          chat an attach button appears when the chosen service takes a file; over MCP the agent
+          calls <Code>upload_file</Code> then hires with the reference.
+        </LI>
+        <LI>
+          <B>By hand:</B> the Services tab, pick a file-taking service, attach the file, hire under a
+          rule, then download the result from the job.
         </LI>
       </UL>
 
@@ -308,6 +339,11 @@ function Concepts() {
         <LI>Denylist with a threshold.</LI>
         <LI>Calendar window (only within certain times).</LI>
         <LI>Category ceiling (per class of service).</LI>
+        <LI>
+          Eligibility: which services the agent may hire (allow or deny by service, category, or
+          tier). An app-enforced pre-flight filter layered on the spend rules, so a disallowed
+          service is never even attempted.
+        </LI>
       </UL>
 
       <H3>How a spend is checked</H3>
@@ -812,21 +848,65 @@ function Marketplace() {
       </UL>
 
       <H2 id="hire">Hiring a service</H2>
-      <P>Hiring runs the same bounded, pay-on-delivery flow every time:</P>
+      <P>Hiring runs the same bounded, pay-on-accepted-delivery flow every time:</P>
       <Flow
         steps={[
           { label: 'Discover', sub: 'search the directory' },
-          { label: 'Hire', sub: 'under a rule' },
-          { label: 'Vault locks', sub: 'the budget' },
+          { label: 'Hire', sub: 'under your rule' },
           { label: 'Deliver', sub: 'provider does the work' },
           { label: 'Verify', sub: 'by the tier' },
-          { label: 'Release', sub: 'paid per step' },
+          { label: 'Pay', sub: 'under your rule, on delivery' },
         ]}
       />
       <P>
-        You pay only for delivery that passes the service's verification, and anything left is
-        refunded to available.
+        You pay only for delivery that is accepted under the service's verification. A
+        dispute-bearing (T2) step is paid only after its window passes, and a human (T3) step only
+        on your approval, so the window and the approval gate the payment; anything held and not
+        accepted is not paid.
       </P>
+
+      <H2 id="pay">How a hire is paid</H2>
+      <P>
+        A hire pays the provider through the <B>same path your rule already uses</B>, only after
+        delivery is accepted. There is nothing extra to set up beyond the rule you picked.
+      </P>
+      <UL>
+        <LI>
+          <B>Private rule:</B> the payment is proven in your browser and released keyless (a
+          zero-knowledge proof authorizes it, a fee-payer only submits it), exactly like a private
+          disburse to the provider's payout address. No per-payment signature.
+        </LI>
+        <LI>
+          <B>Public rule:</B> the provider is paid hands-off under your Managed Session.
+        </LI>
+      </UL>
+      <P>
+        A task that hires several providers at once (a multi-step hire) pays them together under the
+        one rule. Settlement is recorded against the step, so the provider's earnings attribute to
+        the exact job.
+      </P>
+
+      <H2 id="shapes">Interaction shapes</H2>
+      <P>Services differ in how they run, and the agent handles each uniformly:</P>
+      <UL>
+        <LI>
+          <B>Immediate (sync):</B> request in, result out.
+        </LI>
+        <LI>
+          <B>Long-running (async):</B> returns a job handle; the agent tracks progress and fetches
+          the result when it is ready.
+        </LI>
+        <LI>
+          <B>Needs input mid-job:</B> the job pauses to ask a typed question; the agent answers from
+          context or asks you, and the answer resumes the job.
+        </LI>
+        <LI>
+          <B>Human (T3):</B> held until you approve the delivered work.
+        </LI>
+        <LI>
+          <B>Metered / streaming:</B> pay per call or per token on the Fast lane.
+        </LI>
+      </UL>
 
       <H2 id="tiers">Verification tiers, by example</H2>
       <P>Each service declares how its result is accepted, which sets how fast it is paid.</P>
@@ -839,8 +919,8 @@ function Marketplace() {
         window, with an advisory quality score; if it is wrong, the buyer disputes before release.
       </UseCase>
       <UseCase label="T3 Human" title="A commissioned contribution">
-        A team commissions a design or an open-source contribution for 200 USDC. The budget is
-        locked and released only when the buyer approves the delivered work or a milestone is met.
+        A team commissions a design or an open-source contribution for 200 USDC. Payment is held and
+        released only when the buyer approves the delivered work or a milestone is met.
       </UseCase>
 
       <H2 id="disputes">Disputes and reputation</H2>
@@ -1095,6 +1175,12 @@ function Mcp() {
           ],
           ['Hire', <Code>hire_agent</Code>],
           [
+            'Files',
+            <>
+              <Code>upload_file</Code> (attach a local path, a URL, or bytes to a hire)
+            </>,
+          ],
+          [
             'Limits',
             <>
               <Code>set_limit</Code>, <Code>list_limits</Code>
@@ -1110,11 +1196,21 @@ function Mcp() {
           [
             'Lifecycle',
             <>
-              <Code>dispute_task</Code>, <Code>approve_task</Code>
+              <Code>dispute_task</Code>, <Code>approve_task</Code>, <Code>answer_step</Code> (reply
+              when a job asks for input)
             </>,
           ],
         ]}
       />
+
+      <H3>Attaching a file to a hire</H3>
+      <P>
+        When a service accepts a file, the agent calls <Code>upload_file</Code> with a local path, a
+        URL, or inline bytes, gets back a content-addressed reference, then hires with it. The
+        provider fetches the file and verifies its hash, and any file it returns comes back on the
+        job for you to download. Clients with native file upload (for example the Claude desktop
+        apps) can pass the file straight through.
+      </P>
 
       <H2 id="prompts">Example prompts</H2>
       <P>Once connected, you drive it in natural language:</P>
@@ -1124,6 +1220,7 @@ function Mcp() {
         <LI>"Pay the data API 0.05 for this call." (public session)</LI>
         <LI>"What is my remaining session budget?" (session_scope)</LI>
         <LI>"Find a price-oracle service and hire it with a 2 USDC budget." (hire)</LI>
+        <LI>"Resize this image by half." (upload_file, then hire a file-taking service)</LI>
       </UL>
 
       <Callout kind="warn" title="Retired tools">
@@ -1322,14 +1419,26 @@ function Providers() {
         rows={[
           [
             <Code>POST /</Code>,
-            'request body { action, taskId }; a 2xx body is the step output the buyer sees',
+            'request body { action, taskId, input, attachments }; respond with the step result',
+          ],
+          [
+            'input',
+            "the buyer's structured params, validated against your declared io.input JSON Schema",
+          ],
+          [
+            'attachments',
+            'content-addressed file refs { url, hash, size, contentType }; fetch and verify the hash before use',
           ],
           [
             'output',
-            'a string sent verbatim, or an object JSON-encoded; truncated to a sane maximum',
+            'a string sent verbatim, or an object JSON-encoded (truncated); or host a file and return an artifact reference',
+          ],
+          [
+            'status',
+            'completed, or working (async, with progress), input_required (ask a typed question), or failed',
           ],
           ['failure', 'a non-2xx or a timeout fails the step, so the vault does not pay for it'],
-          [<Code>GET /health</Code>, 'liveness'],
+          [<Code>GET /health</Code>, 'liveness; the directory monitors it and auto-recovers'],
         ]}
       />
 
@@ -1352,6 +1461,58 @@ function Providers() {
         </LI>
       </UL>
 
+      <H2 id="declare">Declare how your service behaves</H2>
+      <P>
+        A service carries a manifest so the agent and the dapp know what it needs before committing,
+        and so the platform treats any service uniformly. You declare it at registration:
+      </P>
+      <UL>
+        <LI>
+          <B>Interaction shape:</B> immediate (sync), long-running (async), needs-input, human (T3),
+          or metered. The buyer's UI and the agent adapt to it.
+        </LI>
+        <LI>
+          <B>Payment model:</B> how you are paid for that shape (per accepted delivery, or metered
+          per call).
+        </LI>
+        <LI>
+          <B>Inputs and files:</B> an <Code>io.input</Code> JSON Schema for your parameters, and
+          whether you require an attachment (accepted content types and a size limit). A missing
+          required field is asked of the user before any charge.
+        </LI>
+        <LI>
+          <B>Pricing, tier, and category</B> so you are discoverable and priced correctly.
+        </LI>
+      </UL>
+
+      <H2 id="files">Files in, files out</H2>
+      <P>
+        A service can take a file and return one. Declare the accepted types and max size; the buyer
+        attaches a file, which arrives as a content-addressed reference you fetch and hash-verify.
+        To return a file, host the bytes and return an artifact reference{' '}
+        <Code>{'{ url, hash, size, contentType }'}</Code>; the buyer downloads it from the job and
+        the hash is the integrity check. The reference Image Resizer and Converter is exactly this:
+        an image in, a resized or converted image out.
+      </P>
+
+      <H2 id="shapes">Long-running, needs-input, and human work</H2>
+      <P>
+        Beyond immediate request-response, return a status so the job behaves correctly:
+      </P>
+      <UL>
+        <LI>
+          <B>working</B>: a long job returns a durable handle and progress; the agent tracks it and
+          fetches the result when done.
+        </LI>
+        <LI>
+          <B>input_required</B>: pause to ask a typed question; the agent answers from context or
+          asks the user, and the reply resumes the job.
+        </LI>
+        <LI>
+          <B>human (T3)</B>: the step is held for approval; it is released when the buyer accepts.
+        </LI>
+      </UL>
+
       <H2 id="register">Register and get paid</H2>
       <Steps>
         <Step n={1} title="Run your provider">
@@ -1367,9 +1528,29 @@ function Providers() {
         </Step>
       </Steps>
       <P>
-        Payment settles to your payout address per accepted step, and settlement builds your
-        reputation, which drives discovery.
+        Payment settles to your payout address on accepted delivery, through the buyer's own rule
+        (a private rule pays keyless; a public rule via their Managed Session), and settlement
+        builds your reputation, which drives discovery.
       </P>
+
+      <H2 id="console">The provider console</H2>
+      <P>Once registered, the console is where you run the business of a service:</P>
+      <UL>
+        <LI>
+          <B>Payouts ledger</B> of every settled job with a CSV export for your own books.
+        </LI>
+        <LI>
+          <B>Performance metrics</B>: volume, acceptance, latency, and dispute rate per service.
+        </LI>
+        <LI>
+          <B>Health</B>: the directory monitors your endpoint and auto-recovers it; a service that
+          is unreachable is shown as temporarily unavailable rather than silently failing hires.
+        </LI>
+        <LI>
+          <B>Each service's shape</B> (interaction, payment, required files) is shown so you can see
+          how buyers experience it.
+        </LI>
+      </UL>
 
       <H2 id="monetize">Monetization and the verified mark</H2>
       <P>How a service earns trust and revenue is growing in this order:</P>

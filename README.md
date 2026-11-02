@@ -4,7 +4,7 @@
 
 **Money your AI agent can use, under rules it can't break.**
 
-A private, non-custodial spending account for AI agents on Stellar, and an economy to use it in: pay a vendor, disburse to many, hire services, and pay other agents, all within limits only you set and no one else can see.
+What an AI agent can do with money on Stellar: pay a vendor, disburse to many, hire a service, hand it a file to work on, and pay other agents, all within limits only you set and no one else can see, non-custodially, with an economy of services to use it in.
 
 [![CI](https://github.com/clevercon-protocol/clevercon/actions/workflows/ci.yml/badge.svg)](https://github.com/clevercon-protocol/clevercon/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -18,7 +18,7 @@ A private, non-custodial spending account for AI agents on Stellar, and an econo
 
 ## What it is
 
-CleverCon gives an AI agent a private, non-custodial spending account on Stellar. You fund a vault, set the rules the agent must obey, a budget, per-payment caps, an allowlist of who it may pay, time windows, how often it may pay, and keep those rules private. Your agent can then pay a vendor, disburse to many recipients, hire services and pay per call, or pay other agents, all within limits only you set.
+CleverCon lets an AI agent do real things with money on Stellar: pay a vendor, disburse to many recipients, hire services and pay per call, hand a service a file to work on, or pay other agents, all within limits only you set. You fund a vault, set the rules the agent must obey (a budget, per-payment caps, an allowlist of who it may pay, time windows, how often it may pay), and keep those rules private. It runs non-custodially, and the platform never takes custody of your funds.
 
 The vault holds your funds non-custodially and releases a payment only when a zero-knowledge proof shows it obeys your committed rules. The rules are enforced on-chain but never published, and the platform never takes custody of your funds.
 
@@ -45,6 +45,7 @@ The same primitive, bounded and private agent-driven payments, covers many jobs:
 - **Grant and bounty disbursement** to approved recipients, up to set limits.
 - **Bounded allowances**: give an agent a private, capped wallet.
 - **Buying data, compute, and services**: hire from the directory or pay any provider.
+- **File-in, file-out work**: hand a service a file (an image, a document), get a processed file back, paid on delivery under your rule.
 
 In every case you set the limits once, the agent decides within them, and the vault enforces the boundary and keeps your rules private.
 

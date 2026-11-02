@@ -458,9 +458,10 @@ export function Landing() {
           </Reveal>
           <Reveal delay={160}>
             <p className="mt-6 text-base sm:text-lg text-slate-400 max-w-2xl mx-auto leading-relaxed">
-              CleverCon gives an AI agent a private, non-custodial spending account on Stellar, and
-              an economy to use it in: pay a vendor, disburse to many, hire services, or pay per
-              call for APIs, always within limits only you set and no one else can see.
+              CleverCon lets an AI agent pay a vendor, disburse to many, hire a service, and pay per
+              call for APIs on Stellar, always within limits only you set and no one else can see,
+              non-custodially. And it is the economy on the other side: services any agent can find,
+              use, and pay for.
             </p>
           </Reveal>
           <Reveal delay={240}>
@@ -536,7 +537,7 @@ export function Landing() {
               For developers
             </p>
             <h2 className="mt-2 text-balance text-2xl font-bold tracking-tight text-white sm:text-3xl">
-              Give your agent a spending account in two lines
+              Let your agent pay, hire, and disburse in two lines
             </h2>
             <p className="mt-3 text-slate-400">
               Published on npm. Point your agent at CleverCon over MCP, or embed the SDK in your own
