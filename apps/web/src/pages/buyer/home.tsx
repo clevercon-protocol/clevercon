@@ -120,6 +120,8 @@ type Plan = {
   // Buyer-supplied input files for a hire (uploaded to R2 as content-addressed
   // refs at propose time, so they survive chat persistence and reach the provider).
   attachments?: ArtifactRef[];
+  // Structured params the planner extracted for the chosen service (e.g. width/format).
+  input?: Record<string, unknown>;
 };
 type Msg =
   | { id: number; role: 'user'; text: string }
@@ -318,6 +320,9 @@ export function CommandChat() {
 
   // Natural-language box: the agent parses it into a plan you then approve.
   const [nl, setNl] = useState('');
+  // Optional: scope the prompt to a specific service (forces a hire of it + param
+  // extraction). Blank = let the agent choose. Mirrors the rule picker.
+  const [useServiceId, setUseServiceId] = useState('');
 
   const { data: servicePage } = useQuery({
     queryKey: ['services', { picker: true }],
@@ -418,8 +423,8 @@ export function CommandChat() {
   }
 
   const planMut = useMutation({
-    mutationFn: (vars: { instruction: string; hasAttachment: boolean }) =>
-      planInstruction(vars.instruction, vars.hasAttachment),
+    mutationFn: (vars: { instruction: string; hasAttachment: boolean; serviceId?: string }) =>
+      planInstruction(vars.instruction, vars.hasAttachment, vars.serviceId),
   });
 
   // A clear reason the current lane can't act, or null when it's ready. Nothing (not
@@ -449,7 +454,11 @@ export function CommandChat() {
     setNl('');
     let result: Awaited<ReturnType<typeof planInstruction>>;
     try {
-      result = await planMut.mutateAsync({ instruction, hasAttachment: !!file });
+      result = await planMut.mutateAsync({
+        instruction,
+        hasAttachment: !!file,
+        serviceId: useServiceId || undefined,
+      });
     } catch (e) {
       push({
         id: nextId(),
@@ -511,6 +520,7 @@ export function CommandChat() {
           serviceName: result.service.name,
           serviceId: result.service.id,
           ...(attachments ? { attachments } : {}),
+          ...(result.input ? { input: result.input } : {}),
         },
       });
     } else if ((result.kind === 'pay' || result.kind === 'disburse') && result.lines.length) {
@@ -680,12 +690,14 @@ export function CommandChat() {
     if (plan.kind === 'hire' && plan.serviceId) {
       try {
         const policyId = plan.bind.policyId;
+        const jobInput: Record<string, unknown> = { ...(plan.input ?? {}) };
+        if (plan.attachments?.length) jobInput.attachments = plan.attachments;
         const task = await hire.mutateAsync({
           title: `Hire ${plan.serviceName}`,
           serviceId: plan.serviceId,
           budget: plan.lines[0].amount,
           policyId,
-          input: plan.attachments?.length ? { attachments: plan.attachments } : undefined,
+          input: Object.keys(jobInput).length ? jobInput : undefined,
         });
         // Drop a LIVE job card into the chat: it polls the task and shows progress,
         // any question it needs answered, and the result/download inline.
@@ -923,6 +935,24 @@ export function CommandChat() {
                 usingGlobalAsRule={usingGlobalAsRule}
                 publicGlobalActive={!!globals?.publicRuleId}
               />
+              {services.length > 0 && (
+                <label className="flex items-center gap-2 text-[11px] text-slate-400">
+                  <SlidersHorizontal size={12} className="shrink-0 text-violet-300" />
+                  <span className="shrink-0">Use service (optional)</span>
+                  <select
+                    value={useServiceId}
+                    onChange={(e) => setUseServiceId(e.target.value)}
+                    className="min-w-0 flex-1 rounded-lg bg-black/30 px-2 py-1 text-xs text-slate-200 outline-none focus:border-violet-500/40"
+                  >
+                    <option value="">Let the agent choose</option>
+                    {services.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] leading-relaxed text-slate-500">
                   Your words decide <span className="text-slate-300">what</span> to do; the vault

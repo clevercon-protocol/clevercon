@@ -11,6 +11,9 @@ const planSchema = z.object({
   // Whether the user attached a file to the instruction, so the planner can prefer
   // a service that accepts files. The file itself is attached to the hire later.
   hasAttachment: z.boolean().optional(),
+  // A service the user explicitly chose in the composer: forces a hire of it and
+  // extracts its input params from the instruction.
+  serviceId: z.string().optional(),
 });
 
 /**
@@ -25,7 +28,7 @@ export class AgentController {
 
   @Post('plan')
   plan(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    const { instruction, hasAttachment } = parseBody(planSchema, body);
-    return this.agent.plan(user.userId, instruction, { hasAttachment });
+    const { instruction, hasAttachment, serviceId } = parseBody(planSchema, body);
+    return this.agent.plan(user.userId, instruction, { hasAttachment, serviceId });
   }
 }

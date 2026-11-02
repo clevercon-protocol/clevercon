@@ -194,6 +194,8 @@ export interface AgentPlanResult {
   rationale: string;
   warnings: string[];
   source: 'llm' | 'fallback';
+  // For a hire: structured params the planner extracted for the service.
+  input?: Record<string, unknown>;
 }
 
 /**
@@ -203,6 +205,7 @@ export interface AgentPlanResult {
 export async function planInstruction(
   instruction: string,
   hasAttachment = false,
+  serviceId?: string,
 ): Promise<AgentPlanResult> {
   if (isDemo()) {
     return {
@@ -215,7 +218,11 @@ export async function planInstruction(
       source: 'fallback',
     };
   }
-  return apiPost<AgentPlanResult>('/agent/plan', { instruction, hasAttachment });
+  return apiPost<AgentPlanResult>('/agent/plan', {
+    instruction,
+    hasAttachment,
+    ...(serviceId ? { serviceId } : {}),
+  });
 }
 
 /** Raise a dispute on one of the caller's tasks. */

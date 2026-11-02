@@ -17,6 +17,9 @@ export interface AgentPlan {
   rationale: string;
   warnings: string[];
   source: 'llm' | 'fallback';
+  // For a hire: structured input parameters extracted from the instruction (e.g.
+  // { operation, width, format } for an image tool), matching the service's schema.
+  input?: Record<string, unknown>;
 }
 
 const STELLAR_ADDR = /^G[A-Z2-7]{55}$/;
@@ -56,12 +59,19 @@ const PLAN_SCHEMA = {
       description: 'for hire: a few words describing the service to find; else empty',
     },
     budget: { type: 'number', description: 'for hire: max USDC to spend; else 0' },
+    serviceParams: {
+      type: 'object',
+      description:
+        'for a hire when a specific service + its input schema are given: the input ' +
+        'parameters extracted from the instruction to match that schema (e.g. ' +
+        '{"operation":"resize","width":400,"format":"jpeg"}); else {}',
+    },
     rationale: {
       type: 'string',
       description: 'one short sentence explaining the plan to the user',
     },
   },
-  required: ['kind', 'lines', 'serviceQuery', 'budget', 'rationale'],
+  required: ['kind', 'lines', 'serviceQuery', 'budget', 'serviceParams', 'rationale'],
 };
 
 const SYSTEM_PROMPT =
@@ -72,10 +82,15 @@ const SYSTEM_PROMPT =
   'If the instruction is not a spend or is unclear, use kind "none" and explain in rationale. ' +
   'Amounts are USDC; use the available budget to stay realistic. ' +
   'You NEVER choose, read, or infer a spending rule: the human selects the rule the vault enforces, ' +
-  'and private rules are not visible to you. Plan ONLY the actions (who/how much/which service).';
+  'and private rules are not visible to you. Plan ONLY the actions (who/how much/which service). ' +
+  'When the user has chosen a specific service and its input schema is provided, set kind to "hire" ' +
+  'and put the input parameters you extract from the instruction into serviceParams, matching that schema.';
 const TOOL_DESC = 'Return the structured spending plan for the user to review.';
 
 type Provider = 'anthropic' | 'openai' | 'none';
+
+/** A service the user explicitly chose in the composer (forces a hire of it). */
+type ForcedService = { id: string; name: string; pricePerCall: unknown; inputSchema: unknown };
 
 interface RawPlan {
   kind: AgentPlan['kind'];
@@ -83,6 +98,7 @@ interface RawPlan {
   serviceQuery: string;
   budget: number;
   rationale: string;
+  serviceParams?: Record<string, unknown>;
 }
 
 @Injectable()
@@ -120,7 +136,7 @@ export class AgentService {
   async plan(
     userId: string,
     instruction: string,
-    opts: { hasAttachment?: boolean } = {},
+    opts: { hasAttachment?: boolean; serviceId?: string } = {},
   ): Promise<AgentPlan> {
     const hasAttachment = !!opts.hasAttachment;
     const text = (instruction ?? '').trim();
@@ -136,16 +152,25 @@ export class AgentService {
       };
     }
 
+    // A user-chosen service forces a hire of exactly that service, with its input
+    // parameters extracted from the instruction against the service's input schema.
+    const forced: ForcedService | null = opts.serviceId
+      ? await this.prisma.service.findFirst({
+          where: { id: opts.serviceId, status: 'ACTIVE' },
+          select: { id: true, name: true, pricePerCall: true, inputSchema: true },
+        })
+      : null;
+
     const provider = this.provider();
     const raw =
       provider === 'none'
         ? fallbackParse(text)
-        : await this.parseWithLlm(userId, text, provider, hasAttachment);
+        : await this.parseWithLlm(userId, text, provider, hasAttachment, forced);
     const available = await this.vault
       .getForUser(userId)
       .then((v) => v.available)
       .catch(() => 0);
-    return this.validate(raw.plan, raw.source, available, hasAttachment);
+    return this.validate(raw.plan, raw.source, available, hasAttachment, forced);
   }
 
   private async parseWithLlm(
@@ -153,9 +178,10 @@ export class AgentService {
     instruction: string,
     provider: Provider,
     hasAttachment: boolean,
+    forced: ForcedService | null,
   ): Promise<{ plan: RawPlan; source: AgentPlan['source'] }> {
     try {
-      const context = await this.buildContext(userId, hasAttachment);
+      const context = await this.buildContext(userId, hasAttachment, forced);
       const input =
         provider === 'anthropic'
           ? await this.callAnthropic(instruction, context)
@@ -240,7 +266,11 @@ export class AgentService {
     return JSON.parse(args);
   }
 
-  private async buildContext(userId: string, hasAttachment = false): Promise<string> {
+  private async buildContext(
+    userId: string,
+    hasAttachment = false,
+    forced: ForcedService | null = null,
+  ): Promise<string> {
     // The planner is deliberately NOT told about the user's rules. It only needs
     // the available budget (for realism) and the hireable services. The human
     // selects the rule the vault enforces; private rules never reach the model.
@@ -268,6 +298,13 @@ export class AgentService {
         'The user attached a file. If the task needs it, prefer a service marked [accepts a file]; if none fits, still plan the best service and note the file may be unused.',
       );
     }
+    if (forced) {
+      parts.push(
+        `The user CHOSE the service "${forced.name}". Set kind="hire" and extract its input ` +
+          `parameters from the instruction into serviceParams, matching this input schema:\n` +
+          JSON.stringify(forced.inputSchema ?? {}),
+      );
+    }
     return parts.join('\n\n');
   }
 
@@ -277,6 +314,7 @@ export class AgentService {
     source: AgentPlan['source'],
     available: number,
     hasAttachment = false,
+    forced: ForcedService | null = null,
   ): Promise<AgentPlan> {
     const warnings: string[] = [];
     const lines = (raw.lines ?? [])
@@ -296,7 +334,7 @@ export class AgentService {
         return true;
       });
 
-    if (raw.kind === 'pay' || raw.kind === 'disburse') {
+    if (!forced && (raw.kind === 'pay' || raw.kind === 'disburse')) {
       if (lines.length === 0) {
         return this.none(
           source,
@@ -323,33 +361,37 @@ export class AgentService {
       };
     }
 
-    if (raw.kind === 'hire') {
-      const q = (raw.serviceQuery ?? '').trim();
-      // Match ANY significant word of the query against name/description/category, so
-      // "resize an image" finds "Image Resizer & Converter" (not just exact-name).
-      const words = q.split(/\s+/).filter((w) => w.length > 2);
-      const terms = words.length ? words : q ? [q] : [];
-      const matches = terms.length
-        ? await this.prisma.service.findMany({
-            where: {
-              status: 'ACTIVE',
-              healthy: true,
-              OR: terms.flatMap((w) => [
-                { name: { contains: w, mode: 'insensitive' as const } },
-                { description: { contains: w, mode: 'insensitive' as const } },
-                { category: { contains: w, mode: 'insensitive' as const } },
-              ]),
-            },
-            select: { id: true, name: true, pricePerCall: true, attachmentsIn: true },
-            take: 5,
-          })
-        : [];
-      // When the user attached a file, prefer a service that declares it accepts one;
-      // otherwise take the best name match.
-      const svc =
-        (hasAttachment ? matches.find((m) => m.attachmentsIn != null) : undefined) ??
-        matches[0] ??
-        null;
+    if (raw.kind === 'hire' || forced) {
+      // A user-chosen service wins outright; otherwise find the best match for the
+      // query (any significant word against name/description/category).
+      let svc: { id: string; name: string; pricePerCall: unknown } | null = forced
+        ? { id: forced.id, name: forced.name, pricePerCall: forced.pricePerCall }
+        : null;
+      if (!svc) {
+        const q = (raw.serviceQuery ?? '').trim();
+        const words = q.split(/\s+/).filter((w) => w.length > 2);
+        const terms = words.length ? words : q ? [q] : [];
+        const matches = terms.length
+          ? await this.prisma.service.findMany({
+              where: {
+                status: 'ACTIVE',
+                healthy: true,
+                OR: terms.flatMap((w) => [
+                  { name: { contains: w, mode: 'insensitive' as const } },
+                  { description: { contains: w, mode: 'insensitive' as const } },
+                  { category: { contains: w, mode: 'insensitive' as const } },
+                ]),
+              },
+              select: { id: true, name: true, pricePerCall: true, attachmentsIn: true },
+              take: 5,
+            })
+          : [];
+        // When the user attached a file, prefer a service that declares it accepts one.
+        svc =
+          (hasAttachment ? matches.find((m) => m.attachmentsIn != null) : undefined) ??
+          matches[0] ??
+          null;
+      }
       if (!svc) {
         warnings.push(
           'No matching service found. Pick one from Services, or name it more specifically.',
@@ -362,6 +404,9 @@ export class AgentService {
           `Budget $${budget.toFixed(2)} exceeds the $${available.toFixed(2)} available.`,
         );
       }
+      // Structured params the model extracted for this service (e.g. {width,format}).
+      const input =
+        raw.serviceParams && Object.keys(raw.serviceParams).length ? raw.serviceParams : undefined;
       return {
         kind: 'hire',
         lines: [],
@@ -370,6 +415,7 @@ export class AgentService {
         rationale: raw.rationale || `Hire ${svc.name} with a $${budget.toFixed(2)} budget.`,
         warnings,
         source,
+        ...(input ? { input } : {}),
       };
     }
 
@@ -463,5 +509,9 @@ function normalizeRaw(input: unknown): RawPlan {
     serviceQuery: typeof o.serviceQuery === 'string' ? o.serviceQuery : '',
     budget: typeof o.budget === 'number' ? o.budget : 0,
     rationale: typeof o.rationale === 'string' ? o.rationale : '',
+    serviceParams:
+      o.serviceParams && typeof o.serviceParams === 'object' && !Array.isArray(o.serviceParams)
+        ? (o.serviceParams as Record<string, unknown>)
+        : {},
   };
 }
