@@ -557,12 +557,21 @@ export class TasksService {
       include: {
         steps: {
           orderBy: { index: 'asc' },
-          include: { service: { select: { name: true, tier: true, verification: true } } },
+          include: {
+            service: { select: { name: true, tier: true, verification: true, stellarAddress: true } },
+          },
         },
         payments: { orderBy: { createdAt: 'desc' } },
       },
     });
     if (!t) throw new NotFoundException('Task not found');
+    // A step is "paid" once a CONFIRMED release names it: either a worker/delegate
+    // settlement (settleStep) or a client-settled keyless/session payment recorded
+    // via record-payment. The client uses this to settle a delivered, unpaid hire
+    // under the task's rule, and to avoid paying twice.
+    const paidStepIds = new Set(
+      t.payments.filter((p) => p.status === PaymentStatus.CONFIRMED && p.stepId).map((p) => p.stepId!),
+    );
     const spent = Number(
       t.payments
         .filter((p) => p.status === PaymentStatus.CONFIRMED)
@@ -577,6 +586,9 @@ export class TasksService {
       budget: Number(t.budget),
       spent,
       asset: t.asset,
+      // The rule bounding this task, so the client can prove it (private) or spend
+      // under the Managed Session (public) when settling a delivered hire itself.
+      policyId: t.policyId,
       stepCount: t.steps.length,
       completedSteps: t.steps.filter((s) => s.status === StepStatus.RELEASED).length,
       // At least one T2 step is in its dispute window: the buyer can approve early
@@ -595,6 +607,12 @@ export class TasksService {
         status: s.status,
         estimatedCost: Number(s.estimatedCost),
         service: s.service?.name ?? null,
+        // The address this step pays: a hire pays its service's payout address, a
+        // pay/disburse step names its own payee. The client needs it to settle.
+        payee: s.payee ?? s.service?.stellarAddress ?? null,
+        // Whether this step has already been paid (a CONFIRMED release names it), so
+        // the client settles a delivered-but-unpaid step exactly once.
+        paid: paidStepIds.has(s.id),
         // Verification tier (T1 trustless / T2 attestable / T3 human) + whether this
         // released step was TRUSTLESSLY verified (a T1 check the worker re-ran and
         // passed, not merely accepted), so the Job view can badge a verified delivery.

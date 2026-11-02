@@ -118,8 +118,18 @@ export class ActivityService {
     // Vault money movements (deposit/withdraw) + keyless private payments, from the
     // on-chain event log, so the timeline reflects funding and private spend, not only
     // task spend. Best-effort: a lookup hiccup must never break the rest of the feed.
+    // A hire settled keyless records a step Payment AND emits a keyless chain event for
+    // the SAME tx, so drop the chain copy when a Payment already covers that tx hash.
     try {
-      items.push(...(await this.vaultMovements(userId, limit)));
+      const paidTxHashes = new Set(
+        payments.map((p) => p.txHash).filter((h): h is string => !!h),
+      );
+      const movements = await this.vaultMovements(userId, limit);
+      items.push(
+        ...movements.filter(
+          (m) => !(m.kind === 'payment' && m.txHash && paidTxHashes.has(m.txHash)),
+        ),
+      );
     } catch {
       // ignore
     }

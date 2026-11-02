@@ -301,11 +301,15 @@ export async function managedSessionPay(
   payee: string,
   amount: number,
   ruleId?: string,
+  // When this spend settles a hire, the task step it pays, so the server links the
+  // provider's earnings to it after the release.
+  hire?: { taskId: string; stepId: string },
 ): Promise<{ txHash: string }> {
   return apiPost<{ txHash: string }>('/vault/session/pay', {
     payee,
     amount,
     ...(ruleId ? { ruleId } : {}),
+    ...(hire ? { hire } : {}),
   });
 }
 

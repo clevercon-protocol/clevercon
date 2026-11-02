@@ -71,6 +71,11 @@ export interface TaskStepView {
   status: string;
   estimatedCost: number;
   service: string | null;
+  // The address this step pays (a hire's provider payout address), so the client can
+  // settle a delivered hire under the task's rule.
+  payee?: string | null;
+  // Whether a CONFIRMED release already names this step (so the client pays once).
+  paid?: boolean;
   // Verification tier (T1/T2/T3) and whether a released step was trustlessly verified.
   tier?: string | null;
   verified?: boolean;
@@ -103,6 +108,9 @@ export interface Receipt {
 
 export interface TaskDetail extends Task {
   description: string | null;
+  // The rule bounding this task, so the client knows how to settle a delivered hire
+  // (prove it when private, or spend under the Managed Session when public).
+  policyId?: string | null;
   steps: TaskStepView[];
   receipts: Receipt[];
   // True while a T2 step is in its dispute window (buyer can approve early / dispute).

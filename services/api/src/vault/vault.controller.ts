@@ -85,6 +85,12 @@ const batchReleaseKeylessSchema = z.object({
   resetR7: z.boolean(),
   proof: z.object({ a: hex, b: hex, c: hex }),
   global: globalProofSchema.nullish(),
+  // When this keyless release settles a hire, the step each payee pays (parallel to
+  // `payees`; null for a plain disburse recipient), so the server can link the
+  // provider's earnings to the step after the real release.
+  hire: z
+    .object({ taskId: z.string().min(1), stepIds: z.array(z.string().min(1).nullable()) })
+    .optional(),
 });
 
 // Managed Sessions (server + public): the owner authorizes a server-held key with a
@@ -119,6 +125,9 @@ const sessionPayBodySchema = z.object({
   amount: z.number().positive(),
   // The public rule selected for this spend (per task). Omit for a cap-only spend.
   ruleId: rid64.optional(),
+  // When this session spend settles a hire, the task step it pays, so the provider's
+  // earnings are linked to it after the real release.
+  hire: z.object({ taskId: z.string().min(1), stepId: z.string().min(1) }).optional(),
 });
 
 /** The current session's vault position and on-chain deposit/withdraw. */
@@ -327,8 +336,8 @@ export class VaultController {
   /** Hands-off public-lane spend; bounded by the on-chain session cap (no step-up). */
   @Post('session/pay')
   sessionPay(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    const { payee, amount, ruleId } = parseBody(sessionPayBodySchema, body);
-    return this.vault.sessionPay(user.userId, payee, amount, ruleId ?? null);
+    const { payee, amount, ruleId, hire } = parseBody(sessionPayBodySchema, body);
+    return this.vault.sessionPay(user.userId, payee, amount, ruleId ?? null, hire ?? null);
   }
 
   /** Build the wallet-signed pause/unpause XDR for the caller's Managed Session key. */
@@ -470,6 +479,7 @@ export class VaultController {
             proof: toProof(req.global.proof),
           }
         : null,
+      hire: req.hire ?? null,
     });
   }
 

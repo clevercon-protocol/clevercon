@@ -46,6 +46,7 @@ import {
   planInstruction,
   type HireMode,
   type TaskStepView,
+  type TaskDetail,
 } from '../../lib/tasks';
 import { uploadFile, validateAttachment, type ArtifactRef } from '../../lib/uploads';
 import { getActivity } from '../../lib/activity';
@@ -806,12 +807,12 @@ export function CommandChat() {
         // Drop a LIVE job card into the chat: it polls the task and shows progress,
         // any question it needs answered, and the result/download inline.
         push({ id: nextId(), role: 'job', taskId: task.id, title: plan.serviceName ?? 'Service' });
-      } catch {
+      } catch (e) {
         push({
           id: nextId(),
           role: 'agent',
           ok: false,
-          text: `Could not create the job. Please try again.`,
+          text: e instanceof Error ? e.message : 'Could not create the job. Please try again.',
         });
       }
       return;
@@ -1326,15 +1327,97 @@ function InlineAnswer({ taskId, step }: { taskId: string; step: TaskStepView }) 
  * delivered output + a download for any result file. No more silent "watch it
  * in Activity".
  */
+// A step that has been delivered + accepted (RELEASED) but not yet paid: the client
+// settles it under the task's own rule (keyless proof for private, Managed Session
+// for public). A hire pays the provider ONLY after delivery, through the same path
+// a disburse uses, so no delegate/relayer is ever needed for a private rule.
+function unpaidReleased(task: TaskDetail | undefined) {
+  return (task?.steps ?? []).filter(
+    (s) => s.status === 'RELEASED' && !s.paid && !!s.payee,
+  );
+}
+
 function JobCard({ taskId, title }: { taskId: string; title: string }) {
+  const qc = useQueryClient();
+  const { data: policies = [] } = useQuery({ queryKey: ['policies'], queryFn: getPolicies });
   const { data: task } = useQuery({
     queryKey: ['task', taskId],
     queryFn: () => getTask(taskId),
     refetchInterval: (q) => {
       const t = q.state.data;
-      return t && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(t.status) ? 3000 : false;
+      if (!t) return 3000;
+      const terminal = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(t.status);
+      // Keep polling while a delivered step is still awaiting its payment, so the card
+      // reflects "paid" right after the client settles it.
+      return !terminal || unpaidReleased(t).length > 0 ? 3000 : false;
     },
   });
+  // Settle a delivered hire under its rule: pay the provider(s) the moment the work is
+  // accepted. busyRef guards against the poll re-triggering a settle already in flight.
+  const [settle, setSettle] = useState<{ phase: 'idle' | 'paying' | 'error'; error?: string }>({
+    phase: 'idle',
+  });
+  const busyRef = useRef(false);
+  const unpaid = unpaidReleased(task);
+
+  async function paySteps() {
+    if (busyRef.current || !task || unpaid.length === 0) return;
+    busyRef.current = true;
+    setSettle({ phase: 'paying' });
+    try {
+      const policy = task.policyId ? policies.find((p) => p.id === task.policyId) : undefined;
+      const isPrivate = policy ? policy.form === 'private' || (!policy.form && policy.isPrivate) : false;
+      const recipients = unpaid.map((s) => ({
+        payee: s.payee as string,
+        amount: s.estimatedCost,
+        stepId: s.id,
+      }));
+      if (isPrivate && policy) {
+        // Private: prove the pinned rule in the browser and release keyless. Many
+        // providers (compose) settle in one batched proof. No delegate.
+        const pinned = await resolvePinnedBundle(policy);
+        if (!pinned) {
+          throw new Error(
+            "This task's private rule has no backup on this device, so it can't be proven here. Open the chat on the device that created the rule.",
+          );
+        }
+        const globals = await getGlobals();
+        let globalBundle: Awaited<ReturnType<typeof resolveGlobalPrivateBundle>> = null;
+        if (globals.privateCommitment) {
+          globalBundle = await resolveGlobalPrivateBundle(policies, globals.privateCommitment);
+          if (!globalBundle) {
+            throw new Error("Your global rule can't be proven on this device.");
+          }
+        }
+        await proveAndReleaseBatch({ bundle: pinned, globalBundle, recipients, hireTaskId: taskId });
+      } else {
+        // Public (or no private rule pinned): pay each provider under the Managed Session.
+        for (const s of unpaid) {
+          await managedSessionPay(s.payee as string, s.estimatedCost, undefined, {
+            taskId,
+            stepId: s.id as string,
+          });
+        }
+      }
+      await qc.invalidateQueries({ queryKey: ['task', taskId] });
+      qc.invalidateQueries({ queryKey: ['vault'] });
+      qc.invalidateQueries({ queryKey: ['activity'] });
+      setSettle({ phase: 'idle' });
+    } catch (e) {
+      setSettle({ phase: 'error', error: e instanceof Error ? e.message : 'Could not pay the provider.' });
+    } finally {
+      busyRef.current = false;
+    }
+  }
+
+  useEffect(() => {
+    if (settle.phase === 'idle' && unpaid.length > 0 && !busyRef.current) void paySteps();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unpaid.length, settle.phase, task?.policyId, policies.length]);
+
+  const paidTotal = (task?.steps ?? [])
+    .filter((s) => s.paid)
+    .reduce((acc, s) => acc + s.estimatedCost, 0);
   const status = task?.status ?? 'RUNNING';
   const inputStep = task?.steps.find((s) => s.status === 'INPUT_REQUIRED');
   const failed = status === 'FAILED';
@@ -1405,6 +1488,27 @@ function JobCard({ taskId, title }: { taskId: string; title: string }) {
             )}
           </div>
         ))}
+        {settle.phase === 'paying' && (
+          <p className="mt-2 flex items-center gap-1.5 text-[11px] text-sky-300">
+            <Loader2 size={12} className="animate-spin" /> Paying the provider under your rule…
+          </p>
+        )}
+        {settle.phase === 'error' && (
+          <div className="mt-2 rounded-lg bg-amber-500/[0.08] p-2">
+            <p className="text-[11px] text-amber-300">{settle.error}</p>
+            <button
+              onClick={() => setSettle({ phase: 'idle' })}
+              className="mt-1 text-[11px] font-medium text-violet-300 hover:text-violet-200"
+            >
+              Try paying again
+            </button>
+          </div>
+        )}
+        {paidTotal > 0 && settle.phase !== 'paying' && (
+          <p className="mt-2 flex items-center gap-1.5 text-[11px] text-emerald-300">
+            <CheckCircle2 size={12} /> Paid ${paidTotal.toFixed(2)} to the provider under your rule.
+          </p>
+        )}
         <Link
           to={`/app/tasks/${taskId}`}
           className="mt-2 inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-300"

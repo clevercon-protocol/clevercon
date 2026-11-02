@@ -33,6 +33,9 @@ export type ProvePhase = 'proving' | 'relaying' | 'done';
 export interface ProveRecipient {
   payee: string;
   amount: number;
+  // When this recipient is a hire's provider, the task step it pays, so the server
+  // links the provider's earnings to it after the real keyless release.
+  stepId?: string;
 }
 export interface ProveResult {
   /** On-chain tx hashes, one per proof group. The keyless path settles synchronously. */
@@ -119,8 +122,14 @@ export async function proveAndReleaseBatch(opts: {
    * global. Omit when no global-private is set.
    */
   globalBundle?: { rules: PolicyBundleRules; salt: string } | null;
+  /**
+   * When this release settles a hire, the task whose steps are being paid. Combined
+   * with each recipient's `stepId`, the server links the paid provider to the step
+   * (for the provider's earnings) after the confirmed release. Omit for a disburse.
+   */
+  hireTaskId?: string;
 }): Promise<ProveResult> {
-  const { recipients, onPhase, bundle, ceilingUsdc, bundleRules, globalBundle } = opts;
+  const { recipients, onPhase, bundle, ceilingUsdc, bundleRules, globalBundle, hireTaskId } = opts;
 
   // Resolve the exact rules + salt the proof binds to. The pinned bundle is used
   // verbatim (its ceiling is the committed one); the ad-hoc path layers the
@@ -294,6 +303,11 @@ export async function proveAndReleaseBatch(opts: {
     const resp = await apiPost<{ txHash: string }>('/vault/batch-release-keyless', {
       ...request,
       global: globalField,
+      // Parallel to payees: the step each provider is paid for (null = plain disburse
+      // recipient), so the server links the hire's earnings after this release.
+      ...(hireTaskId
+        ? { hire: { taskId: hireTaskId, stepIds: groups[batchIdx].map((r) => r.stepId ?? null) } }
+        : {}),
     });
     txHashes.push(resp.txHash);
     // Advance the local accumulator for the next group using the PROVEN reset flags

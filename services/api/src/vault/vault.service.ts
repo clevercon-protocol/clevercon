@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { StrKey } from '@stellar/stellar-sdk';
-import { Prisma } from '@clevercon/db';
+import { Prisma, PaymentMethod, PaymentStatus, StepStatus } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { VaultContractService, type PublicRuleInput } from './vault-contract.service.js';
 import { DelegateService } from './delegate.service.js';
@@ -259,16 +259,80 @@ export class VaultService {
   }
 
   /**
+   * Link a hire's on-chain release to the step it paid, AFTER the release really
+   * happened (the caller holds a confirmed tx hash). This is how a hire settled via
+   * the rule's own path - keyless (private) or the Managed Session (public) - gets a
+   * Payment the provider's earnings attribute to (by step -> service). The server
+   * records it, never a client-reported hash, so earnings stay truthful.
+   *
+   * Idempotent (keyed per step), and defensive: it records only a step that belongs
+   * to THIS user, is RELEASED (delivered + accepted), and whose own payee matches
+   * the address that was actually paid - so a release can never be mis-attributed to
+   * an unrelated or unpaid step. A mismatch is skipped silently (the on-chain money
+   * already moved; the attribution is best-effort).
+   */
+  private async recordHireSettlements(
+    userId: string,
+    taskId: string,
+    stepIds: (string | null)[],
+    payees: string[],
+    txHash: string,
+  ): Promise<void> {
+    for (let i = 0; i < stepIds.length; i++) {
+      const stepId = stepIds[i];
+      if (!stepId) continue;
+      try {
+        const step = await this.prisma.taskStep.findFirst({
+          where: { id: stepId, taskId, task: { buyerId: userId } },
+          include: { service: { select: { stellarAddress: true } }, task: { select: { asset: true } } },
+        });
+        if (!step || step.status !== StepStatus.RELEASED) continue;
+        const expected = step.payee ?? step.service?.stellarAddress ?? null;
+        if (!expected || expected !== payees[i]) continue;
+        await this.prisma.payment.create({
+          data: {
+            taskId,
+            stepId,
+            fromAddress: this.contract.contractAddress || 'vault',
+            toAddress: payees[i],
+            asset: step.task?.asset ?? this.contract.usdcAsset,
+            amount: step.estimatedCost,
+            method: PaymentMethod.VAULT_RELEASE,
+            status: PaymentStatus.CONFIRMED,
+            txHash,
+            idempotencyKey: `hire-settle-${stepId}`,
+          },
+        });
+      } catch (err) {
+        // A unique-key clash means a concurrent settle already recorded this step
+        // (benign: the on-chain release is idempotent). Anything else must not undo
+        // a real on-chain payment, so log-and-continue.
+        if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) {
+          console.warn(`hire settlement record failed for step ${stepId}: ${String(err)}`);
+        }
+      }
+    }
+  }
+
+  /**
    * Hands-off public-lane spend: the server signs release_payment_session with the
    * caller's delegate/session key. No per-payment wallet signature (that is the
-   * point); the vault's on-chain scope is the whole protection.
+   * point); the vault's on-chain scope is the whole protection. When `hire` names a
+   * task step, the paid provider is linked to it for the provider's earnings.
    */
-  async sessionPay(userId: string, payee: string, amountUsdc: number, ruleIdHex?: string | null) {
+  async sessionPay(
+    userId: string,
+    payee: string,
+    amountUsdc: number,
+    ruleIdHex?: string | null,
+    hire?: { taskId: string; stepId: string } | null,
+  ) {
     if (amountUsdc <= 0) throw new BadRequestException('amount must be positive');
     if (!StrKey.isValidEd25519PublicKey(payee)) throw new BadRequestException('invalid payee');
     const kp = await this.delegates.keypairFor(userId);
     if (!kp) throw new BadRequestException('No managed session: enable one first');
     const txHash = await this.contract.releaseViaSession(kp, payee, amountUsdc, ruleIdHex ?? null);
+    if (hire) await this.recordHireSettlements(userId, hire.taskId, [hire.stepId], [payee], txHash);
     return { txHash };
   }
 
@@ -298,10 +362,16 @@ export class VaultService {
         resetR7: boolean;
         proof: { a: Buffer; b: Buffer; c: Buffer };
       } | null;
+      // When this release settles a hire, the step each payee pays (parallel to
+      // `payees`), so the provider's earnings attribute to it. Null entries (a plain
+      // disburse recipient) are skipped.
+      hire?: { taskId: string; stepIds: (string | null)[] } | null;
     },
   ): Promise<{ txHash: string }> {
+    const { hire, ...release } = params;
     const user = await this.primaryAddress(userId);
-    const txHash = await this.contract.releaseProvedKeyless({ user, ...params });
+    const txHash = await this.contract.releaseProvedKeyless({ user, ...release });
+    if (hire) await this.recordHireSettlements(userId, hire.taskId, hire.stepIds, params.payees, txHash);
     return { txHash };
   }
 
