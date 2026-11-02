@@ -33,9 +33,10 @@ function Introduction() {
       <Lead>
         CleverCon lets an AI agent do real things with money for you on Stellar: pay a vendor,
         disburse to many, hire a service, hand it a file to work on, and pay per call for APIs and
-        plugins, always strictly within limits you set, enforced on-chain and kept private, on an
-        account the platform never holds. And it is the economy on the other side: anyone can
-        publish a service for agents to find, use, and pay for.
+        plugins, always strictly within limits you set and enforced on-chain, kept private with
+        zero-knowledge or public, your choice, on an account the platform never holds. Paying is the
+        base; on top sits an open, ever-growing economy of services, published by anyone, that your
+        agent can find, use, and pay for to get real work done.
       </Lead>
       <P>
         You set the rules once (a budget, who it may pay, how much, how often). They are enforced
@@ -80,12 +81,22 @@ function Introduction() {
         snippets.
       </P>
 
-      <UseCase title="A research desk funds an agent to buy market data">
-        The desk sets one rule: pay only five approved data providers, at most $100 per purchase,
-        and no more than $500 per week. The agent buys data on its own all week. It can never pay a
-        sixth provider, never spend $101, and never blow past $500, and the ledger shows that each
-        payment was allowed without revealing the budget, the providers, or the weekly cap.
+      <UseCase title="A student points an agent at CleverCon to get coursework done">
+        They set one private rule: hire only research, data, and file services, at most $1 a job and
+        $20 a week. The agent then summarizes a paper, pulls a dataset, and resizes the figures for
+        the report, each from a different provider, paying each on delivery. It can never spend over
+        $1 a job or $20 a week, never pay a service outside the kinds allowed, and the rule stays
+        private the whole time.
       </UseCase>
+      <P>
+        That is one shape. Because anyone can list a service, the directory is open and the
+        categories are countless: price feeds and data, research and analysis, image and document
+        processing, trading signals, buying other crypto, freelance development, human work, and
+        whatever providers add next. Your agent uses whatever the task needs, finding a fitting
+        service if you do not pick one, always inside your rule. And when a task needs no service at
+        all, it just pays or disburses directly, for example a team paying three contractors each
+        month under a private payroll rule.
+      </P>
 
       <H2 id="who">Who it is for</H2>
       <UL>
@@ -100,7 +111,10 @@ function Introduction() {
       </UL>
 
       <H2 id="lanes">Sovereign by default, fast when you ask</H2>
-      <P>Every spend is authorized in one of two lanes, and the safe one is the default.</P>
+      <P>
+        Every spend is authorized in one of two lanes. Both are bounded on-chain; the private one is
+        the default, and you can choose public for speed.
+      </P>
       <UL>
         <LI>
           <B>Private (the default).</B> A zero-knowledge proof authorizes the payment against a rule
@@ -309,6 +323,16 @@ function Concepts() {
         You have seen what CleverCon can do. This page is the model underneath, the vault, rules,
         custody, and the economy, so every surface reads the same way.
       </Lead>
+
+      <H2 id="two-layers">Two layers: payments, and an open economy</H2>
+      <P>
+        Everything rests on one base: bounded, non-custodial payments from your vault, each
+        authorized by a rule. On top of that base sits an open economy of services. The two compose
+        cleanly, because hiring a service is just a bounded payment that also gets a task done, so a
+        direct payment and a hire carry the exact same guarantees. The economy is permissionless,
+        anyone can list a service, so its breadth is open-ended; what the platform fixes is not the
+        list of services but the way any of them is reached and paid for safely.
+      </P>
 
       <H2 id="vault">The vault</H2>
       <P>
@@ -564,6 +588,30 @@ function Walkthrough() {
         instead of a proof per payment; see <A to="/docs/mcp">MCP server</A> for both lanes and{' '}
         <A to="/docs/spending">Spending</A> for when to use each.
       </P>
+
+      <H2 id="hire">Walkthrough 3: hire a service to do a task (by prompt)</H2>
+      <P>
+        Scenario: resize an image for a report. The setup is the same (connect, fund, pin a rule);
+        the difference is the rule allows a service category and the agent gets work done, not just
+        moves money. This is the economy, not only a payment.
+      </P>
+      <Steps>
+        <Step n={1} title="Set a rule that allows the service">
+          A private rule with eligibility = allow the Media &amp; Files category (or the specific
+          service), per-payment max $1, weekly cap $20. Pin it. The agent may only hire what the
+          rule allows.
+        </Step>
+        <Step n={2} title="Attach the file and ask">
+          In the built-in chat (or your MCP agent), attach the image and say &quot;resize this by
+          half&quot;. The agent finds the image service, proposes a hire under your rule, and you
+          approve.
+        </Step>
+        <Step n={3} title="Watch it run, get the result, pay on delivery">
+          A live job card shows the service working, then the resized image to download. On accepted
+          delivery the provider is paid under your private rule, keyless, no delegate and no
+          per-payment signature. A service outside the allowed category is never attempted.
+        </Step>
+      </Steps>
 
       <H2 id="more">Other scenarios</H2>
       <P>The same four steps cover every use case; only the rule changes. A few to copy:</P>
