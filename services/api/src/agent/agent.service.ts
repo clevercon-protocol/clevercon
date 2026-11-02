@@ -83,8 +83,8 @@ const SYSTEM_PROMPT =
   'Amounts are USDC; use the available budget to stay realistic. ' +
   'You NEVER choose, read, or infer a spending rule: the human selects the rule the vault enforces, ' +
   'and private rules are not visible to you. Plan ONLY the actions (who/how much/which service). ' +
-  'When the user has chosen a specific service and its input schema is provided, set kind to "hire" ' +
-  'and put the input parameters you extract from the instruction into serviceParams, matching that schema.';
+  'For ANY hire, extract the chosen service’s input parameters from the instruction into ' +
+  'serviceParams, matching that service’s input schema (given with each service).';
 const TOOL_DESC = 'Return the structured spending plan for the user to review.';
 
 type Provider = 'anthropic' | 'openai' | 'none';
@@ -291,19 +291,25 @@ export class AgentService {
       this.prisma.service.findMany({
         // Only healthy, listable services (same gate as the public directory).
         where: { status: 'ACTIVE', healthy: true },
-        select: { name: true, pricePerCall: true, attachmentsIn: true },
+        // Include the input schema so the model can extract parameters for whichever
+        // service it picks (not only when the user pre-selected one).
+        select: { name: true, pricePerCall: true, attachmentsIn: true, inputSchema: true },
         take: 8,
       }),
     ]);
     const svc = services
       .map(
         (s) =>
-          `- ${s.name} ($${Number(s.pricePerCall)}/call)${s.attachmentsIn ? ' [accepts a file]' : ''}`,
+          `- ${s.name} ($${Number(s.pricePerCall)}/call)${s.attachmentsIn ? ' [accepts a file]' : ''}` +
+          (s.inputSchema ? `\n  input schema: ${JSON.stringify(s.inputSchema)}` : ''),
       )
       .join('\n');
     const parts = [
       `Available budget: ${(vault as { available: number }).available} USDC.`,
       svc ? `Services you can hire:\n${svc}` : 'No services available.',
+      'For a hire, set serviceQuery to the chosen service name and extract its input ' +
+        'parameters from the instruction into serviceParams, matching THAT service’s input ' +
+        'schema above (e.g. {"operation":"resize","width":400,"format":"jpeg"}).',
     ];
     if (hasAttachment) {
       parts.push(
