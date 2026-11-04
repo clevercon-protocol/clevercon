@@ -104,9 +104,10 @@ function VaultStrip() {
 
 // The limit the vault will enforce for one instruction, resolved to a short label.
 type Applied = { label: string; isPrivate: boolean };
-// How that limit binds to the task: an existing saved limit (policyId), an ad-hoc
-// custom rule (draft, saved-and-bound on approval), or nothing (budget only).
-type Bind = { policyId?: string };
+// How that limit binds to the task: a pinned private rule (policyId) for the private
+// lane, or a chosen public rule's on-chain id (publicRuleId) for the public lane;
+// either may be absent (a global rule, or the session's bound rule, governs then).
+type Bind = { policyId?: string; publicRuleId?: string };
 type Line = { payee: string; amount: string; reason: string };
 type PlanLine = { payee: string; amount: number; reason?: string };
 type Plan = {
@@ -137,6 +138,7 @@ type Msg =
       taskId: string;
       title: string;
       policyId?: string;
+      publicRuleId?: string;
       lane?: 'private' | 'public';
     };
 
@@ -172,6 +174,9 @@ function RuleLanePicker({
   ruleId,
   setRuleId,
   privateRules,
+  publicRules,
+  publicRuleId,
+  setPublicRuleId,
   boundRuleLabel,
   sessionActive,
   managed,
@@ -184,6 +189,11 @@ function RuleLanePicker({
   ruleId: string;
   setRuleId: (id: string) => void;
   privateRules: Policy[];
+  /** The user's public rules, selectable per instruction in the public lane. */
+  publicRules: Policy[];
+  /** The chosen public rule's on-chain id (its commitment/rid); '' = session's bound rule. */
+  publicRuleId: string;
+  setPublicRuleId: (id: string) => void;
   /** The public rule the Managed Session is BOUND to (picked on the Vault tab), or null. */
   boundRuleLabel: string | null;
   sessionActive: boolean;
@@ -241,6 +251,27 @@ function RuleLanePicker({
           <span className="text-xs text-amber-300/80">
             No Managed Session. Set one up on the Vault tab.
           </span>
+        ) : publicRules.length > 0 ? (
+          <>
+            <select
+              value={publicRuleId}
+              onChange={(e) => setPublicRuleId(e.target.value)}
+              className="cc-input max-w-[17rem] flex-1 !py-1.5 text-sm"
+              aria-label="Public rule the vault enforces"
+            >
+              <option value="">
+                {boundRuleLabel ? `Session's bound rule (${boundRuleLabel})` : 'Session cap only'}
+              </option>
+              {publicRules.map((p) => (
+                <option key={p.id} value={p.commitment}>
+                  {p.name || describeSavedLimit(p)}
+                </option>
+              ))}
+            </select>
+            <span className="text-[11px] text-slate-500">
+              {`${managed!.session!.remainingUsdc.toFixed(2)} USDC cap left${publicGlobalActive ? ' · global applies' : ''}`}
+            </span>
+          </>
         ) : (
           <span className="text-xs text-slate-400">
             {`Managed Session · ${managed!.session!.remainingUsdc.toFixed(2)} USDC cap left · rule: ${
@@ -429,6 +460,10 @@ export function CommandChat() {
   // The selected PRIVATE rule (a user-created, pinned policy). No 'default'/'none'/
   // 'custom': only a rule you created ever governs a spend.
   const [ruleId, setRuleId] = useState<string>('');
+  // The selected PUBLIC rule for the public lane, by its on-chain id (the rule's
+  // commitment/rid). '' = fall back to the rule bound to the Managed Session. The
+  // vault enforces the picked public rule on this spend (release_payment_session).
+  const [publicRuleId, setPublicRuleId] = useState<string>('');
 
   // Natural-language box: the agent parses it into a plan you then approve.
   const [nl, setNl] = useState('');
@@ -457,13 +492,18 @@ export function CommandChat() {
   const { data: globals } = useQuery({ queryKey: ['globals'], queryFn: getGlobals });
 
   // Only PINNED private rules are selectable: an unpinned commitment cannot authorize
-  // a spend on-chain (the vault rejects it, CommitmentNotAuthorized). Public spending
-  // is the Managed Session, not a per-instruction rule.
+  // a spend on-chain (the vault rejects it, CommitmentNotAuthorized).
   const privateRules = policies.filter(
     (p) =>
       (p.form === 'private' || (!p.form && p.isPrivate)) &&
       p.status !== 'archived' &&
       pinnedSet.has(p.commitment.toLowerCase()),
+  );
+  // The user's public rules, selectable per instruction in the public lane. The vault
+  // enforces the picked one on this session spend (its rid is the on-chain id); an
+  // un-pinned pick returns a clean "pin it first" error at spend time.
+  const publicRules = policies.filter(
+    (p) => (p.form === 'public' || (!p.form && !p.isPrivate)) && p.status !== 'archived',
   );
   // The global-private rule, if set AND it is a pinned private rule (only a pinned
   // commitment can authorize). It applies to EVERY private spend.
@@ -685,8 +725,11 @@ export function CommandChat() {
   }
 
   function currentBind(): Bind {
-    // Private binds the selected pinned rule; public spends under the Managed Session.
-    return lane === 'private' ? { policyId: enforcedRule?.id } : {};
+    // Private binds the selected pinned rule; public binds the chosen public rule's
+    // on-chain id (or none, to use the session's bound rule).
+    return lane === 'private'
+      ? { policyId: enforcedRule?.id }
+      : { publicRuleId: publicRuleId || undefined };
   }
 
   async function propose() {
@@ -822,6 +865,7 @@ export function CommandChat() {
           title: plan.serviceName ?? 'Service',
           // Settle under the exact rule the buyer picked for this hire.
           policyId: plan.bind.policyId,
+          publicRuleId: plan.bind.publicRuleId,
           lane: plan.lane,
         });
       } catch (e) {
@@ -865,6 +909,7 @@ export function CommandChat() {
       const result = await settleUnderRule({
         lane: plan.lane,
         policyId: plan.bind.policyId,
+        publicRuleId: plan.bind.publicRuleId,
         recipients: plan.lines.map((l) => ({ payee: l.payee, amount: l.amount })),
         policies,
       });
@@ -995,6 +1040,9 @@ export function CommandChat() {
                 ruleId={ruleId}
                 setRuleId={setRuleId}
                 privateRules={privateRules}
+                publicRules={publicRules}
+                publicRuleId={publicRuleId}
+                setPublicRuleId={setPublicRuleId}
                 boundRuleLabel={boundRuleLabel}
                 sessionActive={sessionActive}
                 managed={managed}
@@ -1214,6 +1262,9 @@ export function CommandChat() {
                   ruleId={ruleId}
                   setRuleId={setRuleId}
                   privateRules={privateRules}
+                  publicRules={publicRules}
+                  publicRuleId={publicRuleId}
+                  setPublicRuleId={setPublicRuleId}
                   boundRuleLabel={boundRuleLabel}
                   sessionActive={sessionActive}
                   managed={managed}
@@ -1300,18 +1351,20 @@ function InlineAnswer({ taskId, step }: { taskId: string; step: TaskStepView }) 
 async function settleUnderRule(opts: {
   lane: 'private' | 'public';
   policyId?: string;
+  // The chosen public rule's on-chain id (public lane); omitted = the session's bound rule.
+  publicRuleId?: string;
   recipients: { payee: string; amount: number; stepId?: string }[];
   policies: Policy[];
   hireTaskId?: string;
 }): Promise<{ total: number; legs: number }> {
-  const { lane, policyId, recipients, policies, hireTaskId } = opts;
+  const { lane, policyId, publicRuleId, recipients, policies, hireTaskId } = opts;
   const total = recipients.reduce((s, r) => s + r.amount, 0);
   if (lane === 'public') {
     for (const r of recipients) {
       await managedSessionPay(
         r.payee,
         r.amount,
-        undefined,
+        publicRuleId || undefined,
         hireTaskId && r.stepId ? { taskId: hireTaskId, stepId: r.stepId } : undefined,
       );
     }
@@ -1353,11 +1406,13 @@ function JobCard({
   taskId,
   title,
   policyId: propPolicyId,
+  publicRuleId: propPublicRuleId,
   lane: propLane,
 }: {
   taskId: string;
   title: string;
   policyId?: string;
+  publicRuleId?: string;
   lane?: 'private' | 'public';
 }) {
   const qc = useQueryClient();
@@ -1394,6 +1449,7 @@ function JobCard({
       await settleUnderRule({
         lane: propLane ?? 'private',
         policyId: propPolicyId ?? task.policyId ?? undefined,
+        publicRuleId: propPublicRuleId,
         recipients: unpaid.map((s) => ({
           payee: s.payee as string,
           amount: s.estimatedCost,
@@ -1556,7 +1612,13 @@ function ChatBubble({
   }
   if (msg.role === 'job') {
     return (
-      <JobCard taskId={msg.taskId} title={msg.title} policyId={msg.policyId} lane={msg.lane} />
+      <JobCard
+        taskId={msg.taskId}
+        title={msg.title}
+        policyId={msg.policyId}
+        publicRuleId={msg.publicRuleId}
+        lane={msg.lane}
+      />
     );
   }
   // plan

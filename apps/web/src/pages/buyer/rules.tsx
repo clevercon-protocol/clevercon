@@ -1399,14 +1399,18 @@ export function RulesManager() {
   const lane = (p: Policy): 'private' | 'public' => p.form ?? (p.isPrivate ? 'private' : 'public');
   const shown =
     formFilter === 'all' ? activePolicies : activePolicies.filter((p) => lane(p) === formFilter);
-  // A rule (either lane) needs at least one clause set.
+  // A rule (either lane) just needs to be non-empty: ANY clause the form can set
+  // counts, including a calendar window or an eligibility restriction on their own.
+  // Do not insist on a particular clause (e.g. a per-payment ceiling).
   const hasAnyRule =
     !!draft.perPaymentCeiling ||
     !!draft.perPaymentFloor ||
     !!draft.rollingCap ||
     !!draft.velocityCount ||
     draft.allowlist.length > 0 ||
-    (draft.denylist?.length ?? 0) > 0;
+    (draft.denylist?.length ?? 0) > 0 ||
+    (!!draft.calendarStart && !!draft.calendarEnd) ||
+    (draft.allowedTiers?.length ?? 0) > 0;
 
   return (
     <div>
