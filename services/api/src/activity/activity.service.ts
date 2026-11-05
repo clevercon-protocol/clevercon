@@ -154,7 +154,16 @@ export class ActivityService {
 
     const events = await this.prisma.chainEvent.findMany({
       where: {
-        type: { in: ['deposit_event', 'withdraw_event', 'release_proved_keyless_event'] },
+        type: {
+          in: [
+            'deposit_event',
+            'withdraw_event',
+            'release_proved_keyless_event',
+            // Public-lane (Managed Session) spend. Without this a public payment is
+            // on-chain and indexed but never surfaced in Activity, unlike a keyless one.
+            'release_session_event',
+          ],
+        },
       },
       orderBy: { ledger: 'desc' },
       take: 400,
@@ -166,20 +175,21 @@ export class ActivityService {
         topics?: unknown[];
         data?: { amount?: string; asset?: string } | null;
       } | null;
-      // For deposit/withdraw the account is topics[0]; for a keyless release the
-      // topics are [user, commitment], so the owner is topics[0] in both cases.
+      // The owner is topics[0] for every type here: deposit/withdraw, a keyless
+      // release ([user, commitment]), and a session release ([user, session, payee]).
       const account = typeof p?.topics?.[0] === 'string' ? (p.topics[0] as string) : '';
       if (!addresses.has(account)) continue;
       const raw = p?.data?.amount;
       const amount = raw != null ? Number(BigInt(raw)) / STROOPS_PER_USDC : undefined;
-      if (e.type === 'release_proved_keyless_event') {
-        // A private, keyless spend: one event per payee. The rule stays private, so we
-        // only surface the amount + the on-chain tx (the receipt), never the rule.
+      if (e.type === 'release_proved_keyless_event' || e.type === 'release_session_event') {
+        // A spend leaving the vault. Keyless keeps the rule private; a session spend is
+        // the public lane. Both surface the amount + the on-chain tx (the receipt).
+        const keyless = e.type === 'release_proved_keyless_event';
         out.push({
           id: `chain-${e.id}`,
           kind: 'payment',
-          title: 'Private payment sent',
-          detail: 'keyless, rule kept private',
+          title: keyless ? 'Private payment sent' : 'Payment sent',
+          detail: keyless ? 'keyless, rule kept private' : 'via your Managed Session',
           amount,
           asset: 'USDC',
           status: 'SETTLED',

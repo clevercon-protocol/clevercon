@@ -1705,6 +1705,9 @@ export function RecentActivity() {
   const { data: items = [], isLoading } = useQuery({
     queryKey: ['activity'],
     queryFn: getActivity,
+    // Chain-sourced items (keyless/session spends, deposits) land via the indexer a
+    // few seconds after settlement; poll so they appear without a manual refresh.
+    refetchInterval: 6000,
   });
   const shown = items.slice(0, 6);
   return (

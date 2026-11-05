@@ -126,6 +126,10 @@ export function ActivityPage() {
   } = useQuery({
     queryKey: ['activity'],
     queryFn: getActivity,
+    // On-chain money movements (deposits, keyless and session spends) land via the
+    // indexer a few seconds after settlement, so poll while the page is open rather
+    // than fetch once and look stuck until a manual refresh.
+    refetchInterval: 6000,
   });
 
   return (
