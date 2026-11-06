@@ -144,3 +144,5 @@ In this repo: [Development](docs/development.md), [Operations](docs/operations.m
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+<!-- Updated documentation reference -->
