@@ -9,7 +9,7 @@ import { Prisma, PaymentStatus, StepStatus, TaskMode, TaskStatus } from '@clever
 // Type-only import: @clevercon/common ships as raw TS source and the compiled API
 // (node dist/src/main.js) cannot load a `.ts` at runtime, so we must not import a
 // VALUE from it here. Schema validation uses an API-local copy (./schema-check).
-import type { InputRequest } from '@clevercon/common';
+import type { InputRequest, AttachmentSpec } from '@clevercon/common';
 import { validateAgainstSchema, type SchemaDoc } from './schema-check.js';
 import { checkEligibility, type EligibilityRules } from '../policies/eligibility.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -196,6 +196,33 @@ export class TasksService {
         throw new BadRequestException(
           'This is a metered (pay-per-call) service. It is paid from your agent wallet per call, not hireable as an escrow job.',
         );
+      }
+      // Pre-flight fulfillment gate: the input must satisfy the service's declared
+      // requirement BEFORE a job is created, so a doomed hire is refused with a clear
+      // reason (naming what is missing) instead of charging for a job that cannot run.
+      // Reuses the API-local validateAgainstSchema (same semantics as the worker's
+      // delivery check). `attachments` is lifted separately, so an empty input still
+      // validates to {} and only DECLARED required fields are enforced.
+      if (service.inputSchema) {
+        const check = validateAgainstSchema(
+          (params.input as Record<string, unknown>) ?? {},
+          service.inputSchema as Record<string, unknown>,
+        );
+        if (!check.ok) {
+          throw new BadRequestException(
+            `This service needs more input (${check.reason}). Provide it, then hire again.`,
+          );
+        }
+      }
+      const attSpec = service.attachmentsIn as AttachmentSpec | null;
+      if (attSpec?.required) {
+        const raw = (params.input as { attachments?: unknown } | undefined)?.attachments;
+        const atts = Array.isArray(raw) ? raw : [];
+        if (atts.length === 0) {
+          throw new BadRequestException(
+            'This service requires a file. Attach one (an image or document), then hire again.',
+          );
+        }
       }
       // Soft eligibility: if the buyer chose a rule that curates services (allow/deny
       // list or allowed tiers), block a disallowed hire BEFORE any task row or lock.
