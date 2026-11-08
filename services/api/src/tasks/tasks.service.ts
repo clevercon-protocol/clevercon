@@ -189,6 +189,14 @@ export class TasksService {
       }
       const service = await this.prisma.service.findUnique({ where: { id: params.serviceId } });
       if (!service) throw new BadRequestException('Unknown service');
+      // A metered (x402 / MPP) service is paid per-call from the agent's own wallet, NOT
+      // as an escrowed one-off hire, so it must never be routed through this escrow flow
+      // (it would mis-settle). Block it with a clear message until the metered lane ships.
+      if (service.interaction === 'metered' || (service.paymentModel && service.paymentModel !== 'escrow')) {
+        throw new BadRequestException(
+          'This is a metered (pay-per-call) service. It is paid from your agent wallet per call, not hireable as an escrow job.',
+        );
+      }
       // Soft eligibility: if the buyer chose a rule that curates services (allow/deny
       // list or allowed tiers), block a disallowed hire BEFORE any task row or lock.
       // The on-chain payee allowlist is still the hard backstop; this is the app

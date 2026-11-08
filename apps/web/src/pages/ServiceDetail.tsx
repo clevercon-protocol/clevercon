@@ -427,7 +427,8 @@ export function ServiceDetail() {
                 <div className="flex justify-between">
                   <dt className="text-slate-500">Pricing</dt>
                   <dd className="text-slate-300">
-                    {service.pricingModel} · {service.currency}
+                    {paymentModelLabel(service.paymentModel) ?? 'Pay on delivery'} ·{' '}
+                    {service.currency}
                   </dd>
                 </div>
                 <div className="flex justify-between">

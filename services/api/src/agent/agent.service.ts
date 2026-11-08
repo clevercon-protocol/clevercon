@@ -289,8 +289,19 @@ export class AgentService {
     const [vault, services] = await Promise.all([
       this.vault.getForUser(userId).catch(() => ({ available: 0 })),
       this.prisma.service.findMany({
-        // Only healthy, listable services (same gate as the public directory).
-        where: { status: 'ACTIVE', healthy: true },
+        // Only healthy, listable services (same gate as the public directory), and NOT
+        // metered: an x402/MPP/subscription service is paid per-call from the agent
+        // wallet, not hireable via escrow, so the agent must never pick one for a hire.
+        where: {
+          status: 'ACTIVE',
+          healthy: true,
+          NOT: {
+            OR: [
+              { interaction: 'metered' },
+              { paymentModel: { in: ['x402', 'mpp-session', 'subscription'] } },
+            ],
+          },
+        },
         // Include the input schema so the model can extract parameters for whichever
         // service it picks (not only when the user pre-selected one).
         select: { name: true, pricePerCall: true, attachmentsIn: true, inputSchema: true },
@@ -418,6 +429,13 @@ export class AgentService {
               where: {
                 status: 'ACTIVE',
                 healthy: true,
+                // Exclude metered (x402/MPP/subscription): not escrow-hireable.
+                NOT: {
+                  OR: [
+                    { interaction: 'metered' },
+                    { paymentModel: { in: ['x402', 'mpp-session', 'subscription'] } },
+                  ],
+                },
                 OR: terms.flatMap((w) => [
                   { name: { contains: w, mode: 'insensitive' as const } },
                   { description: { contains: w, mode: 'insensitive' as const } },

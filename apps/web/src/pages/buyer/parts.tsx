@@ -42,6 +42,7 @@ import {
   getServices,
   tierLabel,
   interactionLabel,
+  paymentModelLabel,
   type ServiceSort,
   type Tier,
 } from '../../lib/services';
@@ -1316,9 +1317,14 @@ export function Marketplace() {
                 >
                   <ShieldCheck size={11} /> {tierLabel(s.tier)}
                 </Badge>
-                <Badge className="border-white/10 bg-white/[0.04] text-slate-300">
-                  <Zap size={11} /> {s.pricingModel === 'MPP' ? 'metered' : 'x402'}
-                </Badge>
+                {/* Payment badge ONLY for non-escrow (metered x402 / MPP / subscription).
+                    Escrow is the default and needs no tag, so an escrow service is no
+                    longer mislabeled 'x402' off the legacy pricingModel field. */}
+                {paymentModelLabel(s.paymentModel) && (
+                  <Badge className="border-white/10 bg-white/[0.04] text-slate-300">
+                    <Zap size={11} /> {paymentModelLabel(s.paymentModel)}
+                  </Badge>
+                )}
                 {interactionLabel(s.interaction) && (
                   <Badge className="border-sky-500/25 bg-sky-500/10 text-sky-300">
                     {interactionLabel(s.interaction)}
