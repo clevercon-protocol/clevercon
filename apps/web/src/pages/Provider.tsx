@@ -25,7 +25,12 @@ import {
   setServiceStatus,
   type RegisterServiceInput,
 } from '../lib/provider';
-import { getPlatformFeeBps, interactionLabel, paymentModelLabel } from '../lib/services';
+import {
+  getPlatformFeeBps,
+  interactionLabel,
+  paymentModelLabel,
+  type Prerequisite,
+} from '../lib/services';
 import { refreshRoles } from '../lib/sessionSync';
 import { config } from '../config';
 
@@ -140,6 +145,13 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
   const [inJson, setInJson] = useState('');
   const [outJson, setOutJson] = useState('');
   const [jsonErr, setJsonErr] = useState<string | null>(null);
+  // Usage requirements a buyer must set up before hiring (auth/install/API key/info).
+  const [prereqs, setPrereqs] = useState<Prerequisite[]>([]);
+  const addPrereq = () =>
+    setPrereqs((ps) => [...ps, { kind: 'info', key: '', label: '', instructions: '' }]);
+  const updatePrereq = (i: number, patch: Partial<Prerequisite>) =>
+    setPrereqs((ps) => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+  const removePrereq = (i: number) => setPrereqs((ps) => ps.filter((_, j) => j !== i));
 
   const reg = useMutation({
     mutationFn: (input: RegisterServiceInput) => registerService(input),
@@ -199,6 +211,18 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
       !metered && needsFile
         ? { required: true, ...(acceptList.length ? { accept: acceptList } : {}) }
         : undefined;
+    // Only fully-specified requirements go up; a secret value (API key/token) is stored
+    // encrypted and sent to your endpoint as `credentials`, never shown to the buyer again.
+    const prerequisites = prereqs
+      .filter((p) => p.key.trim() && p.label.trim() && p.instructions.trim())
+      .map((p) => ({
+        kind: p.kind,
+        key: p.key.trim(),
+        label: p.label.trim(),
+        instructions: p.instructions.trim(),
+        ...(p.url?.trim() ? { url: p.url.trim() } : {}),
+        ...(p.secret ? { secret: true } : {}),
+      }));
     return {
       name: name.trim(),
       description: description.trim(),
@@ -215,6 +239,7 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
       interaction: metered ? 'metered' : interaction,
       paymentModel,
       ...(attachmentsIn ? { attachmentsIn } : {}),
+      ...(prerequisites.length ? { prerequisites } : {}),
     };
   };
 
@@ -391,35 +416,130 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
         </p>
         <details className="text-xs text-slate-400">
           <summary className="cursor-pointer select-none text-slate-300">
-            Advanced: verifier + result shape (JSON, optional)
+            Input spec, deliverable format + verifier (JSON Schema, optional)
           </summary>
-          <div className="mt-2 space-y-2">
-            <textarea
-              value={specJson}
-              onChange={(e) => setSpecJson(e.target.value)}
-              placeholder={'Verifier spec, e.g. {"predicate":"sha256"} or {"signerKey":"G..."}'}
-              className={`${controls.field} font-mono`}
-              rows={2}
-            />
-            <textarea
-              value={inJson}
-              onChange={(e) => setInJson(e.target.value)}
-              placeholder={
-                'Input JSON Schema, e.g. {"type":"object","required":["data"],"properties":{"data":{"type":"string"}}}'
-              }
-              className={`${controls.field} font-mono`}
-              rows={2}
-            />
-            <textarea
-              value={outJson}
-              onChange={(e) => setOutJson(e.target.value)}
-              placeholder={'Output JSON Schema, e.g. {"type":"object","required":["sha256"]}'}
-              className={`${controls.field} font-mono`}
-              rows={2}
-            />
+          <div className="mt-2 space-y-3">
+            <div>
+              <span className="text-[11px] font-medium text-slate-400">
+                Input spec (what the agent must provide, for it to fill correctly)
+              </span>
+              <textarea
+                value={inJson}
+                onChange={(e) => setInJson(e.target.value)}
+                placeholder={
+                  'Input JSON Schema, e.g. {"type":"object","required":["operation"],"properties":{"operation":{"type":"string"},"scale":{"type":"number"}}}'
+                }
+                className={`${controls.field} mt-1 font-mono`}
+                rows={2}
+              />
+            </div>
+            <div>
+              <span className="text-[11px] font-medium text-slate-400">
+                Deliverable format (the shape of the result you return)
+              </span>
+              <textarea
+                value={outJson}
+                onChange={(e) => setOutJson(e.target.value)}
+                placeholder={'Output JSON Schema, e.g. {"type":"object","required":["to"]}'}
+                className={`${controls.field} mt-1 font-mono`}
+                rows={2}
+              />
+            </div>
+            <div>
+              <span className="text-[11px] font-medium text-slate-400">
+                Verifier spec (how your delivery is checked, for T1)
+              </span>
+              <textarea
+                value={specJson}
+                onChange={(e) => setSpecJson(e.target.value)}
+                placeholder={'Verifier spec, e.g. {"predicate":"sha256"} or {"signerKey":"G..."}'}
+                className={`${controls.field} mt-1 font-mono`}
+                rows={2}
+              />
+            </div>
           </div>
         </details>
         {jsonErr && <p className="text-xs text-red-400">{jsonErr}</p>}
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-slate-200">Usage requirements (optional)</label>
+        <p className="text-[11px] leading-relaxed text-slate-500">
+          What a buyer must set up before hiring, that a prompt cannot carry: an API
+          key/token, an install or authorization (with a link), or setup info. The agent
+          checks these before hiring and asks the buyer to complete any that are missing;
+          satisfied values are sent to your endpoint as <code>credentials</code> (a secret
+          is encrypted and never shown to the buyer again).
+        </p>
+        {prereqs.map((p, i) => (
+          <div key={i} className="space-y-1.5 rounded-lg border border-white/10 bg-black/20 p-2.5">
+            <div className="flex gap-1.5">
+              <select
+                value={p.kind}
+                onChange={(e) => {
+                  const kind = e.target.value as Prerequisite['kind'];
+                  updatePrereq(i, { kind, secret: kind === 'apiKey' });
+                }}
+                className={controls.field}
+                aria-label="Requirement type"
+              >
+                <option value="info">Info</option>
+                <option value="apiKey">API key / token</option>
+                <option value="install">Install / connect</option>
+                <option value="oauth">Authorization</option>
+              </select>
+              <input
+                value={p.key}
+                onChange={(e) => updatePrereq(i, { key: e.target.value })}
+                placeholder="key (e.g. github_token)"
+                className={`${controls.field} font-mono`}
+                aria-label="Requirement key"
+              />
+              <button
+                type="button"
+                onClick={() => removePrereq(i)}
+                className="shrink-0 rounded-lg px-2 text-xs text-slate-500 hover:text-red-300"
+              >
+                Remove
+              </button>
+            </div>
+            <input
+              value={p.label}
+              onChange={(e) => updatePrereq(i, { label: e.target.value })}
+              placeholder="Label (e.g. GitHub access token)"
+              className={controls.field}
+              aria-label="Requirement label"
+            />
+            <input
+              value={p.instructions}
+              onChange={(e) => updatePrereq(i, { instructions: e.target.value })}
+              placeholder="Instructions for the buyer (what to do / where to get it)"
+              className={controls.field}
+              aria-label="Requirement instructions"
+            />
+            {(p.kind === 'install' || p.kind === 'oauth') && (
+              <input
+                value={p.url ?? ''}
+                onChange={(e) => updatePrereq(i, { url: e.target.value })}
+                placeholder="Setup link, e.g. https://github.com/apps/your-app/installations/new"
+                className={controls.field}
+                aria-label="Requirement setup URL"
+              />
+            )}
+            {p.kind === 'apiKey' && (
+              <p className="text-[10px] text-slate-500">
+                Stored encrypted; sent to your endpoint, never shown to the buyer again.
+              </p>
+            )}
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={addPrereq}
+          className="text-xs font-medium text-violet-300 hover:text-violet-200"
+        >
+          + Add requirement
+        </button>
       </div>
 
       <div className="flex items-center gap-3">

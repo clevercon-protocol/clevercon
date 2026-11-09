@@ -168,6 +168,15 @@ export interface RegisterServiceInput {
   interaction?: 'sync' | 'async' | 'human' | 'metered';
   paymentModel?: 'escrow' | 'x402' | 'mpp-session' | 'subscription';
   attachmentsIn?: { required?: boolean; accept?: string[]; maxSizeBytes?: number; maxCount?: number };
+  // Usage requirements the buyer must satisfy before hiring (auth/install/key/info).
+  prerequisites?: {
+    kind: 'info' | 'apiKey' | 'install' | 'oauth';
+    key: string;
+    label: string;
+    instructions: string;
+    url?: string;
+    secret?: boolean;
+  }[];
 }
 
 /** Register a service (grants PROVIDER). Demo returns a local stand-in. */
