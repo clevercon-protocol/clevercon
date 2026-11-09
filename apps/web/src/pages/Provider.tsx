@@ -11,6 +11,10 @@ import {
   Download,
   ExternalLink,
   Activity,
+  Pencil,
+  KeyRound,
+  FileInput,
+  FileOutput,
 } from 'lucide-react';
 import {
   getProviderServices,
@@ -22,8 +26,10 @@ import {
   payoutsToCsv,
   respondToDispute,
   registerService,
+  updateService,
   setServiceStatus,
   type RegisterServiceInput,
+  type ProviderServiceItem,
 } from '../lib/provider';
 import {
   getPlatformFeeBps,
@@ -123,30 +129,246 @@ function Stats() {
   );
 }
 
-function RegisterForm({ onDone }: { onDone: () => void }) {
+// A single property row in the visual schema builder.
+type SchemaField = {
+  name: string;
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'object' | 'array';
+  required: boolean;
+  description: string;
+};
+const FIELD_TYPES: SchemaField['type'][] = [
+  'string',
+  'number',
+  'integer',
+  'boolean',
+  'object',
+  'array',
+];
+
+// Best-effort parse of a stored JSON Schema object into editable rows. Returns null
+// when the text isn't a plain object-schema we can represent as flat fields (the
+// caller then falls back to the raw-JSON editor so nothing is lost).
+function schemaToFields(json: string): SchemaField[] | null {
+  const text = json.trim();
+  if (!text) return [];
+  let obj: unknown;
+  try {
+    obj = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  const o = obj as Record<string, unknown>;
+  const props = o.properties;
+  if (props === undefined && o.type === undefined) return null;
+  if (props !== undefined && (typeof props !== 'object' || Array.isArray(props))) return null;
+  const required = Array.isArray(o.required) ? (o.required as unknown[]).map(String) : [];
+  const entries = props ? Object.entries(props as Record<string, unknown>) : [];
+  const fields: SchemaField[] = [];
+  for (const [name, raw] of entries) {
+    const p = (raw ?? {}) as Record<string, unknown>;
+    const t = p.type;
+    if (typeof t !== 'string' || !FIELD_TYPES.includes(t as SchemaField['type'])) return null;
+    fields.push({
+      name,
+      type: t as SchemaField['type'],
+      required: required.includes(name),
+      description: typeof p.description === 'string' ? p.description : '',
+    });
+  }
+  return fields;
+}
+
+// Compile editable rows back into a JSON Schema object string ('' when empty).
+function fieldsToSchema(fields: SchemaField[]): string {
+  const named = fields.filter((f) => f.name.trim());
+  if (named.length === 0) return '';
+  const required = named.filter((f) => f.required).map((f) => f.name.trim());
+  const properties: Record<string, unknown> = {};
+  for (const f of named) {
+    properties[f.name.trim()] = {
+      type: f.type,
+      ...(f.description.trim() ? { description: f.description.trim() } : {}),
+    };
+  }
+  return JSON.stringify({
+    type: 'object',
+    ...(required.length ? { required } : {}),
+    properties,
+  });
+}
+
+/**
+ * Visual field-builder for an input/deliverable JSON Schema. Providers add named,
+ * typed fields instead of hand-writing JSON; an "Edit as JSON" escape hatch stays
+ * for schemas too complex for flat rows (and is auto-selected when we can't parse
+ * an existing one). The compiled schema string is lifted via onChange.
+ */
+function SchemaBuilder({
+  value,
+  onChange,
+  addLabel,
+}: {
+  value: string;
+  onChange: (json: string) => void;
+  addLabel: string;
+}) {
+  const parsed = schemaToFields(value);
+  const [fields, setFields] = useState<SchemaField[]>(parsed ?? []);
+  // Raw mode when the stored schema can't be represented as flat rows.
+  const [raw, setRaw] = useState(parsed === null);
+
+  const commit = (next: SchemaField[]) => {
+    setFields(next);
+    onChange(fieldsToSchema(next));
+  };
+  const add = () =>
+    commit([...fields, { name: '', type: 'string', required: false, description: '' }]);
+  const patch = (i: number, p: Partial<SchemaField>) =>
+    commit(fields.map((f, j) => (j === i ? { ...f, ...p } : f)));
+  const remove = (i: number) => commit(fields.filter((_, j) => j !== i));
+
+  if (raw) {
+    return (
+      <div className="space-y-1.5">
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={'JSON Schema, e.g. {"type":"object","required":["operation"],"properties":{"operation":{"type":"string"}}}'}
+          className={`${controls.field} font-mono`}
+          rows={3}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            const f = schemaToFields(value);
+            if (f) {
+              setFields(f);
+              setRaw(false);
+            }
+          }}
+          className="text-[11px] font-medium text-violet-300 hover:text-violet-200 disabled:opacity-40"
+          disabled={schemaToFields(value) === null}
+          title={schemaToFields(value) === null ? 'This JSON is too complex for the field view' : ''}
+        >
+          Use field builder
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {fields.length > 0 && (
+        <div className="space-y-1.5">
+          {fields.map((f, i) => (
+            <div key={i} className="flex flex-wrap items-center gap-1.5">
+              <input
+                value={f.name}
+                onChange={(e) => patch(i, { name: e.target.value })}
+                placeholder="field name"
+                className={`${controls.field} font-mono sm:flex-1`}
+                aria-label="Field name"
+              />
+              <select
+                value={f.type}
+                onChange={(e) => patch(i, { type: e.target.value as SchemaField['type'] })}
+                className={controls.field}
+                aria-label="Field type"
+              >
+                {FIELD_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={f.description}
+                onChange={(e) => patch(i, { description: e.target.value })}
+                placeholder="description (optional)"
+                className={`${controls.field} sm:flex-[2]`}
+                aria-label="Field description"
+              />
+              <label className="flex items-center gap-1 text-[11px] text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={f.required}
+                  onChange={(e) => patch(i, { required: e.target.checked })}
+                />
+                req
+              </label>
+              <button
+                type="button"
+                onClick={() => remove(i)}
+                className="rounded px-1.5 text-xs text-slate-500 hover:text-red-300"
+                aria-label="Remove field"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={add}
+          className="text-[11px] font-medium text-violet-300 hover:text-violet-200"
+        >
+          {addLabel}
+        </button>
+        <button
+          type="button"
+          onClick={() => setRaw(true)}
+          className="text-[11px] text-slate-500 hover:text-slate-300"
+        >
+          Edit as JSON
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onDone: () => void }) {
   const qc = useQueryClient();
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [category, setCategory] = useState('');
-  const [price, setPrice] = useState('');
-  const [endpoint, setEndpoint] = useState('');
-  const [capability, setCapability] = useState('');
-  const [address, setAddress] = useState('');
+  // Pre-fill every field from the service being edited (the owner's own view carries
+  // the full manifest); a blank form for a new registration.
+  const jsonOf = (v: unknown) => (v ? JSON.stringify(v, null, 2) : '');
+  const editInteraction =
+    edit?.interaction === 'async' || edit?.interaction === 'human' ? edit.interaction : 'sync';
+  const [name, setName] = useState(edit?.name ?? '');
+  const [description, setDescription] = useState(edit?.description ?? '');
+  const [category, setCategory] = useState(edit?.category ?? '');
+  const [price, setPrice] = useState(edit ? String(edit.pricePerCall) : '');
+  const [endpoint, setEndpoint] = useState(edit?.endpoint ?? '');
+  const [capability, setCapability] = useState(edit?.capabilities?.[0] ?? '');
+  const [address, setAddress] = useState(edit?.stellarAddress ?? '');
   const [paymentModel, setPaymentModel] = useState<
     'escrow' | 'x402' | 'mpp-session' | 'subscription'
-  >('escrow');
-  const [interaction, setInteraction] = useState<'sync' | 'async' | 'human'>('sync');
-  const [needsFile, setNeedsFile] = useState(false);
-  const [accept, setAccept] = useState('');
+  >((edit?.paymentModel as 'escrow' | 'x402' | 'mpp-session' | 'subscription') ?? 'escrow');
+  const [interaction, setInteraction] = useState<'sync' | 'async' | 'human'>(editInteraction);
+  const [needsFile, setNeedsFile] = useState(!!edit?.attachmentsIn?.required);
+  const [accept, setAccept] = useState(edit?.attachmentsIn?.accept?.join(', ') ?? '');
   // Acceptance contract: how delivery is judged before you are paid.
-  const [tier, setTier] = useState<'T1' | 'T2' | 'T3'>('T2');
-  const [vmethod, setVmethod] = useState<string>('onchain');
-  const [specJson, setSpecJson] = useState('');
-  const [inJson, setInJson] = useState('');
-  const [outJson, setOutJson] = useState('');
+  const [tier, setTier] = useState<'T1' | 'T2' | 'T3'>(
+    (edit?.tier as 'T1' | 'T2' | 'T3') ?? 'T2',
+  );
+  const [vmethod, setVmethod] = useState<string>(edit?.verification?.method ?? 'onchain');
+  const [specJson, setSpecJson] = useState(jsonOf(edit?.verification?.spec));
+  const [inJson, setInJson] = useState(jsonOf(edit?.inputSchema));
+  const [outJson, setOutJson] = useState(jsonOf(edit?.outputSchema));
   const [jsonErr, setJsonErr] = useState<string | null>(null);
   // Usage requirements a buyer must set up before hiring (auth/install/API key/info).
-  const [prereqs, setPrereqs] = useState<Prerequisite[]>([]);
+  const [prereqs, setPrereqs] = useState<Prerequisite[]>(
+    edit?.prerequisites?.map((p) => ({
+      kind: p.kind,
+      key: p.key,
+      label: p.label,
+      instructions: p.instructions,
+      url: p.url,
+      secret: p.secret,
+    })) ?? [],
+  );
   const addPrereq = () =>
     setPrereqs((ps) => [...ps, { kind: 'info', key: '', label: '', instructions: '' }]);
   const updatePrereq = (i: number, patch: Partial<Prerequisite>) =>
@@ -154,7 +376,10 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
   const removePrereq = (i: number) => setPrereqs((ps) => ps.filter((_, j) => j !== i));
 
   const reg = useMutation({
-    mutationFn: (input: RegisterServiceInput) => registerService(input),
+    // pricingModel is fixed at register time: the update endpoint ignores it, so the
+    // same built input serves both paths.
+    mutationFn: (input: RegisterServiceInput) =>
+      edit ? updateService(edit.id, input) : registerService(input),
     onSuccess: async () => {
       await refreshRoles();
       qc.invalidateQueries({ queryKey: ['provider-services'] });
@@ -253,12 +478,20 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
       }}
       className="mt-4 space-y-3 rounded-xl bg-black/20 p-4"
     >
-      <p className="text-xs leading-relaxed text-slate-400">
-        Your service lists immediately as <span className="text-slate-300">New</span> and earns a{' '}
-        <span className="text-emerald-300">Trusted</span> tier as it settles real jobs on-chain.
-        Buyers pay you from their vault under a private, policy-bounded release, you are never given
-        their key or their rule.
-      </p>
+      {edit ? (
+        <p className="text-xs leading-relaxed text-slate-400">
+          Editing <span className="text-slate-200">{edit.name}</span>. Changes re-anchor the
+          service manifest; its trust history and settlements carry over. The pricing model
+          (escrow vs metered scheme) is fixed at registration.
+        </p>
+      ) : (
+        <p className="text-xs leading-relaxed text-slate-400">
+          Your service lists immediately as <span className="text-slate-300">New</span> and earns a{' '}
+          <span className="text-emerald-300">Trusted</span> tier as it settles real jobs on-chain.
+          Buyers pay you from their vault under a private, policy-bounded release, you are never given
+          their key or their rule.
+        </p>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         <input
           value={name}
@@ -330,6 +563,8 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
           }
           className={controls.field}
           aria-label="Payment model"
+          disabled={!!edit}
+          title={edit ? 'The payment model is fixed at registration' : ''}
         >
           <option value="escrow">Escrow (pay on delivery)</option>
           <option value="x402">Pay-per-call (x402)</option>
@@ -414,36 +649,30 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
           T1 is paid only when the worker/chain re-checks your result (most trusted). T2 pays on the
           declared result shape with a dispute window. T3 waits for your buyer&apos;s approval.
         </p>
-        <details className="text-xs text-slate-400">
+        <details className="text-xs text-slate-400" open={!!edit}>
           <summary className="cursor-pointer select-none text-slate-300">
-            Input spec, deliverable format + verifier (JSON Schema, optional)
+            Input spec, deliverable format + verifier (optional)
           </summary>
           <div className="mt-2 space-y-3">
             <div>
               <span className="text-[11px] font-medium text-slate-400">
-                Input spec (what the agent must provide, for it to fill correctly)
+                Input spec (the fields the agent must provide, so it fills the request correctly)
               </span>
-              <textarea
-                value={inJson}
-                onChange={(e) => setInJson(e.target.value)}
-                placeholder={
-                  'Input JSON Schema, e.g. {"type":"object","required":["operation"],"properties":{"operation":{"type":"string"},"scale":{"type":"number"}}}'
-                }
-                className={`${controls.field} mt-1 font-mono`}
-                rows={2}
-              />
+              <div className="mt-1">
+                <SchemaBuilder value={inJson} onChange={setInJson} addLabel="+ Add input field" />
+              </div>
             </div>
             <div>
               <span className="text-[11px] font-medium text-slate-400">
-                Deliverable format (the shape of the result you return)
+                Deliverable format (the fields in the result you return)
               </span>
-              <textarea
-                value={outJson}
-                onChange={(e) => setOutJson(e.target.value)}
-                placeholder={'Output JSON Schema, e.g. {"type":"object","required":["to"]}'}
-                className={`${controls.field} mt-1 font-mono`}
-                rows={2}
-              />
+              <div className="mt-1">
+                <SchemaBuilder
+                  value={outJson}
+                  onChange={setOutJson}
+                  addLabel="+ Add result field"
+                />
+              </div>
             </div>
             <div>
               <span className="text-[11px] font-medium text-slate-400">
@@ -544,12 +773,22 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
 
       <div className="flex items-center gap-3">
         <button type="submit" disabled={!canSubmit} className={controls.primary}>
-          {reg.isPending ? 'Registering…' : 'Register service'}
+          {edit
+            ? reg.isPending
+              ? 'Saving…'
+              : 'Save changes'
+            : reg.isPending
+              ? 'Registering…'
+              : 'Register service'}
         </button>
         <button type="button" onClick={onDone} className="text-sm text-slate-400 hover:text-white">
           Cancel
         </button>
-        {reg.error && <span className="text-sm text-red-400">Could not register.</span>}
+        {reg.error && (
+          <span className="text-sm text-red-400">
+            {edit ? 'Could not save changes.' : 'Could not register.'}
+          </span>
+        )}
       </div>
     </form>
   );
@@ -557,6 +796,7 @@ function RegisterForm({ onDone }: { onDone: () => void }) {
 
 function ServicesCard() {
   const [registering, setRegistering] = useState(false);
+  const [editing, setEditing] = useState<ProviderServiceItem | null>(null);
   const qc = useQueryClient();
   const {
     data: services = [],
@@ -578,7 +818,13 @@ function ServicesCard() {
         title="Your services"
         hint="Register endpoints agents can hire; pause one to remove it from the directory."
         action={
-          <button onClick={() => setRegistering((v) => !v)} className={controls.chip}>
+          <button
+            onClick={() => {
+              setEditing(null);
+              setRegistering((v) => !v);
+            }}
+            className={controls.chip}
+          >
             {registering ? (
               'Close'
             ) : (
@@ -590,7 +836,16 @@ function ServicesCard() {
         }
       />
       <div className="px-5 pb-5">
-        {registering && <RegisterForm onDone={() => setRegistering(false)} />}
+        {(registering || editing) && (
+          <RegisterForm
+            key={editing?.id ?? 'new'}
+            edit={editing}
+            onDone={() => {
+              setRegistering(false);
+              setEditing(null);
+            }}
+          />
+        )}
         <div className="mt-4">
           {isLoading ? (
             <Loading rows={2} />
@@ -628,6 +883,32 @@ function ServicesCard() {
                         <span className="text-sky-300">{interactionLabel(s.interaction)}</span>
                       )}
                       {s.requiresFile && <span className="text-amber-300">needs file</span>}
+                      {(s.prerequisites?.length ?? 0) > 0 && (
+                        <span
+                          className="inline-flex items-center gap-1 text-amber-200"
+                          title={`Buyers must set up before hiring: ${s.prerequisites!
+                            .map((p) => p.label)
+                            .join(', ')}`}
+                        >
+                          <KeyRound size={11} /> {s.prerequisites!.length} setup req
+                        </span>
+                      )}
+                      {s.inputSchema && (
+                        <span
+                          className="inline-flex items-center gap-1 text-slate-400"
+                          title="An input spec is declared; agents fill it when hiring."
+                        >
+                          <FileInput size={11} /> input spec
+                        </span>
+                      )}
+                      {s.outputSchema && (
+                        <span
+                          className="inline-flex items-center gap-1 text-slate-400"
+                          title="A deliverable format is declared for your result."
+                        >
+                          <FileOutput size={11} /> deliverable spec
+                        </span>
+                      )}
                       <span>{s.settlements} settled</span>
                       <span>{s.uniquePayers} payers</span>
                       {s.disputes > 0 && (
@@ -669,6 +950,16 @@ function ServicesCard() {
                         {s.status}
                       </div>
                     </div>
+                    <button
+                      onClick={() => {
+                        setRegistering(false);
+                        setEditing(s);
+                      }}
+                      className={`${controls.chip} shrink-0`}
+                      title="Edit this service"
+                    >
+                      <Pencil size={13} /> Edit
+                    </button>
                     <button
                       onClick={() => toggle.mutate({ id: s.id, active: s.status !== 'ACTIVE' })}
                       disabled={toggle.isPending}

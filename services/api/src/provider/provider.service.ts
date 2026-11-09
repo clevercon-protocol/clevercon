@@ -78,6 +78,10 @@ export interface UpdateServiceParams {
   pricePerCall?: number;
   endpoint?: string;
   stellarAddress?: string;
+  tier?: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  verification?: { method: string; spec?: Record<string, unknown> };
   interaction?: string;
   paymentModel?: string;
   attachmentsIn?: {
@@ -127,7 +131,15 @@ function serializeService(s: ServiceWithRep, uniquePayers = 0, payoutReady: bool
     id: s.id,
     agentId: s.agentId,
     name: s.name,
+    // The owner's full editable manifest (this is the provider's own view, so the
+    // otherwise-private endpoint/payout/schemas are included for the edit form).
+    description: s.description,
     category: s.category,
+    capabilities: s.capabilities ?? [],
+    endpoint: s.endpoint,
+    stellarAddress: s.stellarAddress,
+    inputSchema: s.inputSchema ?? null,
+    outputSchema: s.outputSchema ?? null,
     pricePerCall: Number(s.pricePerCall),
     currency: s.currency,
     status: s.status,
@@ -281,6 +293,13 @@ export class ProviderService {
       data.pricePerCall = new Prisma.Decimal(params.pricePerCall);
     if (params.endpoint !== undefined) data.endpoint = params.endpoint;
     if (params.stellarAddress !== undefined) data.stellarAddress = params.stellarAddress;
+    if (params.tier !== undefined) data.tier = params.tier;
+    if (params.inputSchema !== undefined)
+      data.inputSchema = params.inputSchema as Prisma.InputJsonValue;
+    if (params.outputSchema !== undefined)
+      data.outputSchema = params.outputSchema as Prisma.InputJsonValue;
+    if (params.verification !== undefined)
+      data.verification = params.verification as unknown as Prisma.InputJsonValue;
     if (params.interaction !== undefined) data.interaction = params.interaction;
     if (params.paymentModel !== undefined) data.paymentModel = params.paymentModel;
     if (params.attachmentsIn !== undefined)

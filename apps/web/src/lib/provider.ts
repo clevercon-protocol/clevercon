@@ -5,7 +5,17 @@ import { demoEarnings, demoServices, demoJobs } from './demo';
 export interface ProviderServiceItem {
   id: string;
   name: string;
+  // Full editable manifest (the owner's own view), for the edit form.
+  description?: string;
   category: string | null;
+  capabilities?: string[];
+  endpoint?: string;
+  stellarAddress?: string;
+  inputSchema?: Record<string, unknown> | null;
+  outputSchema?: Record<string, unknown> | null;
+  verification?: { method: string; spec?: Record<string, unknown> } | null;
+  attachmentsIn?: { required?: boolean; accept?: string[] } | null;
+  prerequisites?: RegisterServiceInput['prerequisites'] | null;
   pricePerCall: number;
   status: string;
   rating: number;
@@ -81,6 +91,15 @@ interface ApiProviderService {
   id: string;
   name: string;
   category: string | null;
+  // Full editable manifest (owner's own view) returned by the provider endpoints.
+  description?: string;
+  capabilities?: string[];
+  endpoint?: string;
+  stellarAddress?: string;
+  inputSchema?: Record<string, unknown> | null;
+  outputSchema?: Record<string, unknown> | null;
+  verification?: { method: string; spec?: Record<string, unknown> } | null;
+  prerequisites?: RegisterServiceInput['prerequisites'] | null;
   pricePerCall: number;
   status: string;
   tier?: string;
@@ -92,7 +111,7 @@ interface ApiProviderService {
   payoutReady?: boolean | null;
   interaction?: string | null;
   paymentModel?: string | null;
-  attachmentsIn?: { required?: boolean } | null;
+  attachmentsIn?: { required?: boolean; accept?: string[] } | null;
   healthy?: boolean;
   lastHealthyAt?: string | null;
   reputation: { score: number } | null;
@@ -196,15 +215,9 @@ export async function registerService(input: RegisterServiceInput): Promise<Prov
   return mapService(await apiPost<ApiProviderService>('/provider/services', input));
 }
 
-export interface UpdateServiceInput {
-  name?: string;
-  description?: string;
-  category?: string;
-  capabilities?: string[];
-  pricePerCall?: number;
-  endpoint?: string;
-  stellarAddress?: string;
-}
+// Everything a provider may edit after registration (pricingModel + payoutProof are
+// fixed at register time). All optional: a partial update.
+export type UpdateServiceInput = Partial<Omit<RegisterServiceInput, 'pricingModel'>>;
 
 const DEMO_TRUST = {
   tier: 'T2',
@@ -226,6 +239,15 @@ function mapService(s: ApiProviderService): ProviderServiceItem {
     id: s.id,
     name: s.name,
     category: s.category,
+    description: s.description,
+    capabilities: s.capabilities,
+    endpoint: s.endpoint,
+    stellarAddress: s.stellarAddress,
+    inputSchema: s.inputSchema ?? null,
+    outputSchema: s.outputSchema ?? null,
+    verification: s.verification ?? null,
+    attachmentsIn: s.attachmentsIn ?? null,
+    prerequisites: s.prerequisites ?? null,
     pricePerCall: s.pricePerCall,
     status: s.status,
     rating: s.reputation?.score ?? 0,

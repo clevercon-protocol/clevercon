@@ -78,12 +78,20 @@ const updateSchema = z
     pricePerCall: z.number().nonnegative().optional(),
     endpoint: z.string().url().optional(),
     stellarAddress: z.string().min(1).max(120).optional(),
+    tier: z.enum(['T1', 'T2', 'T3']).optional(),
+    inputSchema: jsonSchemaObj.optional(),
+    outputSchema: jsonSchemaObj.optional(),
+    verification: verificationSchema.optional(),
     interaction: interactionSchema.optional(),
     paymentModel: paymentModelSchema.optional(),
     attachmentsIn: attachmentSpecSchema.optional(),
     prerequisites: z.array(prerequisiteSchema).max(10).optional(),
   })
-  .refine((o) => Object.keys(o).length > 0, { message: 'No fields to update' });
+  .refine((o) => Object.keys(o).length > 0, { message: 'No fields to update' })
+  .refine(
+    (o) => !o.tier || !o.verification || TIER_METHODS[o.tier].includes(o.verification.method),
+    { message: 'verification.method must match the tier (T1 trustless / T2 attest / T3 manual)' },
+  );
 
 const statusSchema = z.object({ active: z.boolean() });
 
