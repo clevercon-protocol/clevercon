@@ -39,6 +39,17 @@ export interface AttachmentSpec {
   maxCount?: number;
 }
 
+/** A usage requirement the buyer must satisfy before hiring (mirror of common). */
+export type PrerequisiteKind = 'info' | 'apiKey' | 'install' | 'oauth';
+export interface Prerequisite {
+  kind: PrerequisiteKind;
+  key: string;
+  label: string;
+  instructions: string;
+  url?: string;
+  secret?: boolean;
+}
+
 export type ResultStatus = 'completed' | 'working' | 'input_required' | 'failed';
 
 export interface InputRequest {
@@ -69,6 +80,8 @@ export interface ServiceManifest {
   paymentModel?: PaymentModel;
   /** Input-attachment requirement, when the service needs files on input. */
   attachmentsIn?: AttachmentSpec;
+  /** Usage requirements the buyer must satisfy before hiring (auth/install/key/info). */
+  prerequisites?: Prerequisite[];
   /** The service may ask the user a question mid-job (elicitation). */
   mayElicit?: boolean;
   /** The service streams a metered result (per-tick billing). */

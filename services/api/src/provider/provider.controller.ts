@@ -23,6 +23,16 @@ const attachmentSpecSchema = z.object({
   maxCount: z.number().int().positive().max(20).optional(),
 });
 
+// Usage requirements the buyer must satisfy before hiring (auth/install/key/info).
+const prerequisiteSchema = z.object({
+  kind: z.enum(['info', 'apiKey', 'install', 'oauth']),
+  key: z.string().min(1).max(60),
+  label: z.string().min(1).max(120),
+  instructions: z.string().min(1).max(600),
+  url: z.string().url().optional(),
+  secret: z.boolean().optional(),
+});
+
 // Methods valid for each tier: T1 is trustless, T2 is attested (schema + dispute),
 // T3 is human/milestone. A manifest whose method does not match its tier is rejected.
 const TIER_METHODS: Record<string, string[]> = {
@@ -49,6 +59,7 @@ const registerSchema = z
     interaction: interactionSchema.optional(),
     paymentModel: paymentModelSchema.optional(),
     attachmentsIn: attachmentSpecSchema.optional(),
+    prerequisites: z.array(prerequisiteSchema).max(10).optional(),
     // Required only when the payout address is not the caller's own wallet: a
     // signature by that address's key over a challenge from GET /payout-challenge.
     payoutProof: z.object({ challenge: z.string(), signature: z.string() }).optional(),
@@ -70,6 +81,7 @@ const updateSchema = z
     interaction: interactionSchema.optional(),
     paymentModel: paymentModelSchema.optional(),
     attachmentsIn: attachmentSpecSchema.optional(),
+    prerequisites: z.array(prerequisiteSchema).max(10).optional(),
   })
   .refine((o) => Object.keys(o).length > 0, { message: 'No fields to update' });
 

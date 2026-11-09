@@ -108,6 +108,8 @@ function serialize(s: ServiceWithRep, verified: Set<string>, stat?: PayerStat) {
     interaction: s.interaction ?? null,
     paymentModel: s.paymentModel ?? null,
     attachmentsIn: s.attachmentsIn ?? null,
+    // Usage requirements the buyer must satisfy before hiring (auth/install/key/info).
+    prerequisites: s.prerequisites ?? null,
     // System-managed endpoint health (auto-recovering). The directory already hides
     // unhealthy services; this lets a direct link show it is temporarily unavailable.
     healthy: s.healthy,

@@ -210,6 +210,10 @@ model Service {
   interaction     String? // sync | async | human | metered
   paymentModel    String? // escrow | x402 | mpp-session | subscription
   attachmentsIn   Json? // AttachmentSpec {required,accept,maxSizeBytes,maxCount} for required input files
+  // Usage requirements the buyer must satisfy BEFORE hiring (not given in the prompt):
+  // an authorization/OAuth, an install, an API key/credential, or info. Prerequisite[]:
+  // { kind: 'info'|'apiKey'|'install'|'oauth', key, label, instructions, url?, secret? }.
+  prerequisites   Json?
   registeredAt    DateTime      @default(now())
   lastSeen        DateTime?
   // System-managed health (a periodic worker pings the endpoint's /health). This is
@@ -229,6 +233,24 @@ model Service {
   @@index([providerId])
   @@index([category])
   @@map("services")
+}
+
+// A buyer's satisfied usage requirements for one service (see Service.prerequisites).
+// One row per (user, service). `data` holds non-secret values { key: value } and a
+// marker for install/oauth the user confirmed; `secretCipher` holds the encrypted JSON
+// of secret values (apiKey/token), passed to the provider at job time, never to the LLM.
+model ServiceSetup {
+  id           String   @id @default(cuid())
+  userId       String
+  serviceId    String
+  data         Json     @default("{}")
+  secretCipher String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, serviceId])
+  @@index([userId])
+  @@map("service_setups")
 }
 
 model ServiceReputation {

@@ -77,6 +77,28 @@ export interface AttachmentSpec {
   maxCount?: number;
 }
 
+/**
+ * A usage requirement the BUYER must satisfy before hiring, that a prompt cannot
+ * carry: an authorization/OAuth, an app install, an API key/credential, or setup info
+ * (a repo name, a channel id). The agent checks these before a hire and asks the user
+ * to complete any unmet one. A `secret` value is stored encrypted and passed to the
+ * provider at job time, never to the model.
+ */
+export type PrerequisiteKind = 'info' | 'apiKey' | 'install' | 'oauth';
+export interface Prerequisite {
+  kind: PrerequisiteKind;
+  /** Stable key the provider reads the satisfied value under, e.g. "github_token". */
+  key: string;
+  /** Short label shown to the buyer, e.g. "GitHub access token". */
+  label: string;
+  /** What the buyer must do (shown in the usage-requirements UI). */
+  instructions: string;
+  /** For install/oauth: a URL the buyer visits to set it up. */
+  url?: string;
+  /** True for a credential/token: stored encrypted, passed to the provider, never shown. */
+  secret?: boolean;
+}
+
 /** The lifecycle status a provider reports for a step (MCP Tasks vocabulary). */
 export type ResultStatus = 'completed' | 'working' | 'input_required' | 'failed';
 
@@ -121,6 +143,8 @@ export interface ServiceManifest {
   paymentModel?: PaymentModel;
   /** Input-attachment requirement, when the service needs files on input. */
   attachmentsIn?: AttachmentSpec;
+  /** Usage requirements the buyer must satisfy before hiring (auth/install/key/info). */
+  prerequisites?: Prerequisite[];
   /** The service may ask the user a question mid-job (elicitation). */
   mayElicit?: boolean;
   /** The service streams a metered result (per-tick billing). */

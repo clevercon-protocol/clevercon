@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { Prisma, PaymentStatus, PricingModel, Role, ServiceStatus } from '@clevercon/db';
+import type { Prerequisite } from '@clevercon/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegistryContractService } from './registry-contract.service.js';
 import { issuePayoutChallenge, verifyPayoutOwnership } from './payout-proof.js';
@@ -62,6 +63,8 @@ export interface RegisterServiceParams {
     maxSizeBytes?: number;
     maxCount?: number;
   };
+  /** Usage requirements the buyer must satisfy before hiring. */
+  prerequisites?: Prerequisite[];
   /** Proof of control over a payout address that is not the caller's own wallet. */
   payoutProof?: { challenge: string; signature: string };
 }
@@ -83,6 +86,7 @@ export interface UpdateServiceParams {
     maxSizeBytes?: number;
     maxCount?: number;
   };
+  prerequisites?: Prerequisite[];
 }
 
 /** Stable, URL-safe id from a display name plus a short random suffix. */
@@ -133,6 +137,7 @@ function serializeService(s: ServiceWithRep, uniquePayers = 0, payoutReady: bool
     interaction: s.interaction ?? null,
     paymentModel: s.paymentModel ?? null,
     attachmentsIn: s.attachmentsIn ?? null,
+    prerequisites: s.prerequisites ?? null,
     // The provider's own trust view: how they rank and why.
     trust: trustTier(settlements, score, uniquePayers, disputesUpheld, totalJobs),
     settlements,
@@ -206,6 +211,9 @@ export class ProviderService {
           interaction: params.interaction ?? undefined,
           paymentModel: params.paymentModel ?? undefined,
           attachmentsIn: (params.attachmentsIn ?? undefined) as Prisma.InputJsonValue | undefined,
+          prerequisites: (params.prerequisites ?? undefined) as unknown as
+            | Prisma.InputJsonValue
+            | undefined,
           manifestHash: manifestHash({
             name: params.name,
             description: params.description,
@@ -277,6 +285,8 @@ export class ProviderService {
     if (params.paymentModel !== undefined) data.paymentModel = params.paymentModel;
     if (params.attachmentsIn !== undefined)
       data.attachmentsIn = params.attachmentsIn as Prisma.InputJsonValue;
+    if (params.prerequisites !== undefined)
+      data.prerequisites = params.prerequisites as unknown as Prisma.InputJsonValue;
 
     const updated = await this.prisma.service.update({
       where: { id: serviceId },
