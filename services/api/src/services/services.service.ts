@@ -1,7 +1,9 @@
-import { Injectable, NotFoundException, Optional } from '@nestjs/common';
-import { Prisma, ServiceStatus } from '@clevercon/db';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { Prisma, ServiceStatus, encryptSecret, decryptSecret } from '@clevercon/db';
+import type { Prerequisite } from '@clevercon/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { VaultContractService } from '../vault/vault-contract.service.js';
+import { satisfiedKeys } from './prerequisites.js';
 
 type ServiceWithRep = Prisma.ServiceGetPayload<{ include: { reputation: true } }>;
 
@@ -248,5 +250,80 @@ export class ServicesService {
     if (!s) throw new NotFoundException('Service not found');
     const stats = await this.payerStats([s.id]);
     return serialize(s, verifiedAgentIds(), stats.get(s.id));
+  }
+
+  /**
+   * A buyer's setup status for one service's usage requirements: each prerequisite,
+   * whether it is satisfied, and the saved NON-SECRET values (a secret is never echoed
+   * back, only whether it is set).
+   */
+  async getSetup(userId: string, serviceId: string) {
+    const service = await this.prisma.service.findUnique({
+      where: { id: serviceId },
+      select: { prerequisites: true },
+    });
+    if (!service) throw new NotFoundException('Service not found');
+    const prerequisites = (service.prerequisites ?? []) as unknown as Prerequisite[];
+    const setup = await this.prisma.serviceSetup.findUnique({
+      where: { userId_serviceId: { userId, serviceId } },
+    });
+    const have = satisfiedKeys(setup);
+    const data = (setup?.data ?? {}) as Record<string, unknown>;
+    return {
+      prerequisites,
+      requirements: prerequisites.map((p) => ({
+        key: p.key,
+        satisfied: have.has(p.key),
+        // Echo a non-secret value so the form can show what was entered; never a secret.
+        value: p.secret ? undefined : data[p.key],
+      })),
+    };
+  }
+
+  /**
+   * Save a buyer's answers to a service's usage requirements. Secret values (API
+   * keys/tokens) are encrypted into `secretCipher`; non-secret values go in `data`.
+   * Merges with any existing setup, so a partial update never clears other answers.
+   */
+  async saveSetup(userId: string, serviceId: string, values: Record<string, string>) {
+    const service = await this.prisma.service.findUnique({
+      where: { id: serviceId },
+      select: { prerequisites: true },
+    });
+    if (!service) throw new NotFoundException('Service not found');
+    const prerequisites = (service.prerequisites ?? []) as unknown as Prerequisite[];
+    const byKey = new Map(prerequisites.map((p) => [p.key, p]));
+
+    const existing = await this.prisma.serviceSetup.findUnique({
+      where: { userId_serviceId: { userId, serviceId } },
+    });
+    const data = { ...((existing?.data ?? {}) as Record<string, unknown>) };
+    let secrets: Record<string, unknown> = {};
+    if (existing?.secretCipher) {
+      try {
+        secrets = JSON.parse(decryptSecret(existing.secretCipher)) as Record<string, unknown>;
+      } catch {
+        secrets = {};
+      }
+    }
+    for (const [key, raw] of Object.entries(values)) {
+      const p = byKey.get(key);
+      if (!p) throw new BadRequestException(`Unknown requirement: ${key}`);
+      const value = String(raw ?? '').trim();
+      if (p.secret) {
+        if (value) secrets[key] = value;
+        else delete secrets[key];
+      } else {
+        if (value) data[key] = value;
+        else delete data[key];
+      }
+    }
+    const secretCipher = Object.keys(secrets).length ? encryptSecret(JSON.stringify(secrets)) : null;
+    await this.prisma.serviceSetup.upsert({
+      where: { userId_serviceId: { userId, serviceId } },
+      update: { data: data as Prisma.InputJsonValue, secretCipher },
+      create: { userId, serviceId, data: data as Prisma.InputJsonValue, secretCipher },
+    });
+    return this.getSetup(userId, serviceId);
   }
 }

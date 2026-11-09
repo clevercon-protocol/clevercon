@@ -9,7 +9,8 @@ import { Prisma, PaymentStatus, StepStatus, TaskMode, TaskStatus } from '@clever
 // Type-only import: @clevercon/common ships as raw TS source and the compiled API
 // (node dist/src/main.js) cannot load a `.ts` at runtime, so we must not import a
 // VALUE from it here. Schema validation uses an API-local copy (./schema-check).
-import type { InputRequest, AttachmentSpec } from '@clevercon/common';
+import type { InputRequest, AttachmentSpec, Prerequisite } from '@clevercon/common';
+import { satisfiedKeys, unmetPrerequisites, unmetMessage } from '../services/prerequisites.js';
 import { validateAgainstSchema, type SchemaDoc } from './schema-check.js';
 import { checkEligibility, type EligibilityRules } from '../policies/eligibility.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -223,6 +224,18 @@ export class TasksService {
             'This service requires a file. Attach one (an image or document), then hire again.',
           );
         }
+      }
+      // Usage-requirements gate: the buyer must have satisfied the service's declared
+      // prerequisites (an authorization, an install, an API key, or info a prompt cannot
+      // carry) BEFORE a hire, so the AI tells them to set it up rather than hiring a
+      // service that cannot run. The provider receives the satisfied values at job time.
+      const prereqs = service.prerequisites as unknown as Prerequisite[] | null;
+      if (Array.isArray(prereqs) && prereqs.length) {
+        const setup = await this.prisma.serviceSetup.findUnique({
+          where: { userId_serviceId: { userId, serviceId: service.id } },
+        });
+        const unmet = unmetPrerequisites(prereqs, satisfiedKeys(setup));
+        if (unmet.length) throw new BadRequestException(unmetMessage(unmet));
       }
       // Soft eligibility: if the buyer chose a rule that curates services (allow/deny
       // list or allowed tiers), block a disallowed hire BEFORE any task row or lock.
