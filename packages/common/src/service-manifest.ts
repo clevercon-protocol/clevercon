@@ -162,6 +162,12 @@ export interface JobRequestEnvelope {
   input: Record<string, unknown>;
   /** Buyer-supplied inputs, by reference, never large-inline. */
   attachments?: ArtifactRef[];
+  /**
+   * The buyer's satisfied usage-requirement values (keyed by Prerequisite.key): an API
+   * key/token, an OAuth marker, or setup info. Sent to the PROVIDER so it can act on the
+   * buyer's behalf; secret values are decrypted server-side and never exposed to the LLM.
+   */
+  credentials?: Record<string, string>;
   replyFormat: 'json' | 'text' | 'reference';
   /** Unix seconds; past it the job fails and the lock refunds (never hang). */
   deadline: number;

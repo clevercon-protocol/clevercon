@@ -13,10 +13,15 @@ import {
   ShieldCheck,
   Paperclip,
   X,
+  Check,
+  ExternalLink,
+  KeyRound,
 } from 'lucide-react';
 import {
   getService,
   getPlatformFeeBps,
+  getServiceSetup,
+  saveServiceSetup,
   tierLabel,
   verificationBlurb,
   interactionLabel,
@@ -96,6 +101,109 @@ function MeteredHireBox({ paymentModel }: { paymentModel?: string | null }) {
         Then point your agent at this service&apos;s endpoint; each call settles over{' '}
         {paymentModel === 'mpp-session' ? 'an MPP session' : 'x402'} from the agent wallet.
       </p>
+    </div>
+  );
+}
+
+/**
+ * Usage requirements: what the buyer must set up before hiring (an authorization, an
+ * install, an API key/credential, or info a prompt cannot carry). The buyer satisfies
+ * them once; a secret is stored encrypted and shown only as "set", never echoed back.
+ * The hire is gated server-side on these, so the agent asks for setup rather than
+ * hiring a service that cannot run.
+ */
+function RequirementsPanel({ serviceId }: { serviceId: string }) {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['service-setup', serviceId],
+    queryFn: () => getServiceSetup(serviceId),
+  });
+  const [values, setValues] = useState<Record<string, string>>({});
+  const save = useMutation({
+    mutationFn: (v: Record<string, string>) => saveServiceSetup(serviceId, v),
+    onSuccess: (d) => {
+      qc.setQueryData(['service-setup', serviceId], d);
+      setValues({});
+    },
+  });
+  const prereqs = data?.prerequisites ?? [];
+  if (prereqs.length === 0) return null;
+  const met = new Map((data?.requirements ?? []).map((r) => [r.key, r.satisfied]));
+  const allMet = prereqs.every((p) => met.get(p.key));
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6">
+      <div className="flex items-center gap-2">
+        <KeyRound size={16} className="text-violet-300" />
+        <h2 className="font-semibold text-white">Usage requirements</h2>
+        {allMet && (
+          <span className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
+            <Check size={10} /> All set
+          </span>
+        )}
+      </div>
+      <p className="mt-1 text-sm text-slate-400">
+        Set these up once before hiring this service.
+      </p>
+      <div className="mt-4 space-y-4">
+        {prereqs.map((p) => {
+          const satisfied = !!met.get(p.key);
+          const isField = p.kind === 'apiKey' || p.kind === 'info';
+          return (
+            <div key={p.key} className="rounded-xl bg-black/20 p-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
+                {satisfied ? (
+                  <Check size={13} className="text-emerald-300" />
+                ) : (
+                  <span className="h-2 w-2 rounded-full bg-amber-400" />
+                )}
+                {p.label}
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">{p.instructions}</p>
+              {p.url && (
+                <a
+                  href={p.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1.5 inline-flex items-center gap-1 text-xs text-violet-300 hover:text-violet-200"
+                >
+                  Open setup <ExternalLink size={11} />
+                </a>
+              )}
+              {isField ? (
+                <input
+                  type={p.secret ? 'password' : 'text'}
+                  value={values[p.key] ?? ''}
+                  onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.value }))}
+                  placeholder={satisfied ? '•••••• (saved - enter to replace)' : p.label}
+                  className="mt-2 w-full rounded-lg bg-black/30 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/40"
+                  aria-label={p.label}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => save.mutate({ [p.key]: satisfied ? '' : 'done' })}
+                  disabled={save.isPending}
+                  className="mt-2 rounded-lg bg-white/[0.06] px-2.5 py-1 text-xs text-violet-300 hover:bg-white/10 disabled:opacity-60"
+                >
+                  {satisfied ? 'Mark not done' : "I've done this"}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        onClick={() => save.mutate(values)}
+        disabled={Object.keys(values).length === 0 || save.isPending}
+        className="mt-4 inline-flex w-full items-center justify-center rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium hover:bg-violet-500 disabled:opacity-60"
+      >
+        {save.isPending ? 'Saving…' : 'Save requirements'}
+      </button>
+      {save.error && (
+        <p className="mt-2 text-xs text-amber-300">{(save.error as Error).message}</p>
+      )}
     </div>
   );
 }
@@ -441,6 +549,10 @@ export function ServiceDetail() {
                 </div>
               </dl>
             </div>
+
+            {!isMetered(service) && (service.prerequisites?.length ?? 0) > 0 && (
+              <RequirementsPanel serviceId={service.id} />
+            )}
 
             {service.healthy === false ? (
               <div className="rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-6">

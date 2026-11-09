@@ -1,4 +1,11 @@
-import { type PrismaClient, Prisma, DisputeStatus, StepStatus, TaskStatus } from '@clevercon/db';
+import {
+  type PrismaClient,
+  Prisma,
+  DisputeStatus,
+  StepStatus,
+  TaskStatus,
+  decryptSecret,
+} from '@clevercon/db';
 import {
   validateSchema,
   verifyDelivery,
@@ -181,6 +188,36 @@ async function recordOutcome(
  * supplied input attachments are lifted into the envelope so the provider gets
  * them by reference. The `kind` (dispatch/poll/answer) is set by the caller.
  */
+/**
+ * The buyer's satisfied usage-requirement values for a service (ServiceSetup), decrypted
+ * and merged, to pass to the PROVIDER so it can act on the buyer's behalf (a GitHub
+ * token, an API key, setup info). Never exposed to the LLM. Undefined when the service
+ * has no setup, so a normal hire sends nothing.
+ */
+async function loadCredentials(
+  prisma: PrismaClient,
+  buyerId: string,
+  serviceId: string | null | undefined,
+): Promise<Record<string, string> | undefined> {
+  if (!serviceId) return undefined;
+  const setup = await prisma.serviceSetup.findUnique({
+    where: { userId_serviceId: { userId: buyerId, serviceId } },
+  });
+  if (!setup) return undefined;
+  const out: Record<string, string> = {};
+  const data = (setup.data ?? {}) as Record<string, unknown>;
+  for (const [k, v] of Object.entries(data)) if (v != null && v !== '') out[k] = String(v);
+  if (setup.secretCipher) {
+    try {
+      const secrets = JSON.parse(decryptSecret(setup.secretCipher)) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(secrets)) if (v != null && v !== '') out[k] = String(v);
+    } catch {
+      // A corrupt / rotated cipher just means those secrets are not sent.
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 function buildBaseRequest(
   step: { id: string; action: string; service?: { capabilities?: string[] | null } | null },
   taskId: string,
@@ -499,7 +536,14 @@ export async function executeTask(
 
     const started = Date.now();
     const input = (step.input as Record<string, unknown> | null) ?? {};
-    const request: JobRequestEnvelope = { ...buildBaseRequest(step, taskId, input), kind: 'dispatch' };
+    // Pass the buyer's satisfied usage-requirement credentials to the provider (never
+    // to the LLM), so a service that needs an auth/key/token can act on their behalf.
+    const credentials = await loadCredentials(prisma, task.buyerId, step.serviceId);
+    const request: JobRequestEnvelope = {
+      ...buildBaseRequest(step, taskId, input),
+      ...(credentials ? { credentials } : {}),
+      kind: 'dispatch',
+    };
     try {
       const res = await fetchImpl(endpoint, {
         method: 'POST',

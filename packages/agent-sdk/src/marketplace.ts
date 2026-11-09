@@ -95,6 +95,8 @@ export interface JobRequestEnvelope {
   action: string;
   input: Record<string, unknown>;
   attachments?: ArtifactRef[];
+  /** Buyer's satisfied usage-requirement values (API key/token, OAuth marker, info). */
+  credentials?: Record<string, string>;
   replyFormat: 'json' | 'text' | 'reference';
   deadline: number;
   idempotencyKey: string;

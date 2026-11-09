@@ -1,5 +1,5 @@
 import { isDemo } from '../config';
-import { apiFetch } from './api';
+import { apiFetch, apiPost } from './api';
 import { demoServices } from './demo';
 
 /** Settlement-gated trust tier, earned by real on-chain settled jobs. */
@@ -18,6 +18,16 @@ export interface AttachmentSpec {
   accept?: string[];
   maxSizeBytes?: number;
   maxCount?: number;
+}
+
+/** A usage requirement the buyer must satisfy before hiring (auth/install/key/info). */
+export interface Prerequisite {
+  kind: 'info' | 'apiKey' | 'install' | 'oauth';
+  key: string;
+  label: string;
+  instructions: string;
+  url?: string;
+  secret?: boolean;
 }
 
 export interface Service {
@@ -46,6 +56,8 @@ export interface Service {
   paymentModel?: string | null;
   /** Required input files, when the service needs an attachment to be hired. */
   attachmentsIn?: AttachmentSpec | null;
+  /** Usage requirements the buyer must satisfy before hiring (auth/install/key/info). */
+  prerequisites?: Prerequisite[] | null;
   /** System-managed endpoint health (auto-recovering); false = temporarily unavailable. */
   healthy?: boolean;
 }
@@ -65,6 +77,7 @@ interface ApiService {
   interaction?: string | null;
   paymentModel?: string | null;
   attachmentsIn?: AttachmentSpec | null;
+  prerequisites?: Prerequisite[] | null;
   healthy?: boolean;
   reputation: { score: number } | null;
 }
@@ -173,6 +186,7 @@ function mapApiService(s: ApiService): Service {
     interaction: s.interaction ?? null,
     paymentModel: s.paymentModel ?? null,
     attachmentsIn: s.attachmentsIn ?? null,
+    prerequisites: s.prerequisites ?? null,
     healthy: s.healthy ?? true,
   };
 }
@@ -314,6 +328,7 @@ export async function getService(id: string): Promise<ServiceDetail> {
     interaction: s.interaction ?? null,
     paymentModel: s.paymentModel ?? null,
     attachmentsIn: s.attachmentsIn ?? null,
+    prerequisites: s.prerequisites ?? null,
     healthy: s.healthy ?? true,
     capabilities: s.capabilities ?? [],
     pricingModel: s.pricingModel,
@@ -335,4 +350,29 @@ export async function getPlatformFeeBps(): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+export interface SetupRequirement {
+  key: string;
+  satisfied: boolean;
+  /** Echoed non-secret value (never a secret); undefined if unset or secret. */
+  value?: string;
+}
+export interface ServiceSetupStatus {
+  prerequisites: Prerequisite[];
+  requirements: SetupRequirement[];
+}
+
+/** The caller's setup status for a service's usage requirements. */
+export async function getServiceSetup(serviceId: string): Promise<ServiceSetupStatus> {
+  if (isDemo()) return { prerequisites: [], requirements: [] };
+  return apiFetch<ServiceSetupStatus>(`/services/${serviceId}/setup`);
+}
+
+/** Save the caller's answers to a service's usage requirements (secrets are encrypted server-side). */
+export async function saveServiceSetup(
+  serviceId: string,
+  values: Record<string, string>,
+): Promise<ServiceSetupStatus> {
+  return apiPost<ServiceSetupStatus>(`/services/${serviceId}/setup`, { values });
 }
