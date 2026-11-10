@@ -99,6 +99,57 @@ export interface Prerequisite {
   secret?: boolean;
 }
 
+/**
+ * How a single function is billed, orthogonal to the service's escrow/metered shape.
+ * - free: no charge.
+ * - per_call: a fixed amount each invocation.
+ * - per_usage: metered by a unit (tokens, MB, rows); `amount` is the unit price.
+ * - subscription: a recurring amount per `period`.
+ */
+export type PricingKind = 'free' | 'per_call' | 'per_usage' | 'subscription';
+export interface FunctionPricing {
+  model: PricingKind;
+  /** Price in `currency`; omitted or 0 when free. */
+  amount?: number;
+  currency?: 'USDC';
+  /** For per_usage, the billing unit, e.g. "1k tokens", "MB", "row". */
+  unit?: string;
+  /** For subscription, the billing period. */
+  period?: 'day' | 'week' | 'month';
+}
+
+/**
+ * One callable operation of a service. A service exposes one or more; each carries
+ * its OWN input/output spec, usage requirements, and pricing, so a buyer can use the
+ * functions they qualify for and is gated only on the ones with unmet requirements.
+ * `key` equals the `action` the worker dispatches to the endpoint.
+ */
+export interface ServiceFunction {
+  key: string;
+  label: string;
+  description?: string;
+  input?: JsonSchema;
+  output?: JsonSchema;
+  /** Requirement keys (from the service's `prerequisites` catalog) this function needs. */
+  requires?: string[];
+  pricing: FunctionPricing;
+  /** Verification tier for this function's delivery; absent inherits the service tier. */
+  tier?: Tier;
+  verification?: VerificationSpec;
+  interaction?: ServiceInteraction;
+}
+
+/** Public contact and identity links for a service (and, by extension, its owner). */
+export interface ContactLinks {
+  website?: string;
+  docs?: string;
+  /** Email or URL for support. */
+  support?: string;
+  github?: string;
+  x?: string;
+  discord?: string;
+}
+
 /** The lifecycle status a provider reports for a step (MCP Tasks vocabulary). */
 export type ResultStatus = 'completed' | 'working' | 'input_required' | 'failed';
 
@@ -143,8 +194,20 @@ export interface ServiceManifest {
   paymentModel?: PaymentModel;
   /** Input-attachment requirement, when the service needs files on input. */
   attachmentsIn?: AttachmentSpec;
-  /** Usage requirements the buyer must satisfy before hiring (auth/install/key/info). */
+  /**
+   * The service's requirement CATALOG: every usage requirement any function may need
+   * (auth/install/key/info). A function references these by key in `requires`; a buyer
+   * is gated per function, not for the whole service.
+   */
   prerequisites?: Prerequisite[];
+  /**
+   * The callable functions. A single-function service may omit this (the top-level
+   * io/pricing/tier describe its one operation); a multi-function service lists each
+   * with its own requirements and pricing.
+   */
+  functions?: ServiceFunction[];
+  /** Public contact/identity links (website, docs, support, socials). */
+  contactLinks?: ContactLinks;
   /** The service may ask the user a question mid-job (elicitation). */
   mayElicit?: boolean;
   /** The service streams a metered result (per-tick billing). */

@@ -1,6 +1,7 @@
 import { isDemo } from '../config';
 import { apiFetch, apiPost, apiPatch } from './api';
 import { demoEarnings, demoServices, demoJobs } from './demo';
+import type { ServiceFunction, ContactLinks } from './services';
 
 export interface ProviderServiceItem {
   id: string;
@@ -16,6 +17,8 @@ export interface ProviderServiceItem {
   verification?: { method: string; spec?: Record<string, unknown> } | null;
   attachmentsIn?: { required?: boolean; accept?: string[] } | null;
   prerequisites?: RegisterServiceInput['prerequisites'] | null;
+  functions?: ServiceFunction[] | null;
+  contactLinks?: ContactLinks | null;
   pricePerCall: number;
   status: string;
   rating: number;
@@ -100,6 +103,8 @@ interface ApiProviderService {
   outputSchema?: Record<string, unknown> | null;
   verification?: { method: string; spec?: Record<string, unknown> } | null;
   prerequisites?: RegisterServiceInput['prerequisites'] | null;
+  functions?: ServiceFunction[] | null;
+  contactLinks?: ContactLinks | null;
   pricePerCall: number;
   status: string;
   tier?: string;
@@ -187,7 +192,7 @@ export interface RegisterServiceInput {
   interaction?: 'sync' | 'async' | 'human' | 'metered';
   paymentModel?: 'escrow' | 'x402' | 'mpp-session' | 'subscription';
   attachmentsIn?: { required?: boolean; accept?: string[]; maxSizeBytes?: number; maxCount?: number };
-  // Usage requirements the buyer must satisfy before hiring (auth/install/key/info).
+  // Requirement catalog the functions reference by key (auth/install/key/info).
   prerequisites?: {
     kind: 'info' | 'apiKey' | 'install' | 'oauth';
     key: string;
@@ -196,6 +201,10 @@ export interface RegisterServiceInput {
     url?: string;
     secret?: boolean;
   }[];
+  // Callable functions, each with its own io, required requirement keys, and pricing.
+  functions?: ServiceFunction[];
+  // Public contact/identity links (website, docs, support, socials).
+  contactLinks?: ContactLinks;
 }
 
 /** Register a service (grants PROVIDER). Demo returns a local stand-in. */
@@ -248,6 +257,8 @@ function mapService(s: ApiProviderService): ProviderServiceItem {
     verification: s.verification ?? null,
     attachmentsIn: s.attachmentsIn ?? null,
     prerequisites: s.prerequisites ?? null,
+    functions: s.functions ?? null,
+    contactLinks: s.contactLinks ?? null,
     pricePerCall: s.pricePerCall,
     status: s.status,
     rating: s.reputation?.score ?? 0,

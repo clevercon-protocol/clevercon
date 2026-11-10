@@ -110,8 +110,14 @@ function serialize(s: ServiceWithRep, verified: Set<string>, stat?: PayerStat) {
     interaction: s.interaction ?? null,
     paymentModel: s.paymentModel ?? null,
     attachmentsIn: s.attachmentsIn ?? null,
-    // Usage requirements the buyer must satisfy before hiring (auth/install/key/info).
+    // Requirement catalog (every requirement any function may need). A buyer is gated
+    // per function, not for the whole service.
     prerequisites: s.prerequisites ?? null,
+    // The callable functions, each with its own io, required requirement keys, and
+    // pricing. null = a single-function service described by the top-level fields.
+    functions: s.functions ?? null,
+    // Who listed this and how to reach them (website, docs, support, socials).
+    contactLinks: s.contactLinks ?? null,
     // System-managed endpoint health (auto-recovering). The directory already hides
     // unhealthy services; this lets a direct link show it is temporarily unavailable.
     healthy: s.healthy,

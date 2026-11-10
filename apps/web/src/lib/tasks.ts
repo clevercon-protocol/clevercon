@@ -164,6 +164,8 @@ export interface CreateTaskInput {
   mode: HireMode;
   budget: number;
   serviceId?: string;
+  // Which function of a multi-function service to hire (its key).
+  functionKey?: string;
   policyId?: string;
   description?: string;
   // Structured job input for the provider (e.g. { attachment: ArtifactRef }).

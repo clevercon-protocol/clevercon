@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { Prisma, PaymentStatus, PricingModel, Role, ServiceStatus } from '@clevercon/db';
-import type { Prerequisite } from '@clevercon/common';
+import type { Prerequisite, ServiceFunction, ContactLinks } from '@clevercon/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegistryContractService } from './registry-contract.service.js';
 import { issuePayoutChallenge, verifyPayoutOwnership } from './payout-proof.js';
@@ -63,8 +63,12 @@ export interface RegisterServiceParams {
     maxSizeBytes?: number;
     maxCount?: number;
   };
-  /** Usage requirements the buyer must satisfy before hiring. */
+  /** Requirement catalog the service's functions reference by key. */
   prerequisites?: Prerequisite[];
+  /** Callable functions, each with its own io, required requirement keys, and pricing. */
+  functions?: ServiceFunction[];
+  /** Public contact/identity links. */
+  contactLinks?: ContactLinks;
   /** Proof of control over a payout address that is not the caller's own wallet. */
   payoutProof?: { challenge: string; signature: string };
 }
@@ -91,6 +95,8 @@ export interface UpdateServiceParams {
     maxCount?: number;
   };
   prerequisites?: Prerequisite[];
+  functions?: ServiceFunction[];
+  contactLinks?: ContactLinks;
 }
 
 /** Stable, URL-safe id from a display name plus a short random suffix. */
@@ -150,6 +156,8 @@ function serializeService(s: ServiceWithRep, uniquePayers = 0, payoutReady: bool
     paymentModel: s.paymentModel ?? null,
     attachmentsIn: s.attachmentsIn ?? null,
     prerequisites: s.prerequisites ?? null,
+    functions: s.functions ?? null,
+    contactLinks: s.contactLinks ?? null,
     // The provider's own trust view: how they rank and why.
     trust: trustTier(settlements, score, uniquePayers, disputesUpheld, totalJobs),
     settlements,
@@ -224,6 +232,12 @@ export class ProviderService {
           paymentModel: params.paymentModel ?? undefined,
           attachmentsIn: (params.attachmentsIn ?? undefined) as Prisma.InputJsonValue | undefined,
           prerequisites: (params.prerequisites ?? undefined) as unknown as
+            | Prisma.InputJsonValue
+            | undefined,
+          functions: (params.functions ?? undefined) as unknown as
+            | Prisma.InputJsonValue
+            | undefined,
+          contactLinks: (params.contactLinks ?? undefined) as unknown as
             | Prisma.InputJsonValue
             | undefined,
           manifestHash: manifestHash({
@@ -306,6 +320,10 @@ export class ProviderService {
       data.attachmentsIn = params.attachmentsIn as Prisma.InputJsonValue;
     if (params.prerequisites !== undefined)
       data.prerequisites = params.prerequisites as unknown as Prisma.InputJsonValue;
+    if (params.functions !== undefined)
+      data.functions = params.functions as unknown as Prisma.InputJsonValue;
+    if (params.contactLinks !== undefined)
+      data.contactLinks = params.contactLinks as unknown as Prisma.InputJsonValue;
 
     const updated = await this.prisma.service.update({
       where: { id: serviceId },

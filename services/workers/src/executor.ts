@@ -219,11 +219,18 @@ async function loadCredentials(
 }
 
 function buildBaseRequest(
-  step: { id: string; action: string; service?: { capabilities?: string[] | null } | null },
+  step: {
+    id: string;
+    action: string;
+    functionKey?: string | null;
+    service?: { capabilities?: string[] | null } | null;
+  },
   taskId: string,
   input: Record<string, unknown>,
 ): JobRequestEnvelope {
-  const jobAction = step.service?.capabilities?.[0] ?? step.action;
+  // Which operation the endpoint runs: the hired function's key for a multi-function
+  // service, else the first capability (single-function), else the step action.
+  const jobAction = step.functionKey ?? step.service?.capabilities?.[0] ?? step.action;
   const raw = (input as { attachments?: unknown }).attachments;
   const attachments = Array.isArray(raw)
     ? (raw as JobRequestEnvelope['attachments'])

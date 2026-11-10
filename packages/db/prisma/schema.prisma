@@ -210,10 +210,17 @@ model Service {
   interaction     String? // sync | async | human | metered
   paymentModel    String? // escrow | x402 | mpp-session | subscription
   attachmentsIn   Json? // AttachmentSpec {required,accept,maxSizeBytes,maxCount} for required input files
-  // Usage requirements the buyer must satisfy BEFORE hiring (not given in the prompt):
-  // an authorization/OAuth, an install, an API key/credential, or info. Prerequisite[]:
-  // { kind: 'info'|'apiKey'|'install'|'oauth', key, label, instructions, url?, secret? }.
+  // Requirement CATALOG: every usage requirement any function may need (not given in
+  // the prompt): an authorization/OAuth, an install, an API key/credential, or info.
+  // Prerequisite[]: { kind, key, label, instructions, url?, secret? }. A function
+  // references these by key; the buyer is gated PER FUNCTION, not for the whole service.
   prerequisites   Json?
+  // Callable functions. A single-function service may omit this (the top-level
+  // io/pricing/tier describe its one operation); a multi-function service lists each
+  // with its own input/output, required requirement keys, and pricing. ServiceFunction[].
+  functions       Json?
+  // Public contact/identity links { website, docs, support, github, x, discord }.
+  contactLinks    Json?
   registeredAt    DateTime      @default(now())
   lastSeen        DateTime?
   // System-managed health (a periodic worker pings the endpoint's /health). This is
@@ -359,6 +366,7 @@ model TaskStep {
   serviceId     String?
   payee         String? // direct recipient for PAY/DISBURSE steps (no provider)
   action        String
+  functionKey   String? // which ServiceFunction this hire invokes (the dispatched action)
   input         Json? // structured job input (validated against the service's inputSchema)
   dependsOn     Int[]      @default([])
   estimatedCost Decimal    @db.Decimal(20, 7)

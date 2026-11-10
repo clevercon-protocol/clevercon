@@ -35,7 +35,10 @@ import {
   getPlatformFeeBps,
   interactionLabel,
   paymentModelLabel,
+  pricingLabel,
   type Prerequisite,
+  type ContactLinks,
+  type ServiceFunction,
 } from '../lib/services';
 import { refreshRoles } from '../lib/sessionSync';
 import { config } from '../config';
@@ -329,6 +332,256 @@ function SchemaBuilder({
   );
 }
 
+// An editable function row (schemas are kept as JSON strings for the SchemaBuilder).
+type PriceModel = 'free' | 'per_call' | 'per_usage' | 'subscription';
+type FnDraft = {
+  key: string;
+  label: string;
+  description: string;
+  inJson: string;
+  outJson: string;
+  requires: string[];
+  pricingModel: PriceModel;
+  amount: string;
+  unit: string;
+  period: 'day' | 'week' | 'month';
+  tier: 'T1' | 'T2' | 'T3';
+};
+const emptyFn = (): FnDraft => ({
+  key: '',
+  label: '',
+  description: '',
+  inJson: '',
+  outJson: '',
+  requires: [],
+  pricingModel: 'free',
+  amount: '',
+  unit: '',
+  period: 'month',
+  tier: 'T2',
+});
+// A stable, URL-safe key from a label (used when the provider leaves `key` blank).
+function slugKey(s: string): string {
+  return s
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 60);
+}
+
+/**
+ * The multi-function builder: each function carries its own input/output spec, the
+ * requirement keys it needs (checked against the service's requirement catalog), and
+ * its own pricing. A buyer is gated and charged per function, so one service can mix
+ * free reads with paid writes, each needing different authorizations.
+ */
+function FunctionsEditor({
+  functions,
+  setFunctions,
+  requirements,
+}: {
+  functions: FnDraft[];
+  setFunctions: (f: FnDraft[]) => void;
+  requirements: Prerequisite[];
+}) {
+  const patch = (i: number, p: Partial<FnDraft>) =>
+    setFunctions(functions.map((f, j) => (j === i ? { ...f, ...p } : f)));
+  const remove = (i: number) => setFunctions(functions.filter((_, j) => j !== i));
+  const toggleReq = (i: number, key: string) =>
+    patch(i, {
+      requires: functions[i].requires.includes(key)
+        ? functions[i].requires.filter((k) => k !== key)
+        : [...functions[i].requires, key],
+    });
+
+  return (
+    <div className="space-y-2">
+      {functions.map((f, i) => (
+        <div key={i} className="space-y-2.5 rounded-lg border border-white/10 bg-black/20 p-3">
+          <div className="flex items-start gap-2">
+            <div className="flex-1 space-y-2">
+              <input
+                value={f.label}
+                onChange={(e) => patch(i, { label: e.target.value })}
+                placeholder="Function name (e.g. Create issue)"
+                className={controls.field}
+                aria-label="Function label"
+              />
+              <div className="flex items-center gap-2">
+                <input
+                  value={f.key}
+                  onChange={(e) => patch(i, { key: e.target.value })}
+                  placeholder={f.label ? slugKey(f.label) : 'action key (e.g. create_issue)'}
+                  className={`${controls.field} font-mono`}
+                  aria-label="Function key"
+                />
+                <span className="shrink-0 text-[10px] text-slate-500">dispatched action</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => remove(i)}
+              className="shrink-0 rounded-lg px-2 py-1 text-xs text-slate-500 hover:text-red-300"
+            >
+              Remove
+            </button>
+          </div>
+          <input
+            value={f.description}
+            onChange={(e) => patch(i, { description: e.target.value })}
+            placeholder="What this function does (shown to the agent)"
+            className={controls.field}
+            aria-label="Function description"
+          />
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div>
+              <span className="text-[11px] font-medium text-slate-400">Input the agent provides</span>
+              <div className="mt-1">
+                <SchemaBuilder
+                  value={f.inJson}
+                  onChange={(v) => patch(i, { inJson: v })}
+                  addLabel="+ Add input field"
+                />
+              </div>
+            </div>
+            <div>
+              <span className="text-[11px] font-medium text-slate-400">Deliverable it returns</span>
+              <div className="mt-1">
+                <SchemaBuilder
+                  value={f.outJson}
+                  onChange={(v) => patch(i, { outJson: v })}
+                  addLabel="+ Add result field"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Pricing for THIS function. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-medium text-slate-400">Pricing</span>
+            <select
+              value={f.pricingModel}
+              onChange={(e) => patch(i, { pricingModel: e.target.value as PriceModel })}
+              className={controls.field}
+              aria-label="Pricing model"
+            >
+              <option value="free">Free</option>
+              <option value="per_call">Per call</option>
+              <option value="per_usage">Per usage</option>
+              <option value="subscription">Subscription</option>
+            </select>
+            {f.pricingModel !== 'free' && (
+              <input
+                value={f.amount}
+                onChange={(e) => patch(i, { amount: e.target.value })}
+                inputMode="decimal"
+                placeholder="USDC amount"
+                className={`${controls.field} max-w-[9rem]`}
+                aria-label="Price amount"
+              />
+            )}
+            {f.pricingModel === 'per_usage' && (
+              <input
+                value={f.unit}
+                onChange={(e) => patch(i, { unit: e.target.value })}
+                placeholder="per unit (e.g. 1k tokens, MB)"
+                className={`${controls.field} max-w-[12rem]`}
+                aria-label="Usage unit"
+              />
+            )}
+            {f.pricingModel === 'subscription' && (
+              <select
+                value={f.period}
+                onChange={(e) => patch(i, { period: e.target.value as 'day' | 'week' | 'month' })}
+                className={controls.field}
+                aria-label="Billing period"
+              >
+                <option value="day">per day</option>
+                <option value="week">per week</option>
+                <option value="month">per month</option>
+              </select>
+            )}
+            {(f.pricingModel === 'per_usage' || f.pricingModel === 'subscription') && (
+              <span className="text-[10px] text-amber-300/80">
+                metered: paid from the agent wallet, not an escrow hire
+              </span>
+            )}
+          </div>
+
+          {/* Requirements this function needs, chosen from the catalog below. */}
+          {requirements.length > 0 && (
+            <div>
+              <span className="text-[11px] font-medium text-slate-400">Requirements this needs</span>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {requirements.map((r) => (
+                  <label
+                    key={r.key}
+                    className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] ${
+                      f.requires.includes(r.key)
+                        ? 'border-violet-400/60 bg-violet-500/15 text-violet-100'
+                        : 'border-white/10 text-slate-400'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="hidden"
+                      checked={f.requires.includes(r.key)}
+                      onChange={() => toggleReq(i, r.key)}
+                    />
+                    {r.label || r.key}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => setFunctions([...functions, emptyFn()])}
+        className="text-xs font-medium text-violet-300 hover:text-violet-200"
+      >
+        + Add function
+      </button>
+    </div>
+  );
+}
+
+/** Public contact/identity links for the service and its owner. */
+function ContactLinksEditor({
+  value,
+  onChange,
+}: {
+  value: ContactLinks;
+  onChange: (v: ContactLinks) => void;
+}) {
+  const set = (k: keyof ContactLinks, v: string) => onChange({ ...value, [k]: v });
+  const fields: { k: keyof ContactLinks; ph: string }[] = [
+    { k: 'website', ph: 'Website (https://...)' },
+    { k: 'docs', ph: 'Docs (https://...)' },
+    { k: 'support', ph: 'Support (email or URL)' },
+    { k: 'github', ph: 'GitHub (https://github.com/...)' },
+    { k: 'x', ph: 'X / Twitter (@handle or URL)' },
+    { k: 'discord', ph: 'Discord (invite URL)' },
+  ];
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {fields.map(({ k, ph }) => (
+        <input
+          key={k}
+          value={value[k] ?? ''}
+          onChange={(e) => set(k, e.target.value)}
+          placeholder={ph}
+          className={controls.field}
+          aria-label={ph}
+        />
+      ))}
+    </div>
+  );
+}
+
 function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onDone: () => void }) {
   const qc = useQueryClient();
   // Pre-fill every field from the service being edited (the owner's own view carries
@@ -374,6 +627,24 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
   const updatePrereq = (i: number, patch: Partial<Prerequisite>) =>
     setPrereqs((ps) => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
   const removePrereq = (i: number) => setPrereqs((ps) => ps.filter((_, j) => j !== i));
+  // Multi-function: each function carries its own io, required requirement keys, and
+  // pricing. Pre-filled from the edited service's declared functions.
+  const [functions, setFunctions] = useState<FnDraft[]>(
+    edit?.functions?.map((f) => ({
+      key: f.key,
+      label: f.label,
+      description: f.description ?? '',
+      inJson: jsonOf(f.input),
+      outJson: jsonOf(f.output),
+      requires: f.requires ?? [],
+      pricingModel: f.pricing.model,
+      amount: f.pricing.amount != null ? String(f.pricing.amount) : '',
+      unit: f.pricing.unit ?? '',
+      period: f.pricing.period ?? 'month',
+      tier: (f.tier as 'T1' | 'T2' | 'T3') ?? 'T2',
+    })) ?? [],
+  );
+  const [contact, setContact] = useState<ContactLinks>(edit?.contactLinks ?? {});
 
   const reg = useMutation({
     // pricingModel is fixed at register time: the update endpoint ignores it, so the
@@ -448,6 +719,73 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
         ...(p.url?.trim() ? { url: p.url.trim() } : {}),
         ...(p.secret ? { secret: true } : {}),
       }));
+    // Map the function drafts, parsing each function's io schemas. Only functions with
+    // a label go up; the key defaults to a slug of the label. Keys must be unique.
+    let fnError: string | null = null;
+    const functionsOut: ServiceFunction[] = [];
+    const seenKeys = new Set<string>();
+    for (const f of functions) {
+      if (!f.label.trim()) continue;
+      const key = (f.key.trim() || slugKey(f.label)).slice(0, 60);
+      if (!key) continue;
+      if (seenKeys.has(key)) {
+        fnError = `Two functions share the key "${key}". Function keys must be unique.`;
+        break;
+      }
+      seenKeys.add(key);
+      let input: Record<string, unknown> | undefined;
+      let output: Record<string, unknown> | undefined;
+      try {
+        input = f.inJson.trim() ? JSON.parse(f.inJson) : undefined;
+        output = f.outJson.trim() ? JSON.parse(f.outJson) : undefined;
+      } catch {
+        fnError = `The input/deliverable of "${f.label}" is not valid JSON.`;
+        break;
+      }
+      const amt = Number(f.amount);
+      if (f.pricingModel !== 'free' && (!Number.isFinite(amt) || amt <= 0)) {
+        fnError = `"${f.label}" is paid, so it needs a positive amount.`;
+        break;
+      }
+      const pricing =
+        f.pricingModel === 'free'
+          ? { model: 'free' as const }
+          : {
+              model: f.pricingModel,
+              amount: amt,
+              currency: 'USDC' as const,
+              ...(f.pricingModel === 'per_usage' && f.unit.trim() ? { unit: f.unit.trim() } : {}),
+              ...(f.pricingModel === 'subscription' ? { period: f.period } : {}),
+            };
+      functionsOut.push({
+        key,
+        label: f.label.trim(),
+        ...(f.description.trim() ? { description: f.description.trim() } : {}),
+        ...(input ? { input } : {}),
+        ...(output ? { output } : {}),
+        ...(f.requires.length ? { requires: f.requires } : {}),
+        pricing,
+        tier: f.tier,
+      });
+    }
+    if (fnError) {
+      setJsonErr(fnError);
+      return null;
+    }
+    // Every requirement a function references must exist in the catalog.
+    const catalogKeys = new Set(prerequisites.map((p) => p.key));
+    for (const f of functionsOut) {
+      const missing = (f.requires ?? []).find((k) => !catalogKeys.has(k));
+      if (missing) {
+        setJsonErr(`Function "${f.label}" needs requirement "${missing}", which is not declared.`);
+        return null;
+      }
+    }
+    const contactLinks = Object.fromEntries(
+      Object.entries(contact)
+        .map(([k, v]) => [k, (v ?? '').trim()])
+        .filter(([, v]) => v),
+    ) as ContactLinks;
     return {
       name: name.trim(),
       description: description.trim(),
@@ -465,6 +803,8 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
       paymentModel,
       ...(attachmentsIn ? { attachmentsIn } : {}),
       ...(prerequisites.length ? { prerequisites } : {}),
+      ...(functionsOut.length ? { functions: functionsOut } : {}),
+      ...(Object.keys(contactLinks).length ? { contactLinks } : {}),
     };
   };
 
@@ -692,11 +1032,13 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
       </div>
 
       <div className="space-y-2">
-        <label className="text-sm font-medium text-slate-200">Usage requirements (optional)</label>
+        <label className="text-sm font-medium text-slate-200">Requirements catalog (optional)</label>
         <p className="text-[11px] leading-relaxed text-slate-500">
           What a buyer must set up before hiring, that a prompt cannot carry: an API
-          key/token, an install or authorization (with a link), or setup info. The agent
-          checks these before hiring and asks the buyer to complete any that are missing;
+          key/token, an install or authorization (with a link), or setup info. Declare them
+          here, then attach each to the functions that need it (below), so a buyer is gated
+          only on the functions whose requirements are unmet and can still use the rest. The
+          agent checks before hiring and asks the buyer to complete any missing ones;
           satisfied values are sent to your endpoint as <code>credentials</code> (a secret
           is encrypted and never shown to the buyer again).
         </p>
@@ -769,6 +1111,27 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
         >
           + Add requirement
         </button>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-slate-200">Functions (optional)</label>
+        <p className="text-[11px] leading-relaxed text-slate-500">
+          List each thing your service can do as its own function, with its own input,
+          deliverable, pricing, and the requirements it needs. A buyer sees them all and is
+          gated and charged per function, so one service can mix free reads with paid,
+          authorized actions. Leave this empty for a single-operation service (the price,
+          tier, and specs above describe its one function).
+        </p>
+        <FunctionsEditor functions={functions} setFunctions={setFunctions} requirements={prereqs} />
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-slate-200">Contact &amp; links (optional)</label>
+        <p className="text-[11px] leading-relaxed text-slate-500">
+          Who lists this and how to reach them. Shown on the service page so a buyer can see
+          the owner, read the docs, and get support before granting any access.
+        </p>
+        <ContactLinksEditor value={contact} onChange={setContact} />
       </div>
 
       <div className="flex items-center gap-3">
@@ -883,6 +1246,16 @@ function ServicesCard() {
                         <span className="text-sky-300">{interactionLabel(s.interaction)}</span>
                       )}
                       {s.requiresFile && <span className="text-amber-300">needs file</span>}
+                      {(s.functions?.length ?? 0) > 0 && (
+                        <span
+                          className="inline-flex items-center gap-1 text-slate-300"
+                          title={s
+                            .functions!.map((f) => `${f.label} - ${pricingLabel(f.pricing)}`)
+                            .join('\n')}
+                        >
+                          <Boxes size={11} /> {s.functions!.length} functions
+                        </span>
+                      )}
                       {(s.prerequisites?.length ?? 0) > 0 && (
                         <span
                           className="inline-flex items-center gap-1 text-amber-200"

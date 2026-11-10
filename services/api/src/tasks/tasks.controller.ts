@@ -18,6 +18,8 @@ const createSchema = z.object({
   mode: z.nativeEnum(TaskMode),
   budget: z.number().positive(),
   serviceId: z.string().optional(),
+  // Which function of a multi-function service to hire (its key).
+  functionKey: z.string().max(60).optional(),
   policyId: z.string().optional(),
   description: z.string().max(2000).optional(),
   // Structured job input for the provider (validated against the service's

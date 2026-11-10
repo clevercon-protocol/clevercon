@@ -9,7 +9,12 @@ import { Prisma, PaymentStatus, StepStatus, TaskMode, TaskStatus } from '@clever
 // Type-only import: @clevercon/common ships as raw TS source and the compiled API
 // (node dist/src/main.js) cannot load a `.ts` at runtime, so we must not import a
 // VALUE from it here. Schema validation uses an API-local copy (./schema-check).
-import type { InputRequest, AttachmentSpec, Prerequisite } from '@clevercon/common';
+import type {
+  InputRequest,
+  AttachmentSpec,
+  Prerequisite,
+  ServiceFunction,
+} from '@clevercon/common';
 import { satisfiedKeys, unmetPrerequisites, unmetMessage } from '../services/prerequisites.js';
 import { validateAgainstSchema, type SchemaDoc } from './schema-check.js';
 import { checkEligibility, type EligibilityRules } from '../policies/eligibility.js';
@@ -34,12 +39,21 @@ export interface CreateTaskParams {
   mode: TaskMode;
   budget: number;
   serviceId?: string;
+  /** Which function of a multi-function service to hire (its key). Single-function
+   *  services may omit it. Gating, pricing, and input schema resolve from it. */
+  functionKey?: string;
   policyId?: string;
   description?: string;
   /** Structured job input for the provider (e.g. an attachment ArtifactRef). */
   input?: Record<string, unknown>;
   /** Client-supplied Idempotency-Key: a retry with the same key returns the original task. */
   idempotencyKey?: string;
+}
+
+/** The unit price of a function (0 when free or metered). */
+function functionAmount(fn: ServiceFunction): number {
+  if (fn.pricing.model === 'free') return 0;
+  return fn.pricing.amount ?? 0;
 }
 
 export interface PaymentLine {
@@ -190,28 +204,56 @@ export class TasksService {
       }
       const service = await this.prisma.service.findUnique({ where: { id: params.serviceId } });
       if (!service) throw new BadRequestException('Unknown service');
-      // A metered (x402 / MPP) service is paid per-call from the agent's own wallet, NOT
-      // as an escrowed one-off hire, so it must never be routed through this escrow flow
+      // Resolve WHICH function is being hired. A multi-function service needs a
+      // functionKey (or exactly one function to default to); a legacy single-function
+      // service has no `functions` and falls back to the top-level fields.
+      const fns = service.functions as unknown as ServiceFunction[] | null;
+      let fn: ServiceFunction | undefined;
+      if (Array.isArray(fns) && fns.length) {
+        fn = params.functionKey
+          ? fns.find((f) => f.key === params.functionKey)
+          : fns.length === 1
+            ? fns[0]
+            : undefined;
+        if (!fn) {
+          throw new BadRequestException(
+            params.functionKey
+              ? `Unknown function "${params.functionKey}" for this service.`
+              : `This service has multiple functions; choose one of: ${fns
+                  .map((f) => f.key)
+                  .join(', ')}.`,
+          );
+        }
+      }
+      // Effective shape of the hire: the function's own interaction/io/pricing when a
+      // function is chosen, otherwise the service-level fields (back-compat).
+      const effInteraction = fn?.interaction ?? service.interaction;
+      const effInputSchema = (fn?.input ?? service.inputSchema) as Record<string, unknown> | null;
+      // A metered (x402 / MPP) function/service is paid per-call from the agent's own
+      // wallet, NOT as an escrowed one-off hire, so it must never route through escrow
       // (it would mis-settle). Block it with a clear message until the metered lane ships.
-      if (service.interaction === 'metered' || (service.paymentModel && service.paymentModel !== 'escrow')) {
+      const metered =
+        effInteraction === 'metered' ||
+        fn?.pricing.model === 'per_usage' ||
+        fn?.pricing.model === 'subscription' ||
+        (service.paymentModel && service.paymentModel !== 'escrow');
+      if (metered) {
         throw new BadRequestException(
-          'This is a metered (pay-per-call) service. It is paid from your agent wallet per call, not hireable as an escrow job.',
+          'This is a metered (pay-per-call) function. It is paid from your agent wallet per call, not hireable as an escrow job.',
         );
       }
-      // Pre-flight fulfillment gate: the input must satisfy the service's declared
-      // requirement BEFORE a job is created, so a doomed hire is refused with a clear
-      // reason (naming what is missing) instead of charging for a job that cannot run.
-      // Reuses the API-local validateAgainstSchema (same semantics as the worker's
-      // delivery check). `attachments` is lifted separately, so an empty input still
-      // validates to {} and only DECLARED required fields are enforced.
-      if (service.inputSchema) {
+      // Pre-flight fulfillment gate: the input must satisfy the declared input schema
+      // BEFORE a job is created, so a doomed hire is refused with a clear reason (naming
+      // what is missing) instead of charging for a job that cannot run. Reuses the
+      // API-local validateAgainstSchema (same semantics as the worker's delivery check).
+      if (effInputSchema) {
         const check = validateAgainstSchema(
           (params.input as Record<string, unknown>) ?? {},
-          service.inputSchema as Record<string, unknown>,
+          effInputSchema,
         );
         if (!check.ok) {
           throw new BadRequestException(
-            `This service needs more input (${check.reason}). Provide it, then hire again.`,
+            `This function needs more input (${check.reason}). Provide it, then hire again.`,
           );
         }
       }
@@ -225,16 +267,24 @@ export class TasksService {
           );
         }
       }
-      // Usage-requirements gate: the buyer must have satisfied the service's declared
-      // prerequisites (an authorization, an install, an API key, or info a prompt cannot
-      // carry) BEFORE a hire, so the AI tells them to set it up rather than hiring a
-      // service that cannot run. The provider receives the satisfied values at job time.
-      const prereqs = service.prerequisites as unknown as Prerequisite[] | null;
-      if (Array.isArray(prereqs) && prereqs.length) {
+      // Per-function usage-requirements gate: the buyer must have satisfied the
+      // requirements THIS function needs (a function references a subset of the service's
+      // requirement catalog by key). A legacy service with no functions gates on its whole
+      // catalog. The AI tells them to set up only what the chosen function needs, so other
+      // functions stay usable. The provider receives the satisfied values at job time.
+      const catalog = service.prerequisites as unknown as Prerequisite[] | null;
+      let required: Prerequisite[] = [];
+      if (fn) {
+        const need = new Set(fn.requires ?? []);
+        required = (catalog ?? []).filter((p) => need.has(p.key));
+      } else {
+        required = catalog ?? [];
+      }
+      if (required.length) {
         const setup = await this.prisma.serviceSetup.findUnique({
           where: { userId_serviceId: { userId, serviceId: service.id } },
         });
-        const unmet = unmetPrerequisites(prereqs, satisfiedKeys(setup));
+        const unmet = unmetPrerequisites(required, satisfiedKeys(setup));
         if (unmet.length) throw new BadRequestException(unmetMessage(unmet));
       }
       // Soft eligibility: if the buyer chose a rule that curates services (allow/deny
@@ -253,13 +303,19 @@ export class TasksService {
         if (!check.ok) throw new BadRequestException(`Hire blocked by your rule: ${check.reason}`);
       }
       directPayee = service.stellarAddress ?? null;
+      // Price from the chosen function (0 when free), else the service's flat price.
+      const cost = fn
+        ? new Prisma.Decimal(functionAmount(fn))
+        : (service.pricePerCall as Prisma.Decimal);
       data.steps = {
         create: [
           {
             index: 0,
-            action: `Pay ${service.name}`,
+            action: fn ? `${service.name}: ${fn.label}` : `Pay ${service.name}`,
+            // The dispatched action the worker sends to the endpoint (the function key).
+            ...(fn ? { functionKey: fn.key } : {}),
             service: { connect: { id: service.id } },
-            estimatedCost: service.pricePerCall,
+            estimatedCost: cost,
             status: StepStatus.PENDING,
             ...(params.input ? { input: params.input as Prisma.InputJsonValue } : {}),
           },

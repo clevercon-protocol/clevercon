@@ -16,6 +16,11 @@ import {
   Check,
   ExternalLink,
   KeyRound,
+  Boxes,
+  Globe,
+  FileText,
+  LifeBuoy,
+  Github,
 } from 'lucide-react';
 import {
   getService,
@@ -26,9 +31,13 @@ import {
   verificationBlurb,
   interactionLabel,
   paymentModelLabel,
+  pricingLabel,
   isMetered,
   type JsonSchema,
   type AttachmentSpec,
+  type ServiceFunction,
+  type ContactLinks,
+  type ServiceSetupStatus,
 } from '../lib/services';
 import { createTask } from '../lib/tasks';
 import { getDelegate } from '../lib/vault';
@@ -213,15 +222,22 @@ function HireBox({
   serviceName,
   inputSchema,
   attachmentsIn,
+  fn,
 }: {
   serviceId: string;
   serviceName: string;
   inputSchema: JsonSchema | null;
   attachmentsIn: AttachmentSpec | null;
+  /** The chosen function of a multi-function service; drives the input, price, and key. */
+  fn?: ServiceFunction | null;
 }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [budget, setBudget] = useState('');
+  // A paid (per_call) function has a fixed price; prefill the budget with it. A free
+  // function needs no charge but the escrow hire still takes a ceiling, so leave it
+  // blank for the buyer to set.
+  const fnAmount = fn && fn.pricing.model !== 'free' ? (fn.pricing.amount ?? 0) : null;
+  const [budget, setBudget] = useState(fnAmount && fnAmount > 0 ? String(fnAmount) : '');
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   // Values the buyer types for the service's declared inputs (e.g. data, address).
@@ -229,9 +245,11 @@ function HireBox({
   const { data: feeBps = 0 } = useQuery({ queryKey: ['platform-fee'], queryFn: getPlatformFeeBps });
   const { data: delegate } = useQuery({ queryKey: ['delegate'], queryFn: getDelegate });
 
-  const props = inputSchema?.properties ?? {};
+  // A chosen function's own input schema takes precedence over the service's.
+  const effInputSchema = (fn?.input ?? inputSchema) as JsonSchema | null;
+  const props = effInputSchema?.properties ?? {};
   const propKeys = Object.keys(props);
-  const required = inputSchema?.required ?? [];
+  const required = effInputSchema?.required ?? [];
   const missingRequired = required.filter((k) => !fields[k]?.trim());
   // The provider declared it needs a file to run the job: block the hire until one
   // is attached, and surface the accepted types.
@@ -250,10 +268,11 @@ function HireBox({
       if (file) input.attachments = [await uploadFile(file)];
       const hasInput = Object.keys(input).length > 0;
       return createTask({
-        title: `Pay ${serviceName}`,
+        title: fn ? `${serviceName}: ${fn.label}` : `Pay ${serviceName}`,
         mode: 'DIRECT',
         budget: Number(budget),
         serviceId,
+        ...(fn ? { functionKey: fn.key } : {}),
         ...(hasInput ? { input } : {}),
       });
     },
@@ -280,9 +299,18 @@ function HireBox({
       }}
       className="rounded-2xl bg-white/[0.04] p-6"
     >
-      <h2 className="font-semibold text-slate-300">Hire this service</h2>
+      <h2 className="font-semibold text-slate-300">
+        {fn ? `Hire: ${fn.label}` : 'Hire this service'}
+      </h2>
       <p className="mt-1 text-sm text-slate-400">
-        Creates a direct job you can track in your buyer console.
+        {fn ? (
+          <>
+            {fn.description || 'Creates a direct job you can track in your buyer console.'}{' '}
+            <span className="text-slate-300">· {pricingLabel(fn.pricing)}</span>
+          </>
+        ) : (
+          'Creates a direct job you can track in your buyer console.'
+        )}
       </p>
       <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-violet-300">
         <Lock size={12} /> Paid from your vault under your private, on-chain-enforced policy.
@@ -398,6 +426,157 @@ function HireBox({
   );
 }
 
+/**
+ * All of a service's functions, each with its own pricing and the requirements it
+ * needs (shown satisfied/unmet when the buyer is known). The buyer/agent sees exactly
+ * what each function costs and what it must set up, and picks one to hire. A function
+ * with unmet requirements is marked so, pointing at the setup panel.
+ */
+function FunctionsPanel({
+  functions,
+  prerequisites,
+  setup,
+  selectedKey,
+  onSelect,
+  metered,
+}: {
+  functions: ServiceFunction[];
+  prerequisites: { key: string; label: string }[];
+  setup?: ServiceSetupStatus;
+  selectedKey: string | null;
+  onSelect: (key: string) => void;
+  metered: boolean;
+}) {
+  const labelOf = new Map(prerequisites.map((p) => [p.key, p.label]));
+  const satisfied = new Map((setup?.requirements ?? []).map((r) => [r.key, r.satisfied]));
+  const isMeteredFn = (f: ServiceFunction) =>
+    f.interaction === 'metered' ||
+    f.pricing.model === 'per_usage' ||
+    f.pricing.model === 'subscription';
+
+  return (
+    <div className="rounded-2xl bg-white/[0.04] p-6">
+      <div className="flex items-center gap-2">
+        <Boxes size={16} className="text-violet-300" />
+        <h2 className="font-semibold text-white">Functions</h2>
+        <span className="text-xs text-slate-500">{functions.length}</span>
+      </div>
+      <p className="mt-1 text-sm text-slate-400">
+        Each is priced and gated on its own. Pick one to hire; you are charged only for what
+        you use.
+      </p>
+      <div className="mt-4 space-y-2.5">
+        {functions.map((f) => {
+          const unmet = (f.requires ?? []).filter((k) => !satisfied.get(k));
+          const selected = selectedKey === f.key;
+          const hireable = !metered && !isMeteredFn(f);
+          return (
+            <div
+              key={f.key}
+              className={`rounded-xl border p-3.5 ${
+                selected ? 'border-violet-400/50 bg-violet-500/[0.08]' : 'border-white/10 bg-black/20'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-slate-100">{f.label}</span>
+                    <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[11px] text-slate-300">
+                      {pricingLabel(f.pricing)}
+                    </span>
+                  </div>
+                  <code className="text-[10px] text-slate-500">{f.key}</code>
+                  {f.description && (
+                    <p className="mt-1 text-xs leading-relaxed text-slate-400">{f.description}</p>
+                  )}
+                </div>
+                {hireable ? (
+                  <button
+                    type="button"
+                    onClick={() => onSelect(f.key)}
+                    className={`shrink-0 rounded-lg px-3 py-1 text-xs font-medium ${
+                      selected
+                        ? 'bg-violet-600 text-white'
+                        : 'bg-white/[0.06] text-violet-300 hover:bg-white/10'
+                    }`}
+                  >
+                    {selected ? 'Selected' : 'Hire this'}
+                  </button>
+                ) : (
+                  <span className="shrink-0 rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">
+                    metered
+                  </span>
+                )}
+              </div>
+              {(f.requires?.length ?? 0) > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] uppercase tracking-wide text-slate-500">needs</span>
+                  {(f.requires ?? []).map((k) => {
+                    const ok = satisfied.get(k);
+                    return (
+                      <span
+                        key={k}
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ${
+                          ok
+                            ? 'bg-emerald-500/10 text-emerald-300'
+                            : 'bg-amber-500/10 text-amber-300'
+                        }`}
+                      >
+                        {ok ? <Check size={10} /> : <KeyRound size={10} />}
+                        {labelOf.get(k) ?? k}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+              {selected && unmet.length > 0 && (
+                <p className="mt-2 text-[11px] text-amber-300">
+                  Set up {unmet.map((k) => labelOf.get(k) ?? k).join(', ')} below before hiring.
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Who listed this service and how to reach them, before granting any access. */
+function ContactCard({ links }: { links: ContactLinks }) {
+  const asUrl = (v: string) =>
+    v.startsWith('http') || v.includes('@') ? (v.includes('@') ? `mailto:${v}` : v) : `https://${v}`;
+  const rows: { k: keyof ContactLinks; label: string; icon: typeof Globe }[] = [
+    { k: 'website', label: 'Website', icon: Globe },
+    { k: 'docs', label: 'Docs', icon: FileText },
+    { k: 'support', label: 'Support', icon: LifeBuoy },
+    { k: 'github', label: 'GitHub', icon: Github },
+    { k: 'x', label: 'X', icon: ExternalLink },
+    { k: 'discord', label: 'Discord', icon: ExternalLink },
+  ];
+  const present = rows.filter((r) => (links[r.k] ?? '').trim());
+  if (present.length === 0) return null;
+  return (
+    <div className="rounded-2xl bg-white/[0.04] p-6">
+      <h2 className="font-semibold text-slate-300">Owner &amp; links</h2>
+      <p className="mt-1 text-sm text-slate-400">Who lists this and where to verify it.</p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        {present.map(({ k, label, icon: Icon }) => (
+          <a
+            key={k}
+            href={asUrl(links[k] as string)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.06] px-3 py-1.5 text-xs text-slate-300 hover:bg-white/10 hover:text-white"
+          >
+            <Icon size={13} className="text-violet-300" /> {label}
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ServiceDetail() {
   const { id = '' } = useParams();
   const {
@@ -405,6 +584,28 @@ export function ServiceDetail() {
     isLoading,
     error,
   } = useQuery({ queryKey: ['service', id], queryFn: () => getService(id) });
+
+  const functions = service?.functions ?? [];
+  const multi = functions.length > 0;
+  // The function the buyer has chosen to hire (default: the first). Shared cache with
+  // the RequirementsPanel so a function's requirement status reflects saved setup.
+  const [selectedFn, setSelectedFn] = useState<string | null>(null);
+  const { data: setup } = useQuery({
+    queryKey: ['service-setup', id],
+    queryFn: () => getServiceSetup(id),
+    enabled: multi && (service?.prerequisites?.length ?? 0) > 0,
+    retry: false,
+  });
+  // Default to the first hireable (non-metered) function, so a hire isn't pre-aimed at
+  // a metered function the escrow box can't settle.
+  const serviceMetered = service ? isMetered(service) : false;
+  const hireable = (f: ServiceFunction) =>
+    !serviceMetered &&
+    f.interaction !== 'metered' &&
+    f.pricing.model !== 'per_usage' &&
+    f.pricing.model !== 'subscription';
+  const chosenKey = selectedFn ?? functions.find(hireable)?.key ?? functions[0]?.key ?? null;
+  const chosenFn = multi ? (functions.find((f) => f.key === chosenKey) ?? null) : null;
 
   return (
     <section className="space-y-6">
@@ -514,6 +715,19 @@ export function ServiceDetail() {
             </p>
           </div>
 
+          {multi && (
+            <FunctionsPanel
+              functions={functions}
+              prerequisites={service.prerequisites ?? []}
+              setup={setup}
+              selectedKey={chosenKey}
+              onSelect={setSelectedFn}
+              metered={isMetered(service)}
+            />
+          )}
+
+          {service.contactLinks && <ContactCard links={service.contactLinks} />}
+
           <div className="grid lg:grid-cols-2 gap-6">
             <div className="rounded-2xl bg-white/[0.04] p-6">
               <h2 className="font-semibold text-slate-300">Capabilities</h2>
@@ -535,8 +749,9 @@ export function ServiceDetail() {
                 <div className="flex justify-between">
                   <dt className="text-slate-500">Pricing</dt>
                   <dd className="text-slate-300">
-                    {paymentModelLabel(service.paymentModel) ?? 'Pay on delivery'} ·{' '}
-                    {service.currency}
+                    {multi
+                      ? 'Per function (see Functions)'
+                      : `${paymentModelLabel(service.paymentModel) ?? 'Pay on delivery'} · ${service.currency}`}
                   </dd>
                 </div>
                 <div className="flex justify-between">
@@ -570,10 +785,12 @@ export function ServiceDetail() {
               <MeteredHireBox paymentModel={service.paymentModel} />
             ) : (
               <HireBox
+                key={chosenKey ?? 'default'}
                 serviceId={service.id}
                 serviceName={service.name}
                 inputSchema={service.inputSchema}
                 attachmentsIn={service.attachmentsIn ?? null}
+                fn={chosenFn}
               />
             )}
           </div>

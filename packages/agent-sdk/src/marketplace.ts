@@ -50,6 +50,43 @@ export interface Prerequisite {
   secret?: boolean;
 }
 
+/** How a single function is billed (mirror of common). */
+export type PricingKind = 'free' | 'per_call' | 'per_usage' | 'subscription';
+export interface FunctionPricing {
+  model: PricingKind;
+  amount?: number;
+  currency?: 'USDC';
+  unit?: string;
+  period?: 'day' | 'week' | 'month';
+}
+
+/**
+ * One callable operation of a service, with its own io, usage requirements, and
+ * pricing. `key` equals the dispatched `action` (mirror of common).
+ */
+export interface ServiceFunction {
+  key: string;
+  label: string;
+  description?: string;
+  input?: JsonSchema;
+  output?: JsonSchema;
+  requires?: string[];
+  pricing: FunctionPricing;
+  tier?: Tier;
+  verification?: VerificationSpec;
+  interaction?: ServiceInteraction;
+}
+
+/** Public contact and identity links (mirror of common). */
+export interface ContactLinks {
+  website?: string;
+  docs?: string;
+  support?: string;
+  github?: string;
+  x?: string;
+  discord?: string;
+}
+
 export type ResultStatus = 'completed' | 'working' | 'input_required' | 'failed';
 
 export interface InputRequest {
@@ -80,8 +117,12 @@ export interface ServiceManifest {
   paymentModel?: PaymentModel;
   /** Input-attachment requirement, when the service needs files on input. */
   attachmentsIn?: AttachmentSpec;
-  /** Usage requirements the buyer must satisfy before hiring (auth/install/key/info). */
+  /** Requirement CATALOG: every usage requirement any function may need (by key). */
   prerequisites?: Prerequisite[];
+  /** The callable functions, each with its own requirements and pricing. */
+  functions?: ServiceFunction[];
+  /** Public contact/identity links (website, docs, support, socials). */
+  contactLinks?: ContactLinks;
   /** The service may ask the user a question mid-job (elicitation). */
   mayElicit?: boolean;
   /** The service streams a metered result (per-tick billing). */

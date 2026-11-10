@@ -30,6 +30,57 @@ export interface Prerequisite {
   secret?: boolean;
 }
 
+/** How a single function is billed. */
+export type PricingKind = 'free' | 'per_call' | 'per_usage' | 'subscription';
+export interface FunctionPricing {
+  model: PricingKind;
+  amount?: number;
+  currency?: 'USDC';
+  unit?: string;
+  period?: 'day' | 'week' | 'month';
+}
+
+/** One callable operation of a service, with its own io, requirements, and pricing. */
+export interface ServiceFunction {
+  key: string;
+  label: string;
+  description?: string;
+  input?: JsonSchema | null;
+  output?: JsonSchema | null;
+  requires?: string[];
+  pricing: FunctionPricing;
+  tier?: Tier;
+  verification?: Verification | null;
+  interaction?: string | null;
+}
+
+/** Public contact and identity links for a service and its owner. */
+export interface ContactLinks {
+  website?: string;
+  docs?: string;
+  support?: string;
+  github?: string;
+  x?: string;
+  discord?: string;
+}
+
+/** A human label for a function's pricing, e.g. "Free", "$0.02 / call", "$5 / month". */
+export function pricingLabel(p?: FunctionPricing | null): string {
+  if (!p || p.model === 'free') return 'Free';
+  const amt = p.amount ?? 0;
+  const money = `$${amt}`;
+  switch (p.model) {
+    case 'per_call':
+      return `${money} / call`;
+    case 'per_usage':
+      return `${money} / ${p.unit || 'unit'}`;
+    case 'subscription':
+      return `${money} / ${p.period || 'month'}`;
+    default:
+      return money;
+  }
+}
+
 export interface Service {
   id: string;
   name: string;
@@ -56,8 +107,12 @@ export interface Service {
   paymentModel?: string | null;
   /** Required input files, when the service needs an attachment to be hired. */
   attachmentsIn?: AttachmentSpec | null;
-  /** Usage requirements the buyer must satisfy before hiring (auth/install/key/info). */
+  /** Requirement catalog (every requirement any function may need); gated per function. */
   prerequisites?: Prerequisite[] | null;
+  /** The callable functions, each with its own io, requirements, and pricing. */
+  functions?: ServiceFunction[] | null;
+  /** Who listed this and how to reach them (website, docs, support, socials). */
+  contactLinks?: ContactLinks | null;
   /** System-managed endpoint health (auto-recovering); false = temporarily unavailable. */
   healthy?: boolean;
 }
@@ -78,6 +133,8 @@ interface ApiService {
   paymentModel?: string | null;
   attachmentsIn?: AttachmentSpec | null;
   prerequisites?: Prerequisite[] | null;
+  functions?: ServiceFunction[] | null;
+  contactLinks?: ContactLinks | null;
   healthy?: boolean;
   reputation: { score: number } | null;
 }
@@ -187,6 +244,8 @@ function mapApiService(s: ApiService): Service {
     paymentModel: s.paymentModel ?? null,
     attachmentsIn: s.attachmentsIn ?? null,
     prerequisites: s.prerequisites ?? null,
+    functions: s.functions ?? null,
+    contactLinks: s.contactLinks ?? null,
     healthy: s.healthy ?? true,
   };
 }
@@ -329,6 +388,8 @@ export async function getService(id: string): Promise<ServiceDetail> {
     paymentModel: s.paymentModel ?? null,
     attachmentsIn: s.attachmentsIn ?? null,
     prerequisites: s.prerequisites ?? null,
+    functions: s.functions ?? null,
+    contactLinks: s.contactLinks ?? null,
     healthy: s.healthy ?? true,
     capabilities: s.capabilities ?? [],
     pricingModel: s.pricingModel,

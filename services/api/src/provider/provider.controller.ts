@@ -33,6 +33,43 @@ const prerequisiteSchema = z.object({
   secret: z.boolean().optional(),
 });
 
+// Per-function billing. Amount is required unless the model is free.
+const pricingSchema = z
+  .object({
+    model: z.enum(['free', 'per_call', 'per_usage', 'subscription']),
+    amount: z.number().nonnegative().optional(),
+    currency: z.literal('USDC').optional(),
+    unit: z.string().max(40).optional(),
+    period: z.enum(['day', 'week', 'month']).optional(),
+  })
+  .refine((p) => p.model === 'free' || (p.amount ?? 0) > 0, {
+    message: 'A paid function needs a positive amount',
+  });
+
+// One callable function: its own io, required requirement keys, and pricing.
+const functionSchema = z.object({
+  key: z.string().min(1).max(60),
+  label: z.string().min(1).max(120),
+  description: z.string().max(600).optional(),
+  input: jsonSchemaObj.optional(),
+  output: jsonSchemaObj.optional(),
+  requires: z.array(z.string().max(60)).max(20).optional(),
+  pricing: pricingSchema,
+  tier: z.enum(['T1', 'T2', 'T3']).optional(),
+  verification: verificationSchema.optional(),
+  interaction: interactionSchema.optional(),
+});
+
+// Public contact/identity links. Socials accept a handle or URL; the rest are URLs.
+const contactLinksSchema = z.object({
+  website: z.string().url().optional(),
+  docs: z.string().url().optional(),
+  support: z.string().max(200).optional(),
+  github: z.string().url().optional(),
+  x: z.string().max(200).optional(),
+  discord: z.string().max(200).optional(),
+});
+
 // Methods valid for each tier: T1 is trustless, T2 is attested (schema + dispute),
 // T3 is human/milestone. A manifest whose method does not match its tier is rejected.
 const TIER_METHODS: Record<string, string[]> = {
@@ -40,6 +77,21 @@ const TIER_METHODS: Record<string, string[]> = {
   T2: ['attest'],
   T3: ['manual'],
 };
+
+type FnLike = { key: string; requires?: string[] };
+type ReqLike = { key: string };
+// Every key a function `requires` must exist in the requirement catalog.
+function requiresResolve(functions?: FnLike[], prerequisites?: ReqLike[]): boolean {
+  if (!functions?.length) return true;
+  const have = new Set((prerequisites ?? []).map((p) => p.key));
+  return functions.every((f) => (f.requires ?? []).every((k) => have.has(k)));
+}
+// Function keys (the dispatched actions) must be distinct within a service.
+function uniqueKeys(functions?: FnLike[]): boolean {
+  if (!functions?.length) return true;
+  const keys = functions.map((f) => f.key);
+  return new Set(keys).size === keys.length;
+}
 
 const registerSchema = z
   .object({
@@ -59,7 +111,9 @@ const registerSchema = z
     interaction: interactionSchema.optional(),
     paymentModel: paymentModelSchema.optional(),
     attachmentsIn: attachmentSpecSchema.optional(),
-    prerequisites: z.array(prerequisiteSchema).max(10).optional(),
+    prerequisites: z.array(prerequisiteSchema).max(20).optional(),
+    functions: z.array(functionSchema).max(50).optional(),
+    contactLinks: contactLinksSchema.optional(),
     // Required only when the payout address is not the caller's own wallet: a
     // signature by that address's key over a challenge from GET /payout-challenge.
     payoutProof: z.object({ challenge: z.string(), signature: z.string() }).optional(),
@@ -67,7 +121,11 @@ const registerSchema = z
   .refine(
     (o) => !o.tier || !o.verification || TIER_METHODS[o.tier].includes(o.verification.method),
     { message: 'verification.method must match the tier (T1 trustless / T2 attest / T3 manual)' },
-  );
+  )
+  .refine((o) => requiresResolve(o.functions, o.prerequisites), {
+    message: 'a function requires a requirement key not in the service requirements list',
+  })
+  .refine((o) => uniqueKeys(o.functions), { message: 'function keys must be unique' });
 
 const updateSchema = z
   .object({
@@ -85,13 +143,23 @@ const updateSchema = z
     interaction: interactionSchema.optional(),
     paymentModel: paymentModelSchema.optional(),
     attachmentsIn: attachmentSpecSchema.optional(),
-    prerequisites: z.array(prerequisiteSchema).max(10).optional(),
+    prerequisites: z.array(prerequisiteSchema).max(20).optional(),
+    functions: z.array(functionSchema).max(50).optional(),
+    contactLinks: contactLinksSchema.optional(),
   })
   .refine((o) => Object.keys(o).length > 0, { message: 'No fields to update' })
   .refine(
     (o) => !o.tier || !o.verification || TIER_METHODS[o.tier].includes(o.verification.method),
     { message: 'verification.method must match the tier (T1 trustless / T2 attest / T3 manual)' },
-  );
+  )
+  // Cross-field check only when both are sent together (a partial update may touch one);
+  // the edit form resends the full manifest, so this holds in practice.
+  .refine((o) => o.functions === undefined || o.prerequisites === undefined
+    ? true
+    : requiresResolve(o.functions, o.prerequisites), {
+    message: 'a function requires a requirement key not in the service requirements list',
+  })
+  .refine((o) => uniqueKeys(o.functions), { message: 'function keys must be unique' });
 
 const statusSchema = z.object({ active: z.boolean() });
 
