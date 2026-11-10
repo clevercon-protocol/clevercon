@@ -320,13 +320,21 @@ function HireBox({
           A {(feeBps / 100).toFixed(2)}% protocol fee is taken on settlement.
         </p>
       )}
-      <input
-        value={budget}
-        onChange={(e) => setBudget(e.target.value)}
-        inputMode="decimal"
-        placeholder="Budget (USDC)"
-        className="mt-4 w-full rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
-      />
+      <label className="mt-4 block">
+        <span className="text-xs font-medium text-slate-300">
+          Budget (USDC)<span className="text-rose-400"> *</span>
+        </span>
+        <span className="mt-0.5 block text-[11px] text-slate-500">
+          {fn ? `This function costs ${pricingLabel(fn.pricing)}. ` : ''}The most this job can spend; you are charged only the agreed price.
+        </span>
+        <input
+          value={budget}
+          onChange={(e) => setBudget(e.target.value)}
+          inputMode="decimal"
+          placeholder="e.g. 0.02"
+          className="mt-1 w-full rounded-lg bg-black/30 px-3 py-2 text-sm outline-none focus:border-violet-500/40"
+        />
+      </label>
       {propKeys.length > 0 && (
         <div className="mt-4 space-y-3">
           <div className="text-[11px] uppercase tracking-wider text-slate-500">

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DollarSign,
@@ -332,6 +332,61 @@ function SchemaBuilder({
   );
 }
 
+/** A labeled form field with an optional required marker, hint, and inline error. */
+function Field({
+  label,
+  required,
+  hint,
+  error,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  hint?: string;
+  error?: string | null;
+  children: ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs font-medium text-slate-300">
+        {label}
+        {required && <span className="text-rose-400"> *</span>}
+      </span>
+      {hint && (
+        <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-500">{hint}</span>
+      )}
+      <div className="mt-1">{children}</div>
+      {error && <p className="mt-1 text-xs text-rose-400">{error}</p>}
+    </label>
+  );
+}
+
+/** A titled section card to group the form into clear, labeled blocks. */
+function Section({
+  title,
+  required,
+  hint,
+  children,
+}: {
+  title: string;
+  required?: boolean;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-4">
+      <div>
+        <h3 className="text-sm font-semibold text-slate-100">
+          {title}
+          {required && <span className="text-rose-400"> *</span>}
+        </h3>
+        {hint && <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">{hint}</p>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 // An editable function row (schemas are kept as JSON strings for the SchemaBuilder).
 type PriceModel = 'free' | 'per_call' | 'per_usage' | 'subscription';
 type FnDraft = {
@@ -398,27 +453,9 @@ function FunctionsEditor({
   return (
     <div className="space-y-2">
       {functions.map((f, i) => (
-        <div key={i} className="space-y-2.5 rounded-lg border border-white/10 bg-black/20 p-3">
-          <div className="flex items-start gap-2">
-            <div className="flex-1 space-y-2">
-              <input
-                value={f.label}
-                onChange={(e) => patch(i, { label: e.target.value })}
-                placeholder="Function name (e.g. Create issue)"
-                className={controls.field}
-                aria-label="Function label"
-              />
-              <div className="flex items-center gap-2">
-                <input
-                  value={f.key}
-                  onChange={(e) => patch(i, { key: e.target.value })}
-                  placeholder={f.label ? slugKey(f.label) : 'action key (e.g. create_issue)'}
-                  className={`${controls.field} font-mono`}
-                  aria-label="Function key"
-                />
-                <span className="shrink-0 text-[10px] text-slate-500">dispatched action</span>
-              </div>
-            </div>
+        <div key={i} className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3">
+          <div className="flex items-start justify-between gap-2">
+            <span className="text-xs font-semibold text-slate-300">Function {i + 1}</span>
             <button
               type="button"
               onClick={() => remove(i)}
@@ -427,13 +464,50 @@ function FunctionsEditor({
               Remove
             </button>
           </div>
-          <input
-            value={f.description}
-            onChange={(e) => patch(i, { description: e.target.value })}
-            placeholder="What this function does (shown to the agent)"
-            className={controls.field}
-            aria-label="Function description"
-          />
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Field label="Name" required>
+              <input
+                value={f.label}
+                onChange={(e) => patch(i, { label: e.target.value })}
+                placeholder="e.g. Create issue"
+                className={controls.field}
+                aria-label="Function name"
+              />
+            </Field>
+            <Field label="Action key" hint="The exact action sent to your endpoint. Auto from the name.">
+              <input
+                value={f.key}
+                onChange={(e) => patch(i, { key: e.target.value })}
+                placeholder={f.label ? slugKey(f.label) : 'e.g. create_issue'}
+                className={`${controls.field} font-mono`}
+                aria-label="Function key"
+              />
+            </Field>
+          </div>
+          <Field label="Description">
+            <input
+              value={f.description}
+              onChange={(e) => patch(i, { description: e.target.value })}
+              placeholder="What this function does (shown to the agent)"
+              className={controls.field}
+              aria-label="Function description"
+            />
+          </Field>
+          <Field
+            label="How delivery is verified"
+            hint="T1 trustless re-check, T2 result shape + dispute window, T3 your approval."
+          >
+            <select
+              value={f.tier}
+              onChange={(e) => patch(i, { tier: e.target.value as 'T1' | 'T2' | 'T3' })}
+              className={controls.field}
+              aria-label="Verification tier"
+            >
+              <option value="T1">T1 Verifiable (trustless)</option>
+              <option value="T2">T2 Attestable (schema + dispute)</option>
+              <option value="T3">T3 Human (approval)</option>
+            </select>
+          </Field>
 
           <div className="grid gap-2 sm:grid-cols-2">
             <div>
@@ -460,7 +534,9 @@ function FunctionsEditor({
 
           {/* Pricing for THIS function. */}
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-medium text-slate-400">Pricing</span>
+            <span className="text-[11px] font-medium text-slate-400">
+              Pricing<span className="text-rose-400"> *</span>
+            </span>
             <select
               value={f.pricingModel}
               onChange={(e) => patch(i, { pricingModel: e.target.value as PriceModel })}
@@ -645,6 +721,17 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
     })) ?? [],
   );
   const [contact, setContact] = useState<ContactLinks>(edit?.contactLinks ?? {});
+  // Whether this service is ONE operation (the simple fields above describe it) or
+  // MANY functions (each with its own io, requirements, and price). A service edited
+  // with declared functions opens in multi mode.
+  const [mode, setMode] = useState<'single' | 'multi'>(
+    edit?.functions?.length ? 'multi' : 'single',
+  );
+  const chooseMode = (m: 'single' | 'multi') => {
+    setMode(m);
+    // Entering multi mode with no functions yet: seed one so the builder isn't empty.
+    if (m === 'multi' && functions.length === 0) setFunctions([emptyFn()]);
+  };
 
   const reg = useMutation({
     // pricingModel is fixed at register time: the update endpoint ignores it, so the
@@ -665,18 +752,19 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
   const endpointOk = endpoint.trim() === '' || isUrl(endpoint.trim());
   const addressOk = address.trim() === '' || STELLAR_ADDR.test(address.trim());
   const priceOk = price === '' || (Number.isFinite(priceNum) && priceNum >= 0);
+  // In multi mode at least one function needs a name; single mode needs a price.
+  const namedFns = functions.filter((f) => f.label.trim());
+  const operationOk =
+    mode === 'single'
+      ? price !== '' && Number.isFinite(priceNum) && priceNum >= 0
+      : namedFns.length > 0;
   const canSubmit =
     !!name.trim() &&
     !!description.trim() &&
     isUrl(endpoint.trim()) &&
     STELLAR_ADDR.test(address.trim()) &&
-    price !== '' &&
-    Number.isFinite(priceNum) &&
-    priceNum >= 0 &&
+    operationOk &&
     !reg.isPending;
-
-  const hint = (bad: boolean, msg: string) =>
-    bad ? <p className="mt-1 text-xs text-red-400">{msg}</p> : null;
 
   // Build the full registration input, parsing the optional acceptance-contract
   // JSON. Returns null (and sets an error) if any JSON is malformed.
@@ -772,6 +860,10 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
       setJsonErr(fnError);
       return null;
     }
+    if (mode === 'multi' && functionsOut.length === 0) {
+      setJsonErr('Add at least one function (each needs a name).');
+      return null;
+    }
     // Every requirement a function references must exist in the catalog.
     const catalogKeys = new Set(prerequisites.map((p) => p.key));
     for (const f of functionsOut) {
@@ -786,6 +878,37 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
         .map(([k, v]) => [k, (v ?? '').trim()])
         .filter(([, v]) => v),
     ) as ContactLinks;
+
+    // In MULTI mode the service-level fields (DB non-null + legacy consumers) are
+    // derived from the functions: the entry price, the first function's tier/io, and
+    // its keys as capabilities. In SINGLE mode the top-level fields describe the one op.
+    const tierMethod = (t: string) => (t === 'T2' ? 'attest' : t === 'T3' ? 'manual' : 'onchain');
+    if (mode === 'multi') {
+      const amounts = functionsOut.map((f) =>
+        f.pricing.model === 'free' ? 0 : (f.pricing.amount ?? 0),
+      );
+      const first = functionsOut[0];
+      return {
+        name: name.trim(),
+        description: description.trim(),
+        category: category.trim() || undefined,
+        capabilities: functionsOut.map((f) => f.key),
+        pricingModel,
+        pricePerCall: Math.min(...amounts),
+        endpoint: endpoint.trim(),
+        stellarAddress: address.trim(),
+        tier: first.tier ?? 'T2',
+        verification: { method: tierMethod(first.tier ?? 'T2') },
+        ...(first.input ? { inputSchema: first.input as Record<string, unknown> } : {}),
+        ...(first.output ? { outputSchema: first.output as Record<string, unknown> } : {}),
+        interaction: metered ? 'metered' : interaction,
+        paymentModel,
+        ...(attachmentsIn ? { attachmentsIn } : {}),
+        ...(prerequisites.length ? { prerequisites } : {}),
+        functions: functionsOut,
+        ...(Object.keys(contactLinks).length ? { contactLinks } : {}),
+      };
+    }
     return {
       name: name.trim(),
       description: description.trim(),
@@ -803,7 +926,6 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
       paymentModel,
       ...(attachmentsIn ? { attachmentsIn } : {}),
       ...(prerequisites.length ? { prerequisites } : {}),
-      ...(functionsOut.length ? { functions: functionsOut } : {}),
       ...(Object.keys(contactLinks).length ? { contactLinks } : {}),
     };
   };
@@ -832,105 +954,99 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
           their key or their rule.
         </p>
       )}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Service name"
-          className={controls.field}
-        />
-        <input
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          placeholder="Category (optional)"
-          className={controls.field}
-        />
-      </div>
-      <input
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
-        placeholder="What it does"
-        className={controls.field}
-      />
-      <div>
-        <input
-          value={capability}
-          onChange={(e) => setCapability(e.target.value)}
-          placeholder="Capability / action your endpoint handles (e.g. image.transform)"
-          className={`${controls.field} font-mono`}
-        />
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-          The exact action the worker sends to your endpoint; it must match what your service
-          dispatches on. Leave blank only if your endpoint ignores the action and always does the
-          same thing.
-        </p>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div>
+      <Section title="Service basics" required>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Service name" required>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. GitHub Tool"
+              className={controls.field}
+            />
+          </Field>
+          <Field label="Category">
+            <input
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              placeholder="e.g. Developer Tools"
+              className={controls.field}
+            />
+          </Field>
+        </div>
+        <Field label="What it does" required hint="One line a buyer sees in the marketplace.">
           <input
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            inputMode="decimal"
-            placeholder="Price/call (USDC)"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Describe what your service does"
             className={controls.field}
           />
-          {hint(!priceOk, 'Enter a non-negative number.')}
+        </Field>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field
+            label="Endpoint URL"
+            required
+            error={endpoint.trim() && !endpointOk ? 'Must be a valid http(s) URL.' : null}
+          >
+            <input
+              value={endpoint}
+              onChange={(e) => setEndpoint(e.target.value)}
+              placeholder="https://your-service.example.com"
+              className={controls.field}
+            />
+          </Field>
+          <Field
+            label="Stellar payout address"
+            required
+            hint="Receives USDC on settlement (needs a USDC trustline)."
+            error={
+              address.trim() && !addressOk
+                ? 'Must be a valid Stellar public key (G…, 56 chars).'
+                : null
+            }
+          >
+            <input
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="G…"
+              className={`${controls.field} font-mono`}
+            />
+          </Field>
         </div>
-        <div className="sm:col-span-2">
-          <input
-            value={endpoint}
-            onChange={(e) => setEndpoint(e.target.value)}
-            placeholder="https://your-service.example.com/query"
-            className={controls.field}
-          />
-          {hint(!endpointOk, 'Must be a valid http(s) URL.')}
-        </div>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div className="sm:col-span-2">
-          <input
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-            placeholder="Stellar payout address (G…)"
-            className={`${controls.field} font-mono`}
-          />
-          {hint(!addressOk, 'Must be a valid Stellar public key (G… , 56 chars).')}
-        </div>
-        <select
-          value={paymentModel}
-          onChange={(e) =>
-            setPaymentModel(e.target.value as 'escrow' | 'x402' | 'mpp-session' | 'subscription')
-          }
-          className={controls.field}
-          aria-label="Payment model"
-          disabled={!!edit}
-          title={edit ? 'The payment model is fixed at registration' : ''}
-        >
-          <option value="escrow">Escrow (pay on delivery)</option>
-          <option value="x402">Pay-per-call (x402)</option>
-          <option value="mpp-session">Streaming (MPP session)</option>
-          <option value="subscription">Subscription</option>
-        </select>
-      </div>
+      </Section>
 
-      <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3">
-        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
-          How your service works
-        </p>
+      <Section title="How buyers pay & interact">
+        <Field label="Payment model" hint={edit ? 'Fixed at registration.' : undefined}>
+          <select
+            value={paymentModel}
+            onChange={(e) =>
+              setPaymentModel(e.target.value as 'escrow' | 'x402' | 'mpp-session' | 'subscription')
+            }
+            className={controls.field}
+            aria-label="Payment model"
+            disabled={!!edit}
+          >
+            <option value="escrow">Escrow (pay on delivery)</option>
+            <option value="x402">Pay-per-call (x402)</option>
+            <option value="mpp-session">Streaming (MPP session)</option>
+            <option value="subscription">Subscription</option>
+          </select>
+        </Field>
         {paymentModel === 'escrow' ? (
           <>
             <div className="grid gap-3 sm:grid-cols-2">
-              <select
-                value={interaction}
-                onChange={(e) => setInteraction(e.target.value as 'sync' | 'async' | 'human')}
-                className={controls.field}
-                aria-label="Interaction shape"
-              >
-                <option value="sync">Instant (one request, one response)</option>
-                <option value="async">Long-running (the job runs, then completes)</option>
-                <option value="human">Human (a person does or approves the work)</option>
-              </select>
-              <label className="flex items-center gap-2 text-xs text-slate-300">
+              <Field label="Interaction">
+                <select
+                  value={interaction}
+                  onChange={(e) => setInteraction(e.target.value as 'sync' | 'async' | 'human')}
+                  className={controls.field}
+                  aria-label="Interaction shape"
+                >
+                  <option value="sync">Instant (one request, one response)</option>
+                  <option value="async">Long-running (the job runs, then completes)</option>
+                  <option value="human">Human (a person does or approves the work)</option>
+                </select>
+              </Field>
+              <label className="flex items-center gap-2 pt-6 text-xs text-slate-300">
                 <input
                   type="checkbox"
                   checked={needsFile}
@@ -940,12 +1056,14 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
               </label>
             </div>
             {needsFile && (
-              <input
-                value={accept}
-                onChange={(e) => setAccept(e.target.value)}
-                placeholder="Accepted file types (optional), e.g. application/pdf, image/*"
-                className={controls.field}
-              />
+              <Field label="Accepted file types">
+                <input
+                  value={accept}
+                  onChange={(e) => setAccept(e.target.value)}
+                  placeholder="e.g. application/pdf, image/*"
+                  className={controls.field}
+                />
+              </Field>
             )}
           </>
         ) : (
@@ -954,93 +1072,17 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
             Make sure your endpoint settles the chosen scheme.
           </p>
         )}
-      </div>
+      </Section>
 
-      <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3">
-        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
-          How your delivery is verified (buyers pay only once it passes)
-        </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <select
-            value={tier}
-            onChange={(e) => setTier(e.target.value as 'T1' | 'T2' | 'T3')}
-            className={controls.field}
-            aria-label="Verification tier"
-          >
-            <option value="T1">T1 Verifiable (trustless)</option>
-            <option value="T2">T2 Attestable (schema + dispute)</option>
-            <option value="T3">T3 Human (approval/milestone)</option>
-          </select>
-          {tier === 'T1' && (
-            <select
-              value={vmethod}
-              onChange={(e) => setVmethod(e.target.value)}
-              className={controls.field}
-              aria-label="Verification method"
-            >
-              <option value="onchain">onchain (re-derived on-chain)</option>
-              <option value="witness">witness (re-checked by a predicate)</option>
-              <option value="content-hash">content-hash</option>
-              <option value="signature">signature</option>
-            </select>
-          )}
-        </div>
-        <p className="text-[11px] leading-relaxed text-slate-500">
-          T1 is paid only when the worker/chain re-checks your result (most trusted). T2 pays on the
-          declared result shape with a dispute window. T3 waits for your buyer&apos;s approval.
-        </p>
-        <details className="text-xs text-slate-400" open={!!edit}>
-          <summary className="cursor-pointer select-none text-slate-300">
-            Input spec, deliverable format + verifier (optional)
-          </summary>
-          <div className="mt-2 space-y-3">
-            <div>
-              <span className="text-[11px] font-medium text-slate-400">
-                Input spec (the fields the agent must provide, so it fills the request correctly)
-              </span>
-              <div className="mt-1">
-                <SchemaBuilder value={inJson} onChange={setInJson} addLabel="+ Add input field" />
-              </div>
-            </div>
-            <div>
-              <span className="text-[11px] font-medium text-slate-400">
-                Deliverable format (the fields in the result you return)
-              </span>
-              <div className="mt-1">
-                <SchemaBuilder
-                  value={outJson}
-                  onChange={setOutJson}
-                  addLabel="+ Add result field"
-                />
-              </div>
-            </div>
-            <div>
-              <span className="text-[11px] font-medium text-slate-400">
-                Verifier spec (how your delivery is checked, for T1)
-              </span>
-              <textarea
-                value={specJson}
-                onChange={(e) => setSpecJson(e.target.value)}
-                placeholder={'Verifier spec, e.g. {"predicate":"sha256"} or {"signerKey":"G..."}'}
-                className={`${controls.field} mt-1 font-mono`}
-                rows={2}
-              />
-            </div>
-          </div>
-        </details>
-        {jsonErr && <p className="text-xs text-red-400">{jsonErr}</p>}
-      </div>
-
-      <div className="space-y-2 border-t border-white/10 pt-4">
-        <label className="text-sm font-medium text-slate-200">Requirements catalog (optional)</label>
+      <Section title="Requirements catalog">
         <p className="text-[11px] leading-relaxed text-slate-500">
           What a buyer must set up before hiring, that a prompt cannot carry: an API
           key/token, an install or authorization (with a link), or setup info. Declare them
-          here, then attach each to the functions that need it (below), so a buyer is gated
-          only on the functions whose requirements are unmet and can still use the rest. The
-          agent checks before hiring and asks the buyer to complete any missing ones;
-          satisfied values are sent to your endpoint as <code>credentials</code> (a secret
-          is encrypted and never shown to the buyer again).
+          here, then attach each to the functions that need it, so a buyer is gated only on
+          the functions whose requirements are unmet and can still use the rest. The agent
+          checks before hiring and asks the buyer to complete any missing ones; satisfied
+          values are sent to your endpoint as <code>credentials</code> (a secret is encrypted
+          and never shown to the buyer again).
         </p>
         {prereqs.map((p, i) => (
           <div key={i} className="space-y-1.5 rounded-lg border border-white/10 bg-black/20 p-2.5">
@@ -1111,30 +1153,125 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
         >
           + Add requirement
         </button>
-      </div>
+      </Section>
 
-      <div className="space-y-2 border-t border-white/10 pt-4">
-        <label className="text-sm font-medium text-slate-200">
-          Functions{functions.length > 0 ? ` (${functions.length})` : ' (optional)'}
-        </label>
-        <p className="text-[11px] leading-relaxed text-slate-500">
-          List each thing your service can do as its own function, with its own input,
-          deliverable, pricing, and the requirements it needs. A buyer sees them all and is
-          gated and charged per function, so one service can mix free reads with paid,
-          authorized actions. Leave this empty for a single-operation service (the price,
-          tier, and specs above describe its one function).
-        </p>
-        <FunctionsEditor functions={functions} setFunctions={setFunctions} requirements={prereqs} />
-      </div>
+      <Section
+        title="What this service does"
+        required
+        hint="One operation if it does a single thing, or several functions each with its own input, deliverable, price, and requirements."
+      >
+        <div className="inline-flex rounded-lg border border-white/10 bg-black/20 p-0.5 text-xs">
+          {(['single', 'multi'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => chooseMode(m)}
+              className={`rounded-md px-3 py-1.5 font-medium transition-colors ${
+                mode === m ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {m === 'single' ? 'One operation' : 'Multiple functions'}
+            </button>
+          ))}
+        </div>
 
-      <div className="space-y-2 border-t border-white/10 pt-4">
-        <label className="text-sm font-medium text-slate-200">Contact &amp; links (optional)</label>
-        <p className="text-[11px] leading-relaxed text-slate-500">
-          Who lists this and how to reach them. Shown on the service page so a buyer can see
-          the owner, read the docs, and get support before granting any access.
-        </p>
+        {mode === 'single' ? (
+          <div className="space-y-3">
+            <Field
+              label="Action key"
+              hint="The exact action the worker sends to your endpoint; leave blank if your endpoint always does the same thing."
+            >
+              <input
+                value={capability}
+                onChange={(e) => setCapability(e.target.value)}
+                placeholder="e.g. image.transform"
+                className={`${controls.field} font-mono`}
+              />
+            </Field>
+            <Field
+              label="Price per call (USDC)"
+              required
+              error={!priceOk ? 'Enter a non-negative number.' : null}
+            >
+              <input
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                inputMode="decimal"
+                placeholder="e.g. 0.02"
+                className={controls.field}
+              />
+            </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field
+                label="How delivery is verified"
+                hint="T1 trustless re-check, T2 result shape + dispute, T3 your approval."
+              >
+                <select
+                  value={tier}
+                  onChange={(e) => setTier(e.target.value as 'T1' | 'T2' | 'T3')}
+                  className={controls.field}
+                  aria-label="Verification tier"
+                >
+                  <option value="T1">T1 Verifiable (trustless)</option>
+                  <option value="T2">T2 Attestable (schema + dispute)</option>
+                  <option value="T3">T3 Human (approval)</option>
+                </select>
+              </Field>
+              {tier === 'T1' && (
+                <Field label="Verification method">
+                  <select
+                    value={vmethod}
+                    onChange={(e) => setVmethod(e.target.value)}
+                    className={controls.field}
+                    aria-label="Verification method"
+                  >
+                    <option value="onchain">onchain (re-derived on-chain)</option>
+                    <option value="witness">witness (re-checked by a predicate)</option>
+                    <option value="content-hash">content-hash</option>
+                    <option value="signature">signature</option>
+                  </select>
+                </Field>
+              )}
+            </div>
+            <details className="text-xs text-slate-400" open={!!edit}>
+              <summary className="cursor-pointer select-none text-slate-300">
+                Input spec, deliverable format + verifier (optional)
+              </summary>
+              <div className="mt-2 space-y-3">
+                <Field label="Input the agent provides">
+                  <SchemaBuilder value={inJson} onChange={setInJson} addLabel="+ Add input field" />
+                </Field>
+                <Field label="Deliverable it returns">
+                  <SchemaBuilder value={outJson} onChange={setOutJson} addLabel="+ Add result field" />
+                </Field>
+                <Field label="Verifier spec (for T1)">
+                  <textarea
+                    value={specJson}
+                    onChange={(e) => setSpecJson(e.target.value)}
+                    placeholder={'e.g. {"predicate":"sha256"} or {"signerKey":"G..."}'}
+                    className={`${controls.field} font-mono`}
+                    rows={2}
+                  />
+                </Field>
+              </div>
+            </details>
+          </div>
+        ) : (
+          <FunctionsEditor
+            functions={functions}
+            setFunctions={setFunctions}
+            requirements={prereqs}
+          />
+        )}
+        {jsonErr && <p className="text-xs text-rose-400">{jsonErr}</p>}
+      </Section>
+
+      <Section
+        title="Contact & links"
+        hint="Who lists this and how to reach them. Shown on the service page so a buyer can see the owner, read the docs, and get support before granting any access."
+      >
         <ContactLinksEditor value={contact} onChange={setContact} />
-      </div>
+      </Section>
 
       <div className="flex items-center gap-3">
         <button type="submit" disabled={!canSubmit} className={controls.primary}>
