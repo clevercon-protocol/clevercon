@@ -646,7 +646,8 @@ export function ServiceDetail() {
             </div>
             <p className="mt-1 text-slate-400">{service.description}</p>
             <p className="mt-1 text-sm text-slate-500">
-              {service.category ?? 'Uncategorised'} · {service.provider}
+              {service.category ?? 'Uncategorised'}
+              {multi && <> · {functions.length} functions</>}
             </p>
             {(interactionLabel(service.interaction) ||
               paymentModelLabel(service.paymentModel) ||
@@ -673,7 +674,9 @@ export function ServiceDetail() {
 
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {[
-              { icon: Zap, label: 'Price / call', value: `$${service.pricePerCall}` },
+              multi
+                ? { icon: Boxes, label: 'Functions', value: String(functions.length) }
+                : { icon: Zap, label: 'Price / call', value: `$${service.pricePerCall}` },
               { icon: Briefcase, label: 'Settled jobs', value: String(service.settlements) },
               { icon: Star, label: 'Rating', value: service.rating.toFixed(1) },
               {
@@ -730,21 +733,24 @@ export function ServiceDetail() {
 
           <div className="grid lg:grid-cols-2 gap-6">
             <div className="rounded-2xl bg-white/[0.04] p-6">
-              <h2 className="font-semibold text-slate-300">Capabilities</h2>
-              {service.capabilities.length === 0 ? (
-                <p className="mt-4 text-sm text-slate-500">No capabilities listed.</p>
-              ) : (
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {service.capabilities.map((c) => (
-                    <span
-                      key={c}
-                      className="rounded-full bg-white/[0.06] px-3 py-1 text-xs text-slate-300"
-                    >
-                      {c}
-                    </span>
-                  ))}
-                </div>
-              )}
+              <h2 className="font-semibold text-slate-300">{multi ? 'Details' : 'Capabilities'}</h2>
+              {/* Multi-function services show their operations in the Functions panel
+                  above, so the raw capability keys would only duplicate them here. */}
+              {!multi &&
+                (service.capabilities.length === 0 ? (
+                  <p className="mt-4 text-sm text-slate-500">No capabilities listed.</p>
+                ) : (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {service.capabilities.map((c) => (
+                      <span
+                        key={c}
+                        className="rounded-full bg-white/[0.06] px-3 py-1 text-xs text-slate-300"
+                      >
+                        {c}
+                      </span>
+                    ))}
+                  </div>
+                ))}
               <dl className="mt-6 space-y-1 text-sm">
                 <div className="flex justify-between">
                   <dt className="text-slate-500">Pricing</dt>

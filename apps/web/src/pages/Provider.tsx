@@ -1031,7 +1031,7 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
         {jsonErr && <p className="text-xs text-red-400">{jsonErr}</p>}
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2 border-t border-white/10 pt-4">
         <label className="text-sm font-medium text-slate-200">Requirements catalog (optional)</label>
         <p className="text-[11px] leading-relaxed text-slate-500">
           What a buyer must set up before hiring, that a prompt cannot carry: an API
@@ -1113,8 +1113,10 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
         </button>
       </div>
 
-      <div className="space-y-2">
-        <label className="text-sm font-medium text-slate-200">Functions (optional)</label>
+      <div className="space-y-2 border-t border-white/10 pt-4">
+        <label className="text-sm font-medium text-slate-200">
+          Functions{functions.length > 0 ? ` (${functions.length})` : ' (optional)'}
+        </label>
         <p className="text-[11px] leading-relaxed text-slate-500">
           List each thing your service can do as its own function, with its own input,
           deliverable, pricing, and the requirements it needs. A buyer sees them all and is
@@ -1125,7 +1127,7 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
         <FunctionsEditor functions={functions} setFunctions={setFunctions} requirements={prereqs} />
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2 border-t border-white/10 pt-4">
         <label className="text-sm font-medium text-slate-200">Contact &amp; links (optional)</label>
         <p className="text-[11px] leading-relaxed text-slate-500">
           Who lists this and how to reach them. Shown on the service page so a buyer can see

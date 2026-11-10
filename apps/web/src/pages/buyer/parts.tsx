@@ -34,6 +34,7 @@ import {
   Award,
   Lock,
   Droplets,
+  Boxes,
 } from 'lucide-react';
 import { isDemo } from '../../config';
 import { useSession } from '../../store/session';
@@ -45,6 +46,7 @@ import {
   paymentModelLabel,
   type ServiceSort,
   type Tier,
+  type Service,
 } from '../../lib/services';
 import {
   getVault,
@@ -1129,6 +1131,16 @@ const PAGE_SIZE = 12;
  * freshly listed service stays `new` until it proves itself. This is the directory's
  * anti-spam primitive and its trust signal in one.
  */
+/** Price summary for a card: a single-function service shows its flat price; a
+ *  multi-function one shows the entry price ("from $x", or "Free" when any is free). */
+function priceSummary(s: Service): string {
+  const fns = s.functions ?? [];
+  if (fns.length === 0) return `$${s.pricePerCall} / call`;
+  const amounts = fns.map((f) => (f.pricing.model === 'free' ? 0 : (f.pricing.amount ?? 0)));
+  const min = Math.min(...amounts);
+  return min === 0 ? 'Free +' : `from $${min}`;
+}
+
 function TrustBadge({ trust, settlements }: { trust: string; settlements: number }) {
   if (trust === 'trusted')
     return (
@@ -1330,6 +1342,16 @@ export function Marketplace() {
                     {interactionLabel(s.interaction)}
                   </Badge>
                 )}
+                {(s.functions?.length ?? 0) > 1 && (
+                  <Badge className="border-white/10 bg-white/[0.04] text-slate-300">
+                    <Boxes size={11} /> {s.functions!.length} functions
+                  </Badge>
+                )}
+                {(s.prerequisites?.length ?? 0) > 0 && (
+                  <Badge className="border-amber-500/25 bg-amber-500/10 text-amber-300">
+                    <KeyRound size={11} /> setup
+                  </Badge>
+                )}
                 {s.attachmentsIn?.required && (
                   <Badge className="border-amber-500/25 bg-amber-500/10 text-amber-300">
                     file
@@ -1338,7 +1360,7 @@ export function Marketplace() {
               </div>
               <div className="mt-3 flex items-center justify-between border-t border-line pt-2.5 text-xs text-slate-500">
                 <span>{s.category ?? 'Uncategorized'}</span>
-                <span className="cc-num text-slate-300">${s.pricePerCall}/call</span>
+                <span className="cc-num text-slate-300">{priceSummary(s)}</span>
               </div>
             </Link>
           ))}

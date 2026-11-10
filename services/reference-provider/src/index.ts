@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createProvider, artifactRef } from '@clevercon/agent-sdk/provider';
 import type { ArtifactRef } from '@clevercon/agent-sdk';
 import { SERVICE_BY_ACTION, SERVICES } from './services.js';
+import { GITHUB_HANDLERS } from './github.js';
 
 /**
  * The reference provider: several real, hireable services on one process, built on
@@ -41,7 +42,11 @@ function hostArtifact(bytes: Buffer, contentType: string): ArtifactRef {
 
 const provider = createProvider({
   name: NAME,
-  async fulfill({ action, input, attachments }) {
+  async fulfill({ action, input, attachments, credentials }) {
+    // GitHub tool functions (github.*): each reads the buyer's satisfied credentials
+    // (e.g. github_token) which CleverCon decrypts and sends here, never to the LLM.
+    const gh = GITHUB_HANDLERS[action];
+    if (gh) return gh({ input, credentials });
     const svc = SERVICE_BY_ACTION.get(action);
     // Unknown action: fall back to the market snapshot so a bare hire still works.
     const handler = svc?.handler ?? SERVICES.find((s) => s.action === 'market.snapshot')!.handler;

@@ -67,6 +67,13 @@ export interface FulfillmentRequest {
   requestId?: string;
   /** On an `answer`: the buyer's response payload. */
   inputResponse?: Record<string, unknown>;
+  /**
+   * The buyer's satisfied usage-requirement values, keyed by requirement key (e.g.
+   * `github_token`). These are the credentials the buyer set up so you can act on their
+   * behalf; a secret is decrypted server-side and sent only to you, never to the LLM.
+   * Use these, never ask for a token in `input`.
+   */
+  credentials: Record<string, string>;
   /** The full parsed JSON body the worker sent (everything above, plus any extras). */
   body: Record<string, unknown>;
 }
@@ -285,6 +292,12 @@ function parseRequest(body: Record<string, unknown>): FulfillmentRequest {
   const str = (v: unknown, dflt = ''): string => (typeof v === 'string' ? v : dflt);
   const obj = (v: unknown): Record<string, unknown> =>
     v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  // Credentials arrive as string values; coerce defensively and drop non-strings.
+  const creds = (v: unknown): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const [k, val] of Object.entries(obj(v))) if (typeof val === 'string') out[k] = val;
+    return out;
+  };
   const kindRaw = str(body.kind, 'dispatch');
   const kind = kindRaw === 'poll' || kindRaw === 'answer' ? kindRaw : 'dispatch';
   return {
@@ -298,6 +311,7 @@ function parseRequest(body: Record<string, unknown>): FulfillmentRequest {
     handle: typeof body.handle === 'string' ? body.handle : undefined,
     requestId: typeof body.requestId === 'string' ? body.requestId : undefined,
     inputResponse: body.inputResponse ? obj(body.inputResponse) : undefined,
+    credentials: creds(body.credentials),
     body,
   };
 }

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
-    "register": "tsx src/register.ts"
+    "register": "tsx src/register.ts",
+    "register:github": "tsx src/register-github.ts"
   },
   "dependencies": {
     "@clevercon/agent-sdk": "*",
