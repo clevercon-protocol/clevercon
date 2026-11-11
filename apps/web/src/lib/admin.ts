@@ -18,9 +18,22 @@ export interface AdminUser {
   createdAt: string;
   roles: string[];
   wallet: string | null;
+  displayName?: string | null;
+  handle?: string | null;
+  verified?: boolean;
   services: number;
   tasks: number;
   apiKeys: number;
+}
+
+export interface AdminOrg {
+  id: string;
+  handle: string;
+  name: string;
+  verified: boolean;
+  services: number;
+  members: number;
+  createdAt: string;
 }
 
 export async function getAdminStats(): Promise<AdminStats> {
@@ -116,6 +129,28 @@ export async function setUserRole(
     role,
     grant,
   });
+}
+
+export async function getAdminOrgs(): Promise<AdminOrg[]> {
+  if (isDemo()) return [];
+  const res = await apiFetch<{ items: AdminOrg[] }>('/admin/orgs');
+  return res.items;
+}
+
+/** Grant or revoke an org's verified tick (its services inherit it). */
+export async function verifyOrg(
+  id: string,
+  verified: boolean,
+): Promise<{ id: string; verified: boolean }> {
+  return apiPost<{ id: string; verified: boolean }>(`/admin/orgs/${id}/verify`, { verified });
+}
+
+/** Grant or revoke an individual provider's verified tick. */
+export async function verifyUser(
+  id: string,
+  verified: boolean,
+): Promise<{ id: string; verified: boolean }> {
+  return apiPost<{ id: string; verified: boolean }>(`/admin/users/${id}/verify`, { verified });
 }
 
 export interface AdminServiceItem {

@@ -40,6 +40,7 @@ import {
   type ContactLinks,
   type ServiceFunction,
 } from '../lib/services';
+import { getMyOrgs, createOrg, type OrgRef } from '../lib/org';
 import { refreshRoles } from '../lib/sessionSync';
 import { config } from '../config';
 
@@ -658,6 +659,105 @@ function ContactLinksEditor({
   );
 }
 
+/** Choose who lists the service: yourself or an organization you belong to (with an
+ *  inline create). An org's admin-granted verified tick carries to its services. */
+function OwnerSelect({
+  value,
+  onChange,
+  orgs,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  orgs: OrgRef[];
+}) {
+  const qc = useQueryClient();
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [handle, setHandle] = useState('');
+  const create = useMutation({
+    mutationFn: () => createOrg({ name: name.trim(), handle: handle.trim().toLowerCase() }),
+    onSuccess: (org) => {
+      qc.invalidateQueries({ queryKey: ['my-orgs'] });
+      onChange(org.id);
+      setCreating(false);
+      setName('');
+      setHandle('');
+    },
+  });
+  return (
+    <Field
+      label="Listed by"
+      hint="Shown as the service owner. An organization's verified tick carries to its services."
+    >
+      {!creating ? (
+        <div className="flex gap-2">
+          <select
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            className={controls.field}
+            aria-label="Owner"
+          >
+            <option value="">Yourself</option>
+            {orgs.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+                {o.verified ? ' ✓' : ''}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => setCreating(true)}
+            className={`${controls.chip} shrink-0`}
+          >
+            <Plus size={13} /> Organization
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-2.5">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Organization name (e.g. CleverCon)"
+            className={controls.field}
+            aria-label="Organization name"
+          />
+          <input
+            value={handle}
+            onChange={(e) => setHandle(e.target.value)}
+            placeholder="handle (e.g. clevercon)"
+            className={`${controls.field} font-mono`}
+            aria-label="Organization handle"
+          />
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              disabled={!name.trim() || !handle.trim() || create.isPending}
+              onClick={() => create.mutate()}
+              className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-50"
+            >
+              {create.isPending ? 'Creating…' : 'Create'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreating(false)}
+              className="text-xs text-slate-400 hover:text-white"
+            >
+              Cancel
+            </button>
+            {create.error && (
+              <span className="text-xs text-rose-400">{(create.error as Error).message}</span>
+            )}
+          </div>
+          <p className="text-[10px] text-slate-500">
+            New organizations start unverified; an admin grants the verified tick.
+          </p>
+        </div>
+      )}
+    </Field>
+  );
+}
+
 function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onDone: () => void }) {
   const qc = useQueryClient();
   // Pre-fill every field from the service being edited (the owner's own view carries
@@ -732,6 +832,9 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
     // Entering multi mode with no functions yet: seed one so the builder isn't empty.
     if (m === 'multi' && functions.length === 0) setFunctions([emptyFn()]);
   };
+  // Who lists the service: yourself ('') or an organization you belong to.
+  const { data: myOrgs = [] } = useQuery({ queryKey: ['my-orgs'], queryFn: getMyOrgs });
+  const [ownerOrgId, setOwnerOrgId] = useState<string>(edit?.ownerOrgId ?? '');
 
   const reg = useMutation({
     // pricingModel is fixed at register time: the update endpoint ignores it, so the
@@ -907,6 +1010,7 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
         ...(prerequisites.length ? { prerequisites } : {}),
         functions: functionsOut,
         ...(Object.keys(contactLinks).length ? { contactLinks } : {}),
+      ...(ownerOrgId || edit ? { ownerOrgId } : {}),
       };
     }
     return {
@@ -927,6 +1031,7 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
       ...(attachmentsIn ? { attachmentsIn } : {}),
       ...(prerequisites.length ? { prerequisites } : {}),
       ...(Object.keys(contactLinks).length ? { contactLinks } : {}),
+      ...(ownerOrgId || edit ? { ownerOrgId } : {}),
     };
   };
 
@@ -1012,6 +1117,7 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
             />
           </Field>
         </div>
+        <OwnerSelect value={ownerOrgId} onChange={setOwnerOrgId} orgs={myOrgs} />
       </Section>
 
       <Section title="How buyers pay & interact">

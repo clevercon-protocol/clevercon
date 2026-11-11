@@ -8,6 +8,16 @@ export type TrustTier = 'new' | 'active' | 'trusted';
 /** Verification tier: how a service's delivery is judged before it is paid. */
 export type Tier = 'T1' | 'T2' | 'T3';
 
+/** Who lists a service: an organization or an individual provider's profile. */
+export interface Owner {
+  type: 'org' | 'user';
+  id: string;
+  handle: string | null;
+  name: string;
+  verified: boolean;
+  links?: Record<string, string> | null;
+}
+
 export interface Verification {
   method: string;
 }
@@ -113,6 +123,8 @@ export interface Service {
   functions?: ServiceFunction[] | null;
   /** Who listed this and how to reach them (website, docs, support, socials). */
   contactLinks?: ContactLinks | null;
+  /** The owner behind the service (org or provider), for attribution + the tick. */
+  owner?: Owner | null;
   /** System-managed endpoint health (auto-recovering); false = temporarily unavailable. */
   healthy?: boolean;
 }
@@ -135,6 +147,7 @@ interface ApiService {
   prerequisites?: Prerequisite[] | null;
   functions?: ServiceFunction[] | null;
   contactLinks?: ContactLinks | null;
+  owner?: Owner | null;
   healthy?: boolean;
   reputation: { score: number } | null;
 }
@@ -246,6 +259,7 @@ function mapApiService(s: ApiService): Service {
     prerequisites: s.prerequisites ?? null,
     functions: s.functions ?? null,
     contactLinks: s.contactLinks ?? null,
+    owner: s.owner ?? null,
     healthy: s.healthy ?? true,
   };
 }
@@ -390,6 +404,7 @@ export async function getService(id: string): Promise<ServiceDetail> {
     prerequisites: s.prerequisites ?? null,
     functions: s.functions ?? null,
     contactLinks: s.contactLinks ?? null,
+    owner: s.owner ?? null,
     healthy: s.healthy ?? true,
     capabilities: s.capabilities ?? [],
     pricingModel: s.pricingModel,

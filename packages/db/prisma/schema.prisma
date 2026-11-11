@@ -21,19 +21,65 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  wallets     Wallet[]
-  roles       UserRole[]
-  sessions    Session[]
-  apiKeys     ApiKey[]
-  tasks       Task[]         @relation("BuyerTasks")
-  services    Service[]      @relation("ProviderServices")
-  policies    Policy[]
-  webhooks    Webhook[]
-  auditLogs   AuditLog[]
-  delegate    AgentDelegate?
-  agentWallet AgentWallet?
+  // Public provider profile (so a service can show WHO listed it). All optional;
+  // a provider who never sets these shows a shortened wallet as a fallback.
+  displayName String? // shown as the owner name
+  handle      String? @unique // URL-safe id for the public profile page (/p/:handle)
+  bio         String?
+  links       Json? // { website, docs, github, x, ... }
+  verified    Boolean   @default(false) // admin-granted; all this user's services inherit the tick
+  verifiedAt  DateTime?
+
+  wallets        Wallet[]
+  roles          UserRole[]
+  sessions       Session[]
+  apiKeys        ApiKey[]
+  tasks          Task[]               @relation("BuyerTasks")
+  services       Service[]            @relation("ProviderServices")
+  policies       Policy[]
+  webhooks       Webhook[]
+  auditLogs      AuditLog[]
+  delegate       AgentDelegate?
+  agentWallet    AgentWallet?
+  orgsCreated    Organization[]       @relation("OrgCreator")
+  orgMemberships OrganizationMember[] @relation("OrgMemberships")
 
   @@map("users")
+}
+
+// An organization that can own/list services (e.g. CleverCon). A service owned by an
+// org shows the org as its provider; the org's verified tick (admin-granted) carries
+// to every service it lists. Members are the users allowed to list under it.
+model Organization {
+  id          String               @id @default(cuid())
+  handle      String               @unique // URL-safe id for /p/:handle
+  name        String
+  bio         String?
+  links       Json? // { website, docs, github, x, support, discord }
+  verified    Boolean              @default(false)
+  verifiedAt  DateTime?
+  createdById String
+  createdBy   User                 @relation("OrgCreator", fields: [createdById], references: [id])
+  members     OrganizationMember[]
+  services    Service[]            @relation("OrgServices")
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  @@index([createdById])
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  orgId  String
+  userId String
+  role   String @default("admin") // admin | member (admins can list + edit the org)
+
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user User         @relation("OrgMemberships", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([orgId, userId])
+  @@index([userId])
+  @@map("organization_members")
 }
 
 /// The per-user spending delegate (orchestrator) the platform provisions and the
@@ -185,7 +231,8 @@ enum PricingModel {
 
 model Service {
   id              String        @id @default(cuid())
-  providerId      String? // the User (provider) who owns it, if registered here
+  providerId      String? // the User (provider) who registered it, if registered here
+  ownerOrgId      String? // when listed under an organization (else the provider is the owner)
   agentId         String        @unique // registry agent_id
   name            String
   description     String
@@ -233,11 +280,13 @@ model Service {
   updatedAt       DateTime      @updatedAt
 
   provider   User?              @relation("ProviderServices", fields: [providerId], references: [id])
+  ownerOrg   Organization?      @relation("OrgServices", fields: [ownerOrgId], references: [id])
   reputation ServiceReputation?
   steps      TaskStep[]
   bonds      ServiceBond[]
 
   @@index([providerId])
+  @@index([ownerOrgId])
   @@index([category])
   @@map("services")
 }

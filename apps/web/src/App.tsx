@@ -27,6 +27,7 @@ const ServiceDetail = lazyFrom(() => import('./pages/ServiceDetail'), 'ServiceDe
 const Provider = lazyFrom(() => import('./pages/Provider'), 'Provider');
 const Admin = lazyFrom(() => import('./pages/Admin'), 'Admin');
 const Developer = lazyFrom(() => import('./pages/Developer'), 'Developer');
+const Profile = lazyFrom(() => import('./pages/Profile'), 'Profile');
 const DocsApp = lazyFrom(() => import('./pages/docs/DocsApp'), 'DocsApp');
 
 function RouteFallback() {
@@ -42,6 +43,8 @@ export function App() {
             <Routes>
               <Route path="/" element={<Landing />} />
               <Route path="/connect" element={<Connect />} />
+              {/* Public owner profile: an org or an individual provider + their services. */}
+              <Route path="/p/:handle" element={<Profile />} />
               {/* Public documentation, its own full-page layout (see Shell bare passthrough). */}
               <Route path="/docs" element={<DocsApp />} />
               <Route path="/docs/:slug" element={<DocsApp />} />

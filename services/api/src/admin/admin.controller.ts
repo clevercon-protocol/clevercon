@@ -24,6 +24,8 @@ const feeSchema = z.object({
 
 const moderateSchema = z.object({ active: z.boolean() });
 
+const verifySchema = z.object({ verified: z.boolean() });
+
 const resolveSchema = z.object({
   resolution: z.string().min(1).max(1000),
   refundToUser: z.number().nonnegative().optional(),
@@ -81,6 +83,27 @@ export class AdminController {
   moderate(@Param('id') id: string, @Body() body: unknown) {
     const { active } = parseBody(moderateSchema, body);
     return this.admin.moderateService(id, active);
+  }
+
+  /** All organizations, for the verified-badge controls. */
+  @Get('orgs')
+  orgs(@Query() query: unknown) {
+    const { limit, offset } = parseBody(listQuery, query);
+    return this.admin.listOrgs(limit, offset);
+  }
+
+  /** Grant or revoke an organization's verified tick (inherited by its services). */
+  @Post('orgs/:id/verify')
+  verifyOrg(@Param('id') id: string, @Body() body: unknown) {
+    const { verified } = parseBody(verifySchema, body);
+    return this.admin.setOrgVerified(id, verified);
+  }
+
+  /** Grant or revoke an individual provider's verified tick. */
+  @Post('users/:id/verify')
+  verifyUser(@Param('id') id: string, @Body() body: unknown) {
+    const { verified } = parseBody(verifySchema, body);
+    return this.admin.setUserVerified(id, verified);
   }
 
   /** Dispute queue (optionally filter by status). */

@@ -653,9 +653,33 @@ export function ServiceDetail() {
               )}
             </div>
             <p className="mt-1 text-slate-400">{service.description}</p>
-            <p className="mt-1 text-sm text-slate-500">
-              {service.category ?? 'Uncategorised'}
-              {multi && <> · {functions.length} functions</>}
+            <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-sm text-slate-500">
+              {service.owner ? (
+                <>
+                  by{' '}
+                  {service.owner.handle ? (
+                    <Link
+                      to={`/p/${service.owner.handle}`}
+                      className="inline-flex items-center gap-1 text-slate-300 hover:text-white"
+                    >
+                      {service.owner.name}
+                      {service.owner.verified && (
+                        <BadgeCheck size={14} className="text-sky-300" aria-label="Verified" />
+                      )}
+                    </Link>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-slate-300">
+                      {service.owner.name}
+                      {service.owner.verified && (
+                        <BadgeCheck size={14} className="text-sky-300" aria-label="Verified" />
+                      )}
+                    </span>
+                  )}
+                  <span>·</span>
+                </>
+              ) : null}
+              <span>{service.category ?? 'Uncategorised'}</span>
+              {multi && <span>· {functions.length} functions</span>}
             </p>
             {(interactionLabel(service.interaction) ||
               paymentModelLabel(service.paymentModel) ||

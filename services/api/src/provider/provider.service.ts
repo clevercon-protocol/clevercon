@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException, Optional } from '@n
 import { createHash } from 'node:crypto';
 import { Prisma, PaymentStatus, PricingModel, Role, ServiceStatus } from '@clevercon/db';
 import type { Prerequisite, ServiceFunction, ContactLinks } from '@clevercon/common';
+import { OrgService } from '../org/org.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegistryContractService } from './registry-contract.service.js';
 import { issuePayoutChallenge, verifyPayoutOwnership } from './payout-proof.js';
@@ -69,6 +70,8 @@ export interface RegisterServiceParams {
   functions?: ServiceFunction[];
   /** Public contact/identity links. */
   contactLinks?: ContactLinks;
+  /** List under this organization (the caller must be a member) instead of themselves. */
+  ownerOrgId?: string;
   /** Proof of control over a payout address that is not the caller's own wallet. */
   payoutProof?: { challenge: string; signature: string };
 }
@@ -97,6 +100,8 @@ export interface UpdateServiceParams {
   prerequisites?: Prerequisite[];
   functions?: ServiceFunction[];
   contactLinks?: ContactLinks;
+  /** '' lists as yourself; an org id lists under that org (membership required). */
+  ownerOrgId?: string;
 }
 
 /** Stable, URL-safe id from a display name plus a short random suffix. */
@@ -158,6 +163,7 @@ function serializeService(s: ServiceWithRep, uniquePayers = 0, payoutReady: bool
     prerequisites: s.prerequisites ?? null,
     functions: s.functions ?? null,
     contactLinks: s.contactLinks ?? null,
+    ownerOrgId: s.ownerOrgId ?? null,
     // The provider's own trust view: how they rank and why.
     trust: trustTier(settlements, score, uniquePayers, disputesUpheld, totalJobs),
     settlements,
@@ -180,6 +186,7 @@ function serializeService(s: ServiceWithRep, uniquePayers = 0, payoutReady: bool
 export class ProviderService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly org: OrgService,
     @Optional() private readonly registry?: RegistryContractService,
   ) {}
 
@@ -210,10 +217,17 @@ export class ProviderService {
       if (!proof.ok) throw new BadRequestException(`payout ownership proof failed: ${proof.reason}`);
     }
 
+    // Listing under an organization requires membership, so a service cannot claim an
+    // org's identity (and its verified tick) without belonging to it.
+    if (params.ownerOrgId && !(await this.org.isMember(userId, params.ownerOrgId))) {
+      throw new BadRequestException('You are not a member of that organization.');
+    }
+
     const created = await this.prisma.$transaction(async (tx) => {
       const service = await tx.service.create({
         data: {
           providerId: userId,
+          ownerOrgId: params.ownerOrgId ?? undefined,
           agentId: toAgentId(params.name),
           name: params.name,
           description: params.description,
@@ -324,6 +338,15 @@ export class ProviderService {
       data.functions = params.functions as unknown as Prisma.InputJsonValue;
     if (params.contactLinks !== undefined)
       data.contactLinks = params.contactLinks as unknown as Prisma.InputJsonValue;
+    if (params.ownerOrgId !== undefined) {
+      // '' detaches (list as yourself); a non-empty id requires membership.
+      if (params.ownerOrgId && !(await this.org.isMember(userId, params.ownerOrgId))) {
+        throw new BadRequestException('You are not a member of that organization.');
+      }
+      data.ownerOrg = params.ownerOrgId
+        ? { connect: { id: params.ownerOrgId } }
+        : { disconnect: true };
+    }
 
     const updated = await this.prisma.service.update({
       where: { id: serviceId },

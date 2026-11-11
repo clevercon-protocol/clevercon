@@ -4,8 +4,12 @@ import type { Prerequisite } from '@clevercon/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { VaultContractService } from '../vault/vault-contract.service.js';
 import { satisfiedKeys } from './prerequisites.js';
+import { ownerOf, OWNER_INCLUDE } from '../org/owner.js';
 
-type ServiceWithRep = Prisma.ServiceGetPayload<{ include: { reputation: true } }>;
+// Every service read also loads its reputation and its owner (provider profile + org),
+// so the marketplace can show WHO lists it and inherit the owner's verified tick.
+const SERVICE_INCLUDE = { reputation: true, ...OWNER_INCLUDE } as const;
+type ServiceWithRep = Prisma.ServiceGetPayload<{ include: typeof SERVICE_INCLUDE }>;
 
 export type ServiceSort = 'trust' | 'recent' | 'rating' | 'price_asc' | 'price_desc';
 
@@ -130,7 +134,10 @@ function serialize(s: ServiceWithRep, verified: Set<string>, stat?: PayerStat) {
     // column if the directory volume grows.
     uniquePayers,
     lastSettled: stat?.lastSettled ?? null,
-    verified: verified.has(s.agentId),
+    // Who lists this service (org or provider profile), for the card + detail page.
+    owner: ownerOf(s),
+    // Verified: the owner's admin-granted tick, or the legacy per-agent env allowlist.
+    verified: ownerOf(s)?.verified || verified.has(s.agentId),
     reputation: s.reputation
       ? {
           score: s.reputation.score,
@@ -236,7 +243,7 @@ export class ServicesService {
     const orderBy = SORT_ORDER[params.sort ?? 'trust'];
     const verified = verifiedAgentIds();
     const [rows, total] = await Promise.all([
-      this.prisma.service.findMany({ where, include: { reputation: true }, orderBy, take, skip }),
+      this.prisma.service.findMany({ where, include: SERVICE_INCLUDE, orderBy, take, skip }),
       this.prisma.service.count({ where }),
     ]);
     const stats = await this.payerStats(rows.map((r) => r.id));
@@ -251,7 +258,7 @@ export class ServicesService {
   async get(id: string) {
     const s = await this.prisma.service.findUnique({
       where: { id },
-      include: { reputation: true },
+      include: SERVICE_INCLUDE,
     });
     if (!s) throw new NotFoundException('Service not found');
     const stats = await this.payerStats([s.id]);

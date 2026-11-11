@@ -1,6 +1,16 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Users, Boxes, Coins, Landmark, Briefcase, Percent, Rocket } from 'lucide-react';
+import {
+  Users,
+  Boxes,
+  Coins,
+  Landmark,
+  Briefcase,
+  Percent,
+  Rocket,
+  Building2,
+  BadgeCheck,
+} from 'lucide-react';
 import {
   getAdminStats,
   getActivation,
@@ -14,6 +24,9 @@ import {
   moderateService,
   getDisputes,
   resolveDispute,
+  getAdminOrgs,
+  verifyOrg,
+  verifyUser,
 } from '../lib/admin';
 import { Loading, ErrorState, controls } from '../components/ui';
 
@@ -347,6 +360,13 @@ function UsersCard() {
       qc.invalidateQueries({ queryKey: ['admin-stats'] });
     },
   });
+  const verify = useMutation({
+    mutationFn: (v: { userId: string; verified: boolean }) => verifyUser(v.userId, v.verified),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-users'] });
+      qc.invalidateQueries({ queryKey: ['services'] });
+    },
+  });
 
   return (
     <div className="rounded-2xl bg-white/[0.04] p-6">
@@ -371,6 +391,11 @@ function UsersCard() {
             className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3 text-sm"
           >
             <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                {u.displayName && <span className="text-slate-200">{u.displayName}</span>}
+                {u.handle && <span className="text-xs text-slate-500">@{u.handle}</span>}
+                {u.verified && <BadgeCheck size={13} className="text-sky-300" />}
+              </div>
               <div className="font-mono text-xs text-slate-400">
                 {u.wallet ? `${u.wallet.slice(0, 6)}…${u.wallet.slice(-4)}` : u.id.slice(0, 10)}
               </div>
@@ -378,7 +403,19 @@ function UsersCard() {
                 {u.services} services · {u.tasks} tasks · {u.apiKeys} keys
               </div>
             </div>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => verify.mutate({ userId: u.id, verified: !u.verified })}
+                disabled={verify.isPending}
+                className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs transition-colors disabled:opacity-50 ${
+                  u.verified
+                    ? 'border-sky-500/40 bg-sky-500/15 text-sky-200'
+                    : 'border-white/10 text-slate-500 hover:text-white'
+                }`}
+                title={u.verified ? 'Revoke verified' : 'Grant verified'}
+              >
+                <BadgeCheck size={12} /> Verified
+              </button>
               {MANAGEABLE_ROLES.map((role) => {
                 const has = u.roles.includes(role);
                 return (
@@ -398,6 +435,74 @@ function UsersCard() {
                 );
               })}
             </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OrgsCard() {
+  const qc = useQueryClient();
+  const {
+    data: orgs = [],
+    isLoading,
+    error,
+  } = useQuery({ queryKey: ['admin-orgs'], queryFn: getAdminOrgs });
+  const verify = useMutation({
+    mutationFn: (v: { id: string; verified: boolean }) => verifyOrg(v.id, v.verified),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-orgs'] });
+      qc.invalidateQueries({ queryKey: ['services'] });
+    },
+  });
+  return (
+    <div className="rounded-2xl bg-white/[0.04] p-6">
+      <div className="flex items-center gap-2">
+        <Building2 size={16} className="text-violet-300" />
+        <h2 className="font-semibold text-slate-300">Organizations</h2>
+      </div>
+      {isLoading && (
+        <div className="mt-4">
+          <Loading rows={2} />
+        </div>
+      )}
+      {error && (
+        <div className="mt-4">
+          <ErrorState>Could not load organizations.</ErrorState>
+        </div>
+      )}
+      {!isLoading && !error && orgs.length === 0 && (
+        <p className="mt-4 text-sm text-slate-500">No organizations yet.</p>
+      )}
+      <div className="mt-4 space-y-2">
+        {orgs.map((o) => (
+          <div
+            key={o.id}
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3 text-sm"
+          >
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-slate-200">{o.name}</span>
+                <span className="text-xs text-slate-500">@{o.handle}</span>
+                {o.verified && <BadgeCheck size={13} className="text-sky-300" />}
+              </div>
+              <div className="mt-0.5 text-xs text-slate-500">
+                {o.services} services · {o.members} members
+              </div>
+            </div>
+            <button
+              onClick={() => verify.mutate({ id: o.id, verified: !o.verified })}
+              disabled={verify.isPending}
+              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs transition-colors disabled:opacity-50 ${
+                o.verified
+                  ? 'border-sky-500/40 bg-sky-500/15 text-sky-200'
+                  : 'border-white/10 text-slate-500 hover:text-white'
+              }`}
+              title={o.verified ? 'Revoke verified' : 'Grant verified'}
+            >
+              <BadgeCheck size={12} /> {o.verified ? 'Verified' : 'Verify'}
+            </button>
           </div>
         ))}
       </div>
@@ -492,6 +597,7 @@ export function Admin() {
       <ActivationFunnelCard />
       <FeesCard />
       <ServicesModerationCard />
+      <OrgsCard />
       <UsersCard />
       <DisputesCard />
     </section>

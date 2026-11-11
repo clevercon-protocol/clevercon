@@ -319,6 +319,9 @@ export class AdminService {
         createdAt: u.createdAt,
         roles: u.roles.map((r) => r.role),
         wallet: u.wallets[0]?.address ?? null,
+        displayName: u.displayName,
+        handle: u.handle,
+        verified: u.verified,
         services: u._count.services,
         tasks: u._count.tasks,
         apiKeys: u._count.apiKeys,
@@ -327,6 +330,56 @@ export class AdminService {
       limit: take,
       offset,
     };
+  }
+
+  /** All organizations with their owner + service counts (for verified-badge control). */
+  async listOrgs(limit = 50, offset = 0) {
+    const take = Math.min(limit, 100);
+    const [rows, total] = await Promise.all([
+      this.prisma.organization.findMany({
+        orderBy: { createdAt: 'desc' },
+        take,
+        skip: offset,
+        include: { _count: { select: { services: true, members: true } } },
+      }),
+      this.prisma.organization.count(),
+    ]);
+    return {
+      items: rows.map((o) => ({
+        id: o.id,
+        handle: o.handle,
+        name: o.name,
+        verified: o.verified,
+        services: o._count.services,
+        members: o._count.members,
+        createdAt: o.createdAt,
+      })),
+      total,
+      limit: take,
+      offset,
+    };
+  }
+
+  /** Grant or revoke an org's verified tick (its services inherit it). */
+  async setOrgVerified(orgId: string, verified: boolean) {
+    const org = await this.prisma.organization.findUnique({ where: { id: orgId } });
+    if (!org) throw new NotFoundException('Organization not found');
+    const updated = await this.prisma.organization.update({
+      where: { id: orgId },
+      data: { verified, verifiedAt: verified ? new Date() : null },
+    });
+    return { id: updated.id, handle: updated.handle, verified: updated.verified };
+  }
+
+  /** Grant or revoke an individual provider's verified tick. */
+  async setUserVerified(userId: string, verified: boolean) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: { verified, verifiedAt: verified ? new Date() : null },
+    });
+    return { id: updated.id, handle: updated.handle, verified: updated.verified };
   }
 
   /**

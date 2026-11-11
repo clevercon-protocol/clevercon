@@ -19,6 +19,7 @@ export interface ProviderServiceItem {
   prerequisites?: RegisterServiceInput['prerequisites'] | null;
   functions?: ServiceFunction[] | null;
   contactLinks?: ContactLinks | null;
+  ownerOrgId?: string | null;
   pricePerCall: number;
   status: string;
   rating: number;
@@ -105,6 +106,7 @@ interface ApiProviderService {
   prerequisites?: RegisterServiceInput['prerequisites'] | null;
   functions?: ServiceFunction[] | null;
   contactLinks?: ContactLinks | null;
+  ownerOrgId?: string | null;
   pricePerCall: number;
   status: string;
   tier?: string;
@@ -205,6 +207,8 @@ export interface RegisterServiceInput {
   functions?: ServiceFunction[];
   // Public contact/identity links (website, docs, support, socials).
   contactLinks?: ContactLinks;
+  // List under an organization the caller belongs to (else they are the owner). '' detaches.
+  ownerOrgId?: string;
 }
 
 /** Register a service (grants PROVIDER). Demo returns a local stand-in. */
@@ -259,6 +263,7 @@ function mapService(s: ApiProviderService): ProviderServiceItem {
     prerequisites: s.prerequisites ?? null,
     functions: s.functions ?? null,
     contactLinks: s.contactLinks ?? null,
+    ownerOrgId: s.ownerOrgId ?? null,
     pricePerCall: s.pricePerCall,
     status: s.status,
     rating: s.reputation?.score ?? 0,

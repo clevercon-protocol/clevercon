@@ -1316,6 +1316,14 @@ export function Marketplace() {
                 </Badge>
               </div>
               <p className="mt-1 line-clamp-2 text-sm text-slate-400">{s.description}</p>
+              {s.owner && (
+                <div className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-slate-500">
+                  by <span className="text-slate-300">{s.owner.name}</span>
+                  {s.owner.verified && (
+                    <BadgeCheck size={12} className="text-sky-300" aria-label="Verified owner" />
+                  )}
+                </div>
+              )}
               <div className="mt-3 flex flex-wrap items-center gap-1.5">
                 <TrustBadge trust={s.trust} settlements={s.settlements} />
                 <Badge

@@ -114,6 +114,8 @@ const registerSchema = z
     prerequisites: z.array(prerequisiteSchema).max(20).optional(),
     functions: z.array(functionSchema).max(50).optional(),
     contactLinks: contactLinksSchema.optional(),
+    // List under an organization the caller belongs to (else the caller is the owner).
+    ownerOrgId: z.string().optional(),
     // Required only when the payout address is not the caller's own wallet: a
     // signature by that address's key over a challenge from GET /payout-challenge.
     payoutProof: z.object({ challenge: z.string(), signature: z.string() }).optional(),
@@ -146,6 +148,8 @@ const updateSchema = z
     prerequisites: z.array(prerequisiteSchema).max(20).optional(),
     functions: z.array(functionSchema).max(50).optional(),
     contactLinks: contactLinksSchema.optional(),
+    // Move the listing to an org the caller belongs to, or '' to list as yourself.
+    ownerOrgId: z.string().optional(),
   })
   .refine((o) => Object.keys(o).length > 0, { message: 'No fields to update' })
   .refine(
