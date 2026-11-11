@@ -100,6 +100,8 @@ export class OrgService {
       id: m.org.id,
       handle: m.org.handle,
       name: m.org.name,
+      bio: m.org.bio,
+      links: m.org.links ?? null,
       verified: m.org.verified,
       role: m.role,
     }));

@@ -6,6 +6,8 @@ export interface OrgRef {
   id: string;
   handle: string;
   name: string;
+  bio?: string | null;
+  links?: ProfileLinks | null;
   verified: boolean;
   role?: string;
 }

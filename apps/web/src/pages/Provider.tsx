@@ -15,6 +15,9 @@ import {
   KeyRound,
   FileInput,
   FileOutput,
+  BadgeCheck,
+  Building2,
+  UserRound,
 } from 'lucide-react';
 import {
   getProviderServices,
@@ -40,7 +43,16 @@ import {
   type ContactLinks,
   type ServiceFunction,
 } from '../lib/services';
-import { getMyOrgs, createOrg, type OrgRef } from '../lib/org';
+import {
+  getMyOrgs,
+  getMyProfile,
+  updateMyProfile,
+  createOrg,
+  updateOrg,
+  type OrgRef,
+  type ProfileLinks,
+} from '../lib/org';
+import { Link } from 'react-router-dom';
 import { refreshRoles } from '../lib/sessionSync';
 import { config } from '../config';
 
@@ -657,6 +669,16 @@ function ContactLinksEditor({
       ))}
     </div>
   );
+}
+
+/** Trim link values and drop the empty ones; undefined when nothing is set. */
+function cleanLinks(links: ProfileLinks): ProfileLinks | undefined {
+  const out = Object.fromEntries(
+    Object.entries(links)
+      .map(([k, v]) => [k, (v ?? '').trim()])
+      .filter(([, v]) => v),
+  ) as ProfileLinks;
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Choose who lists the service: yourself or an organization you belong to (with an
@@ -1411,6 +1433,9 @@ function ServicesCard() {
     isLoading,
     error,
   } = useQuery({ queryKey: ['provider-services'], queryFn: getProviderServices });
+  // Resolve a service's owning org (to show "by <org>" on the row).
+  const { data: myOrgs = [] } = useQuery({ queryKey: ['my-orgs'], queryFn: getMyOrgs });
+  const orgById = new Map(myOrgs.map((o) => [o.id, o]));
 
   const toggle = useMutation({
     mutationFn: ({ id, active }: { id: string; active: boolean }) => setServiceStatus(id, active),
@@ -1470,7 +1495,17 @@ function ServicesCard() {
                 >
                   <div className="min-w-0">
                     <div className="truncate font-medium">{s.name}</div>
-                    <div className="text-xs text-slate-500">{s.category ?? 'Uncategorised'}</div>
+                    <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                      <span>{s.category ?? 'Uncategorised'}</span>
+                      {s.ownerOrgId && orgById.get(s.ownerOrgId) && (
+                        <span className="inline-flex items-center gap-1 text-slate-400">
+                          · <Building2 size={11} /> {orgById.get(s.ownerOrgId)!.name}
+                          {orgById.get(s.ownerOrgId)!.verified && (
+                            <BadgeCheck size={11} className="text-sky-300" />
+                          )}
+                        </span>
+                      )}
+                    </div>
                     <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-slate-500">
                       <span
                         className={
@@ -1647,6 +1682,299 @@ function JobsCard() {
   );
 }
 
+/** Edit your own provider profile (the identity on services you list as yourself). */
+function ProfileEditor({ onDone }: { onDone: () => void }) {
+  const qc = useQueryClient();
+  const { data: profile } = useQuery({ queryKey: ['my-profile'], queryFn: getMyProfile });
+  const [displayName, setDisplayName] = useState(profile?.displayName ?? '');
+  const [handle, setHandle] = useState(profile?.handle ?? '');
+  const [bio, setBio] = useState(profile?.bio ?? '');
+  const [links, setLinks] = useState<ProfileLinks>(profile?.links ?? {});
+  const save = useMutation({
+    mutationFn: () =>
+      updateMyProfile({
+        displayName: displayName.trim() || undefined,
+        handle: handle.trim() ? handle.trim().toLowerCase() : undefined,
+        bio: bio.trim() || undefined,
+        links: cleanLinks(links),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['my-profile'] });
+      qc.invalidateQueries({ queryKey: ['services'] });
+      onDone();
+    },
+  });
+  return (
+    <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-4">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Display name" hint="Shown as the owner on services you list yourself.">
+          <input
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="e.g. Ada Lovelace"
+            className={controls.field}
+          />
+        </Field>
+        <Field label="Handle" hint="Your profile lives at /p/handle.">
+          <input
+            value={handle}
+            onChange={(e) => setHandle(e.target.value)}
+            placeholder="e.g. ada"
+            className={`${controls.field} font-mono`}
+          />
+        </Field>
+      </div>
+      <Field label="Bio">
+        <input
+          value={bio}
+          onChange={(e) => setBio(e.target.value)}
+          placeholder="One line about you"
+          className={controls.field}
+        />
+      </Field>
+      <div>
+        <span className="text-xs font-medium text-slate-300">Links</span>
+        <div className="mt-1">
+          <ContactLinksEditor value={links} onChange={setLinks} />
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => save.mutate()}
+          disabled={save.isPending}
+          className={controls.primary}
+        >
+          {save.isPending ? 'Saving…' : 'Save profile'}
+        </button>
+        <button type="button" onClick={onDone} className="text-sm text-slate-400 hover:text-white">
+          Cancel
+        </button>
+        {save.error && (
+          <span className="text-sm text-rose-400">{(save.error as Error).message}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Create or edit an organization you administer. */
+function OrgEditor({ org, onDone }: { org?: OrgRef | null; onDone: () => void }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(org?.name ?? '');
+  const [handle, setHandle] = useState(org?.handle ?? '');
+  const [bio, setBio] = useState(org?.bio ?? '');
+  const [links, setLinks] = useState<ProfileLinks>(org?.links ?? {});
+  const save = useMutation({
+    mutationFn: () => {
+      const payload = {
+        name: name.trim(),
+        handle: handle.trim().toLowerCase(),
+        bio: bio.trim() || undefined,
+        links: cleanLinks(links),
+      };
+      return org ? updateOrg(org.id, payload) : createOrg(payload);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['my-orgs'] });
+      qc.invalidateQueries({ queryKey: ['my-profile'] });
+      qc.invalidateQueries({ queryKey: ['services'] });
+      onDone();
+    },
+  });
+  return (
+    <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-4">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Organization name" required>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. CleverCon"
+            className={controls.field}
+          />
+        </Field>
+        <Field label="Handle" required hint="The org profile lives at /p/handle.">
+          <input
+            value={handle}
+            onChange={(e) => setHandle(e.target.value)}
+            placeholder="e.g. clevercon"
+            className={`${controls.field} font-mono`}
+          />
+        </Field>
+      </div>
+      <Field label="Bio">
+        <input
+          value={bio}
+          onChange={(e) => setBio(e.target.value)}
+          placeholder="One line about the organization"
+          className={controls.field}
+        />
+      </Field>
+      <div>
+        <span className="text-xs font-medium text-slate-300">Links</span>
+        <div className="mt-1">
+          <ContactLinksEditor value={links} onChange={setLinks} />
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => save.mutate()}
+          disabled={!name.trim() || !handle.trim() || save.isPending}
+          className={controls.primary}
+        >
+          {save.isPending ? 'Saving…' : org ? 'Save organization' : 'Create organization'}
+        </button>
+        <button type="button" onClick={onDone} className="text-sm text-slate-400 hover:text-white">
+          Cancel
+        </button>
+        {save.error && (
+          <span className="text-sm text-rose-400">{(save.error as Error).message}</span>
+        )}
+      </div>
+      {!org && (
+        <p className="text-[11px] text-slate-500">
+          New organizations start unverified; an admin grants the verified tick.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Your public identity: the profile shown as the owner, and the organizations you can
+ *  list services under. Verification is granted by an admin and shows here. */
+function IdentityCard() {
+  const { data: profile, isLoading } = useQuery({
+    queryKey: ['my-profile'],
+    queryFn: getMyProfile,
+  });
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [editingOrg, setEditingOrg] = useState<OrgRef | null>(null);
+  const [creatingOrg, setCreatingOrg] = useState(false);
+  const orgs = profile?.orgs ?? [];
+
+  return (
+    <Card className="p-5">
+      <CardHeader
+        icon={UserRound}
+        title="Your identity"
+        hint="How you appear as a service owner. Organizations let you list under a shared, verifiable name."
+      />
+      <div className="space-y-4 px-5 pb-5">
+        {isLoading ? (
+          <Loading rows={2} />
+        ) : (
+          <>
+            {/* Provider profile */}
+            <div className="rounded-xl bg-white/[0.03] p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-medium">
+                      {profile?.displayName || 'No display name set'}
+                    </span>
+                    {profile?.verified && <BadgeCheck size={14} className="text-sky-300" />}
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    {profile?.handle ? (
+                      <Link to={`/p/${profile.handle}`} className="hover:text-slate-300">
+                        @{profile.handle} · view public profile
+                      </Link>
+                    ) : (
+                      'Set a handle to get a public profile page'
+                    )}
+                  </div>
+                </div>
+                {!editingProfile && (
+                  <button
+                    onClick={() => setEditingProfile(true)}
+                    className={`${controls.chip} shrink-0`}
+                  >
+                    <Pencil size={13} /> Edit
+                  </button>
+                )}
+              </div>
+              {editingProfile && (
+                <div className="mt-3">
+                  <ProfileEditor onDone={() => setEditingProfile(false)} />
+                </div>
+              )}
+            </div>
+
+            {/* Organizations */}
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-medium text-slate-200">Organizations</span>
+                {!creatingOrg && (
+                  <button
+                    onClick={() => {
+                      setCreatingOrg(true);
+                      setEditingOrg(null);
+                    }}
+                    className={controls.chip}
+                  >
+                    <Plus size={13} /> New
+                  </button>
+                )}
+              </div>
+              {creatingOrg && (
+                <div className="mb-2">
+                  <OrgEditor onDone={() => setCreatingOrg(false)} />
+                </div>
+              )}
+              {orgs.length === 0 && !creatingOrg ? (
+                <p className="text-xs text-slate-500">
+                  You are not in any organization. Create one to list services under a shared,
+                  verifiable owner (e.g. your company).
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {orgs.map((o) => (
+                    <div key={o.id} className="rounded-xl bg-white/[0.03] p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <Building2 size={13} className="text-violet-300" />
+                            <span className="font-medium">{o.name}</span>
+                            {o.verified ? (
+                              <BadgeCheck size={13} className="text-sky-300" />
+                            ) : (
+                              <span className="text-[10px] text-slate-500">unverified</span>
+                            )}
+                          </div>
+                          <Link to={`/p/${o.handle}`} className="text-xs text-slate-500 hover:text-slate-300">
+                            @{o.handle} · view profile
+                          </Link>
+                        </div>
+                        {editingOrg?.id !== o.id && (
+                          <button
+                            onClick={() => {
+                              setEditingOrg(o);
+                              setCreatingOrg(false);
+                            }}
+                            className={`${controls.chip} shrink-0`}
+                          >
+                            <Pencil size={13} /> Edit
+                          </button>
+                        )}
+                      </div>
+                      {editingOrg?.id === o.id && (
+                        <div className="mt-3">
+                          <OrgEditor org={o} onDone={() => setEditingOrg(null)} />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 export function Provider() {
   return (
     <section className="space-y-6">
@@ -1657,6 +1985,7 @@ export function Provider() {
       />
       <Stats />
       <Performance />
+      <IdentityCard />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <ServicesCard />
