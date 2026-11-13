@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -40,6 +40,7 @@ import {
   type ServiceSetupStatus,
 } from '../lib/services';
 import { createTask } from '../lib/tasks';
+import { getGithubOAuthStatus, getGithubAuthorizeUrl } from '../lib/oauth';
 import { getDelegate } from '../lib/vault';
 import { uploadFile, validateAttachment } from '../lib/uploads';
 
@@ -127,7 +128,25 @@ function RequirementsPanel({ serviceId }: { serviceId: string }) {
     queryKey: ['service-setup', serviceId],
     queryFn: () => getServiceSetup(serviceId),
   });
+  const { data: oauth } = useQuery({
+    queryKey: ['gh-oauth-status'],
+    queryFn: getGithubOAuthStatus,
+  });
   const [values, setValues] = useState<Record<string, string>>({});
+  const [connecting, setConnecting] = useState(false);
+  // Show the outcome of an OAuth return (?connected=1/0), then clear it from the URL.
+  const [params, setParams] = useSearchParams();
+  const [connectResult, setConnectResult] = useState<string | null>(null);
+  useEffect(() => {
+    const c = params.get('connected');
+    if (c == null) return;
+    setConnectResult(c);
+    qc.invalidateQueries({ queryKey: ['service-setup', serviceId] });
+    const next = new URLSearchParams(params);
+    next.delete('connected');
+    setParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const save = useMutation({
     mutationFn: (v: Record<string, string>) => saveServiceSetup(serviceId, v),
     onSuccess: (d) => {
@@ -135,6 +154,14 @@ function RequirementsPanel({ serviceId }: { serviceId: string }) {
       setValues({});
     },
   });
+  const connectGithub = async (key: string) => {
+    setConnecting(true);
+    try {
+      window.location.href = await getGithubAuthorizeUrl(serviceId, key);
+    } catch {
+      setConnecting(false);
+    }
+  };
   const prereqs = data?.prerequisites ?? [];
   if (prereqs.length === 0) return null;
   const met = new Map((data?.requirements ?? []).map((r) => [r.key, r.satisfied]));
@@ -154,10 +181,21 @@ function RequirementsPanel({ serviceId }: { serviceId: string }) {
       <p className="mt-1 text-sm text-slate-400">
         Set these up once before hiring this service.
       </p>
+      {connectResult === '1' && (
+        <p className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          GitHub connected.
+        </p>
+      )}
+      {connectResult === '0' && (
+        <p className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          Could not connect GitHub. Try again, or paste a token below.
+        </p>
+      )}
       <div className="mt-4 space-y-4">
         {prereqs.map((p) => {
           const satisfied = !!met.get(p.key);
           const isField = p.kind === 'apiKey' || p.kind === 'info';
+          const isOAuth = p.kind === 'oauth';
           return (
             <div key={p.key} className="rounded-xl bg-black/20 p-3">
               <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
@@ -179,7 +217,43 @@ function RequirementsPanel({ serviceId }: { serviceId: string }) {
                   Open setup <ExternalLink size={11} />
                 </a>
               )}
-              {isField ? (
+              {isOAuth ? (
+                <div className="mt-2 space-y-2">
+                  {oauth?.configured && (
+                    <button
+                      type="button"
+                      onClick={() => connectGithub(p.key)}
+                      disabled={connecting}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.08] px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-white/15 disabled:opacity-60"
+                    >
+                      <Github size={13} /> {connecting ? 'Redirecting…' : satisfied ? 'Reconnect GitHub' : 'Connect GitHub'}
+                    </button>
+                  )}
+                  {/* Fallback for anyone who prefers to paste a token (or when OAuth
+                      is not configured on this server). Stored encrypted, like OAuth. */}
+                  <details className="text-[11px] text-slate-500">
+                    <summary className="cursor-pointer select-none hover:text-slate-300">
+                      {oauth?.configured ? 'Or paste a token instead' : 'Paste a personal access token'}
+                    </summary>
+                    <input
+                      type="password"
+                      value={values[p.key] ?? ''}
+                      onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.value }))}
+                      placeholder={satisfied ? '•••••• (saved - enter to replace)' : 'ghp_… token'}
+                      className="mt-2 w-full rounded-lg bg-black/30 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/40"
+                      aria-label={`${p.label} token`}
+                    />
+                    <a
+                      href="https://github.com/settings/tokens?type=beta"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1 inline-flex items-center gap-1 text-[10px] text-slate-500 hover:text-slate-300"
+                    >
+                      Create a fine-grained token <ExternalLink size={9} />
+                    </a>
+                  </details>
+                </div>
+              ) : isField ? (
                 <input
                   type={p.secret ? 'password' : 'text'}
                   value={values[p.key] ?? ''}

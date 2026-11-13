@@ -89,6 +89,18 @@ export const envSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_BUCKET: z.string().optional(),
   R2_PUBLIC_BASE_URL: z.string().url().optional(),
+  // GitHub OAuth broker: lets buyers connect GitHub with a scoped, revocable token
+  // (via GitHub's own consent screen) instead of pasting a PAT. All optional: the
+  // "Connect GitHub" button only appears when the client id + secret are set.
+  GITHUB_OAUTH_CLIENT_ID: z.string().optional(),
+  GITHUB_OAUTH_CLIENT_SECRET: z.string().optional(),
+  // The API's own public base (to build the OAuth redirect_uri GitHub calls back).
+  // Falls back to RAILWAY_PUBLIC_DOMAIN. Must match the OAuth App's callback URL.
+  API_PUBLIC_URL: z.string().url().optional(),
+  RAILWAY_PUBLIC_DOMAIN: z.string().optional(),
+  // Where to send the user back after connecting (the dapp). Falls back to the first
+  // CORS origin, then clevercon.xyz.
+  APP_PUBLIC_URL: z.string().url().optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

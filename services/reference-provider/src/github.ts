@@ -317,17 +317,19 @@ const schema = (required: string[], properties: Json): Json => ({
 });
 const perCall = (amount: number) => ({ model: 'per_call' as const, amount, currency: 'USDC' as const });
 
-/** The GitHub access token requirement; write functions reference it by key. */
+/** The GitHub connection; write functions reference it by key. Primary path is OAuth
+ *  (connect via GitHub's consent screen for a scoped, revocable token); the buyer can
+ *  also paste a personal access token as a fallback. Either way it is stored encrypted
+ *  and sent only to the GitHub tool, never to the model. */
 export const GITHUB_REQUIREMENTS = [
   {
-    kind: 'apiKey' as const,
+    kind: 'oauth' as const,
     key: 'github_token',
-    label: 'GitHub access token',
+    label: 'GitHub account',
     instructions:
-      'Create a fine-grained personal access token at github.com/settings/tokens, scoped to the ' +
-      'repositories you want the agent to act on, with Issues and Pull requests set to Read and write. ' +
-      'Paste it here; it is stored encrypted and sent only to the GitHub tool, never shown again.',
-    url: 'https://github.com/settings/tokens?type=beta',
+      'Connect your GitHub account so the tool can act on your behalf (read, and with your ' +
+      'approval comment and open issues/PRs on public repos). You grant a scoped token through ' +
+      'GitHub and can revoke it any time in GitHub settings. No token is ever shown to the AI.',
     secret: true,
   },
 ];

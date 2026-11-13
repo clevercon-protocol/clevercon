@@ -11,6 +11,7 @@ import { VaultModule } from './vault/vault.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
 import { ProviderModule } from './provider/provider.module.js';
 import { OrgModule } from './org/org.module.js';
+import { OAuthModule } from './oauth/oauth.module.js';
 import { PoliciesModule } from './policies/policies.module.js';
 import { ActivityModule } from './activity/activity.module.js';
 import { DisputesModule } from './disputes/disputes.module.js';
@@ -45,6 +46,7 @@ import { AppLoggerModule } from './logging/logger.module.js';
     TasksModule,
     ProviderModule,
     OrgModule,
+    OAuthModule,
     PoliciesModule,
     ActivityModule,
     DisputesModule,
