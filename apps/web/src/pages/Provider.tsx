@@ -1219,7 +1219,8 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
                 value={p.kind}
                 onChange={(e) => {
                   const kind = e.target.value as Prerequisite['kind'];
-                  updatePrereq(i, { kind, secret: kind === 'apiKey' });
+                  // apiKey and oauth both yield a secret token to encrypt.
+                  updatePrereq(i, { kind, secret: kind === 'apiKey' || kind === 'oauth' });
                 }}
                 className={controls.field}
                 aria-label="Requirement type"
@@ -1258,7 +1259,7 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
               className={controls.field}
               aria-label="Requirement instructions"
             />
-            {(p.kind === 'install' || p.kind === 'oauth') && (
+            {p.kind === 'install' && (
               <input
                 value={p.url ?? ''}
                 onChange={(e) => updatePrereq(i, { url: e.target.value })}
@@ -1267,9 +1268,11 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
                 aria-label="Requirement setup URL"
               />
             )}
-            {p.kind === 'apiKey' && (
+            {(p.kind === 'apiKey' || p.kind === 'oauth') && (
               <p className="text-[10px] text-slate-500">
-                Stored encrypted; sent to your endpoint, never shown to the buyer again.
+                {p.kind === 'oauth'
+                  ? 'Buyers connect through GitHub; the token is stored encrypted, sent to your endpoint, and never shown to the AI.'
+                  : 'Stored encrypted; sent to your endpoint, never shown to the buyer again.'}
               </p>
             )}
           </div>
