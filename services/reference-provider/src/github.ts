@@ -81,6 +81,31 @@ const tokenOf = (ctx: GithubCtx): string | undefined =>
 const NEEDS_TOKEN =
   'This action needs your GitHub token. Set up the "GitHub access token" requirement on the service page, then hire again.';
 
+/**
+ * Resolve `repo` to {owner, repo}. Accepts a full "owner/name", or a bare name (e.g.
+ * "clevercon") which it looks up by searching for an exact-name match, preferring repos
+ * the connected account can see. Returns null if nothing resolves.
+ */
+async function resolveRepo(
+  value: unknown,
+  token?: string,
+): Promise<{ owner: string; repo: string } | null> {
+  const direct = splitRepo(value);
+  if (direct) return direct;
+  const name = String(value ?? '')
+    .trim()
+    .replace(/\.git$/, '');
+  if (!name || name.includes('/')) return null;
+  const r = await gh(`/search/repositories?q=${encodeURIComponent(`${name} in:name`)}&per_page=10`, {
+    token,
+  });
+  const items = Array.isArray(r.json.items) ? (r.json.items as Json[]) : [];
+  const exact = items.filter((x) => String(x.name).toLowerCase() === name.toLowerCase());
+  const best = exact[0] ?? items[0];
+  return best ? splitRepo(best.full_name) : null;
+}
+const BAD_REPO = 'Could not find that repository. Give it as "owner/name", e.g. "clevercon-protocol/clevercon".';
+
 // The issues endpoint also returns PRs; keep only true issues.
 const onlyIssues = (arr: Json[]): Json[] => arr.filter((i) => !i.pull_request);
 const issueView = (i: Json): Json => ({
@@ -129,11 +154,10 @@ const searchRepos: GithubHandler = async ({ input, credentials }) => {
 };
 
 const getRepo: GithubHandler = async ({ input, credentials }) => {
-  const r = splitRepo(input.repo);
-  if (!r) return fail('Provide `repo` as "owner/name".');
-  const res = await gh(`/repos/${r.owner}/${r.repo}`, {
-    token: credentials.github_token?.trim() || undefined,
-  });
+  const token = credentials.github_token?.trim() || undefined;
+  const r = await resolveRepo(input.repo, token);
+  if (!r) return fail(BAD_REPO);
+  const res = await gh(`/repos/${r.owner}/${r.repo}`, { token });
   if (!res.ok) return fail(`Could not read ${r.owner}/${r.repo}: ${res.message}`);
   const x = res.json;
   return ok({
@@ -151,14 +175,15 @@ const getRepo: GithubHandler = async ({ input, credentials }) => {
 };
 
 const listIssues: GithubHandler = async ({ input, credentials }) => {
-  const r = splitRepo(input.repo);
-  if (!r) return fail('Provide `repo` as "owner/name".');
+  const token = credentials.github_token?.trim() || undefined;
+  const r = await resolveRepo(input.repo, token);
+  if (!r) return fail(BAD_REPO);
   const state = ['open', 'closed', 'all'].includes(String(input.state)) ? String(input.state) : 'open';
   const limit = clampLimit(input.limit, 15);
   const labels = input.labels ? `&labels=${encodeURIComponent(String(input.labels))}` : '';
   const res = await gh(
     `/repos/${r.owner}/${r.repo}/issues?state=${state}${labels}&per_page=${limit}`,
-    { token: credentials.github_token?.trim() || undefined },
+    { token },
   );
   if (!res.ok) return fail(`Could not list issues for ${r.owner}/${r.repo}: ${res.message}`);
   const arr = Array.isArray(res.json) ? (res.json as unknown as Json[]) : [];
@@ -168,7 +193,7 @@ const listIssues: GithubHandler = async ({ input, credentials }) => {
 const findGoodFirstIssues: GithubHandler = async ({ input, credentials }) => {
   const limit = clampLimit(input.limit, 15);
   const token = credentials.github_token?.trim() || undefined;
-  const r = splitRepo(input.repo);
+  const r = input.repo ? await resolveRepo(input.repo, token) : null;
   // Scoped to one repo when given, else a GitHub-wide search of open issues.
   if (r) {
     const res = await gh(
@@ -200,13 +225,12 @@ const findGoodFirstIssues: GithubHandler = async ({ input, credentials }) => {
 };
 
 const readPr: GithubHandler = async ({ input, credentials }) => {
-  const r = splitRepo(input.repo);
-  if (!r) return fail('Provide `repo` as "owner/name".');
+  const token = credentials.github_token?.trim() || undefined;
+  const r = await resolveRepo(input.repo, token);
+  if (!r) return fail(BAD_REPO);
   const num = Math.floor(Number(input.number));
   if (!Number.isFinite(num) || num <= 0) return fail('Provide the PR `number`.');
-  const res = await gh(`/repos/${r.owner}/${r.repo}/pulls/${num}`, {
-    token: credentials.github_token?.trim() || undefined,
-  });
+  const res = await gh(`/repos/${r.owner}/${r.repo}/pulls/${num}`, { token });
   if (!res.ok) return fail(`Could not read PR #${num}: ${res.message}`);
   const x = res.json;
   return ok({
@@ -262,8 +286,8 @@ const listMyRepos: GithubHandler = async (ctx) => {
 const commentIssue: GithubHandler = async (ctx) => {
   const token = tokenOf(ctx);
   if (!token) return fail(NEEDS_TOKEN);
-  const r = splitRepo(ctx.input.repo);
-  if (!r) return fail('Provide `repo` as "owner/name".');
+  const r = await resolveRepo(ctx.input.repo, token);
+  if (!r) return fail(BAD_REPO);
   const num = Math.floor(Number(ctx.input.number));
   if (!Number.isFinite(num) || num <= 0) return fail('Provide the issue `number`.');
   const body = String(ctx.input.body ?? '').trim();
@@ -280,8 +304,8 @@ const commentIssue: GithubHandler = async (ctx) => {
 const openIssue: GithubHandler = async (ctx) => {
   const token = tokenOf(ctx);
   if (!token) return fail(NEEDS_TOKEN);
-  const r = splitRepo(ctx.input.repo);
-  if (!r) return fail('Provide `repo` as "owner/name".');
+  const r = await resolveRepo(ctx.input.repo, token);
+  if (!r) return fail(BAD_REPO);
   const title = String(ctx.input.title ?? '').trim();
   if (!title) return fail('Provide the issue `title`.');
   const labels = Array.isArray(ctx.input.labels)
@@ -308,8 +332,8 @@ const openIssue: GithubHandler = async (ctx) => {
 const openPr: GithubHandler = async (ctx) => {
   const token = tokenOf(ctx);
   if (!token) return fail(NEEDS_TOKEN);
-  const r = splitRepo(ctx.input.repo);
-  if (!r) return fail('Provide `repo` as "owner/name".');
+  const r = await resolveRepo(ctx.input.repo, token);
+  if (!r) return fail(BAD_REPO);
   const title = String(ctx.input.title ?? '').trim();
   const head = String(ctx.input.head ?? '').trim();
   const base = String(ctx.input.base ?? '').trim();
