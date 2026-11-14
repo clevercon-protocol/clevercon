@@ -96,13 +96,27 @@ async function resolveRepo(
     .trim()
     .replace(/\.git$/, '');
   if (!name || name.includes('/')) return null;
+  // Connected: resolve among the repos the account can actually see (own, org-member,
+  // collaborator), so a bare name reliably finds YOUR repo rather than a stranger's that
+  // happens to rank higher. This is where your org grant comes in.
+  if (token) {
+    const mine = await gh(
+      `/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=updated`,
+      { token },
+    );
+    const arr = Array.isArray(mine.json) ? (mine.json as unknown as Json[]) : [];
+    const hit = arr.find((x) => String(x.name).toLowerCase() === name.toLowerCase());
+    if (hit) return splitRepo(String(hit.full_name));
+  }
+  // Fallback: a public search by name (best exact match). Only a guess, so a full
+  // owner/name is always more reliable.
   const r = await gh(`/search/repositories?q=${encodeURIComponent(`${name} in:name`)}&per_page=10`, {
     token,
   });
   const items = Array.isArray(r.json.items) ? (r.json.items as Json[]) : [];
   const exact = items.filter((x) => String(x.name).toLowerCase() === name.toLowerCase());
   const best = exact[0] ?? items[0];
-  return best ? splitRepo(best.full_name) : null;
+  return best ? splitRepo(String(best.full_name)) : null;
 }
 const BAD_REPO = 'Could not find that repository. Give it as "owner/name", e.g. "clevercon-protocol/clevercon".';
 
