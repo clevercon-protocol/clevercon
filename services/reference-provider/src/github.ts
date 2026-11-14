@@ -224,6 +224,30 @@ const me: GithubHandler = async (ctx) => {
   return ok({ login: x.login, name: x.name, publicRepos: x.public_repos, url: x.html_url });
 };
 
+const listMyRepos: GithubHandler = async (ctx) => {
+  const token = tokenOf(ctx);
+  if (!token) return fail(NEEDS_TOKEN);
+  const limit = clampLimit(ctx.input.limit, 20, 100);
+  const res = await gh(
+    `/user/repos?per_page=${limit}&sort=updated&affiliation=owner,collaborator,organization_member`,
+    { token },
+  );
+  if (!res.ok) return fail(`Could not list your repos: ${res.message}`);
+  const arr = Array.isArray(res.json) ? (res.json as unknown as Json[]) : [];
+  return ok({
+    count: arr.length,
+    repos: arr.map((r) => ({
+      fullName: r.full_name,
+      private: r.private,
+      stars: r.stargazers_count,
+      language: r.language,
+      openIssues: r.open_issues_count,
+      url: r.html_url,
+      updatedAt: r.updated_at,
+    })),
+  });
+};
+
 // ── Write functions (need the buyer's token) ──────────────────────────────────
 
 const commentIssue: GithubHandler = async (ctx) => {
@@ -299,6 +323,7 @@ export const GITHUB_HANDLERS: Record<string, GithubHandler> = {
   'github.find_good_first_issues': findGoodFirstIssues,
   'github.read_pr': readPr,
   'github.me': me,
+  'github.list_my_repos': listMyRepos,
   'github.comment_issue': commentIssue,
   'github.open_issue': openIssue,
   'github.open_pr': openPr,
@@ -402,6 +427,16 @@ export const GITHUB_FUNCTIONS = [
     description: 'Confirm the connected GitHub account (checks the token works).',
     input: schema([], {}),
     output: schema(['login'], { login: { type: 'string' } }),
+    requires: ['github_token'],
+    pricing: perCall(0.005),
+    tier: 'T2' as const,
+  },
+  {
+    key: 'github.list_my_repos',
+    label: 'List my repositories',
+    description: 'Your own repositories and ones you collaborate on, most recently updated first.',
+    input: schema([], { limit: { type: 'number', description: 'Max results (default 20).' } }),
+    output: schema(['repos'], { repos: { type: 'array' } }),
     requires: ['github_token'],
     pricing: perCall(0.005),
     tier: 'T2' as const,
