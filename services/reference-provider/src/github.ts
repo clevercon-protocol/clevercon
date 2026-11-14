@@ -96,12 +96,21 @@ const issueView = (i: Json): Json => ({
 // ── Read functions (open; use the token when present for private repos + rate limits) ─
 
 const searchRepos: GithubHandler = async ({ input, credentials }) => {
-  const query = String(input.query ?? '').trim();
+  const token = credentials.github_token?.trim() || undefined;
+  let query = String(input.query ?? '').trim();
   if (!query) return fail('Provide a `query` to search repositories for.');
+  // GitHub has no "me" keyword, so an agent's "user:me" (a common guess for "my repos")
+  // matches a literal account. When connected, resolve the caller's real login so it
+  // returns their repositories. (For listing your own repos, prefer list_my_repos.)
+  if (/\buser:me\b/i.test(query) && token) {
+    const who = await gh('/user', { token });
+    const login = typeof who.json.login === 'string' ? who.json.login : null;
+    if (login) query = query.replace(/\buser:me\b/gi, `user:${login}`);
+  }
   const limit = clampLimit(input.limit, 10);
   const r = await gh(
     `/search/repositories?q=${encodeURIComponent(query)}&per_page=${limit}&sort=stars&order=desc`,
-    { token: credentials.github_token?.trim() || undefined },
+    { token },
   );
   if (!r.ok) return fail(`GitHub search failed: ${r.message}`);
   const items = Array.isArray(r.json.items) ? (r.json.items as Json[]) : [];
