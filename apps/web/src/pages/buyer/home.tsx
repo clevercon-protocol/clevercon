@@ -119,6 +119,8 @@ type Plan = {
   bind: Bind;
   serviceName?: string;
   serviceId?: string;
+  // For a multi-function service: the function the agent chose (the dispatched action).
+  functionKey?: string;
   // Buyer-supplied input files for a hire (uploaded to R2 as content-addressed
   // refs at propose time, so they survive chat persistence and reach the provider).
   attachments?: ArtifactRef[];
@@ -553,6 +555,7 @@ export function CommandChat() {
     mutationFn: (p: {
       title: string;
       serviceId: string;
+      functionKey?: string;
       budget: number;
       policyId?: string;
       input?: Record<string, unknown>;
@@ -562,6 +565,7 @@ export function CommandChat() {
         mode: 'DIRECT' as HireMode,
         budget: p.budget,
         serviceId: p.serviceId,
+        functionKey: p.functionKey,
         policyId: p.policyId,
         input: p.input,
       }),
@@ -673,6 +677,7 @@ export function CommandChat() {
           bind,
           serviceName: result.service.name,
           serviceId: result.service.id,
+          ...(result.functionKey ? { functionKey: result.functionKey } : {}),
           ...(attachments ? { attachments } : {}),
           ...(result.input ? { input: result.input } : {}),
         },
@@ -852,6 +857,7 @@ export function CommandChat() {
         const task = await hire.mutateAsync({
           title: `Hire ${plan.serviceName}`,
           serviceId: plan.serviceId,
+          functionKey: plan.functionKey,
           budget: plan.lines[0].amount,
           policyId,
           input: Object.keys(jobInput).length ? jobInput : undefined,

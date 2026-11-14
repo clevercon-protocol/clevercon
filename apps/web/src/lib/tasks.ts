@@ -200,6 +200,9 @@ export interface AgentPlanResult {
   kind: 'pay' | 'disburse' | 'hire' | 'none';
   lines: PaymentLineInput[];
   service: { id: string; name: string; pricePerCall: number } | null;
+  // For a multi-function service: the function the agent chose to hire.
+  functionKey?: string;
+  functionLabel?: string;
   budget: number;
   rationale: string;
   warnings: string[];

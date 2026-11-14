@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
+import type { ServiceFunction } from '@clevercon/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { VaultService } from '../vault/vault.service.js';
 
@@ -13,6 +14,9 @@ export interface AgentPlan {
   kind: 'pay' | 'disburse' | 'hire' | 'none';
   lines: PlanLine[];
   service: { id: string; name: string; pricePerCall: number } | null;
+  // For a multi-function service: the chosen function to hire (its key) + a label.
+  functionKey?: string;
+  functionLabel?: string;
   budget: number;
   rationale: string;
   warnings: string[];
@@ -20,6 +24,34 @@ export interface AgentPlan {
   // For a hire: structured input parameters extracted from the instruction (e.g.
   // { operation, width, format } for an image tool), matching the service's schema.
   input?: Record<string, unknown>;
+}
+
+/** The unit price of a function (0 when free). */
+function fnPrice(fn: ServiceFunction): number {
+  return fn.pricing.model === 'free' ? 0 : (fn.pricing.amount ?? 0);
+}
+/** Pick the function the model chose (by key, else label), else the first. */
+function pickFunction(fns: ServiceFunction[], want: string): ServiceFunction {
+  const w = want.trim().toLowerCase();
+  return (
+    fns.find((f) => f.key.toLowerCase() === w) ??
+    fns.find((f) => w && (f.label.toLowerCase().includes(w) || w.includes(f.key.toLowerCase()))) ??
+    fns[0]
+  );
+}
+function asFunctions(v: unknown): ServiceFunction[] {
+  return Array.isArray(v) ? (v as ServiceFunction[]) : [];
+}
+/** Render a service's functions for the planner so it can pick one + extract params. */
+function functionsBlurb(functions: unknown): string {
+  const fns = asFunctions(functions);
+  if (!fns.length) return '';
+  const lines = fns.map((f) => {
+    const price = f.pricing.model === 'free' ? 'free' : `$${fnPrice(f)}`;
+    const io = f.input ? ` input: ${JSON.stringify(f.input)}` : '';
+    return `    - ${f.key} (${price})${f.description ? `: ${f.description}` : ''}${io}`;
+  });
+  return `\n  functions (pick the best one, return its key in functionKey):\n${lines.join('\n')}`;
 }
 
 const STELLAR_ADDR = /^G[A-Z2-7]{55}$/;
@@ -58,6 +90,12 @@ const PLAN_SCHEMA = {
       type: 'string',
       description: 'for hire: a few words describing the service to find; else empty',
     },
+    functionKey: {
+      type: 'string',
+      description:
+        'for a hire of a service that lists functions: the key of the single best function ' +
+        'for the instruction (e.g. "github.search_repos"); else empty',
+    },
     budget: { type: 'number', description: 'for hire: max USDC to spend; else 0' },
     serviceParams: {
       type: 'object',
@@ -71,7 +109,7 @@ const PLAN_SCHEMA = {
       description: 'one short sentence explaining the plan to the user',
     },
   },
-  required: ['kind', 'lines', 'serviceQuery', 'budget', 'serviceParams', 'rationale'],
+  required: ['kind', 'lines', 'serviceQuery', 'functionKey', 'budget', 'serviceParams', 'rationale'],
 };
 
 const SYSTEM_PROMPT =
@@ -84,7 +122,10 @@ const SYSTEM_PROMPT =
   'You NEVER choose, read, or infer a spending rule: the human selects the rule the vault enforces, ' +
   'and private rules are not visible to you. Plan ONLY the actions (who/how much/which service). ' +
   'For ANY hire, extract the chosen service’s input parameters from the instruction into ' +
-  'serviceParams, matching that service’s input schema (given with each service).';
+  'serviceParams, matching that service’s input schema (given with each service). ' +
+  'If the chosen service lists FUNCTIONS, you MUST pick the single best function for the ' +
+  'instruction and return its key in functionKey, and extract serviceParams against THAT ' +
+  'function’s input schema. Choose the function yourself; do not ask the user to pick.';
 const TOOL_DESC = 'Return the structured spending plan for the user to review.';
 
 type Provider = 'anthropic' | 'openai' | 'none';
@@ -97,12 +138,14 @@ type PlanService = {
   pricePerCall: unknown;
   inputSchema: unknown;
   description?: string;
+  functions?: unknown;
 };
 
 interface RawPlan {
   kind: AgentPlan['kind'];
   lines: PlanLine[];
   serviceQuery: string;
+  functionKey: string;
   budget: number;
   rationale: string;
   serviceParams?: Record<string, unknown>;
@@ -169,7 +212,14 @@ export class AgentService {
     const allowed: PlanService[] = ids.length
       ? await this.prisma.service.findMany({
           where: { id: { in: ids }, status: 'ACTIVE' },
-          select: { id: true, name: true, pricePerCall: true, inputSchema: true, description: true },
+          select: {
+            id: true,
+            name: true,
+            pricePerCall: true,
+            inputSchema: true,
+            description: true,
+            functions: true,
+          },
         })
       : [];
 
@@ -302,9 +352,15 @@ export class AgentService {
             ],
           },
         },
-        // Include the input schema so the model can extract parameters for whichever
-        // service it picks (not only when the user pre-selected one).
-        select: { name: true, pricePerCall: true, attachmentsIn: true, inputSchema: true },
+        // Include the input schema + functions so the model can extract parameters and
+        // pick a function for whichever service it chooses (not only a pre-selected one).
+        select: {
+          name: true,
+          pricePerCall: true,
+          attachmentsIn: true,
+          inputSchema: true,
+          functions: true,
+        },
         take: 8,
       }),
     ]);
@@ -312,7 +368,10 @@ export class AgentService {
       .map(
         (s) =>
           `- ${s.name} ($${Number(s.pricePerCall)}/call)${s.attachmentsIn ? ' [accepts a file]' : ''}` +
-          (s.inputSchema ? `\n  input schema: ${JSON.stringify(s.inputSchema)}` : ''),
+          functionsBlurb(s.functions) +
+          (s.inputSchema && !functionsBlurb(s.functions)
+            ? `\n  input schema: ${JSON.stringify(s.inputSchema)}`
+            : ''),
       )
       .join('\n');
     const parts = [
@@ -328,22 +387,29 @@ export class AgentService {
       );
     }
     if (allowed.length === 1) {
+      const a = allowed[0];
+      const fnsText = functionsBlurb(a.functions);
       parts.push(
-        `The user CHOSE the service "${allowed[0].name}". Set kind="hire", put "${allowed[0].name}" ` +
-          `in serviceQuery, and extract its input parameters into serviceParams, matching this ` +
-          `input schema:\n${JSON.stringify(allowed[0].inputSchema ?? {})}`,
+        `The user CHOSE the service "${a.name}". Set kind="hire" and put "${a.name}" in serviceQuery. ` +
+          (fnsText
+            ? `It lists functions, so pick the best one for the instruction, return its key in ` +
+              `functionKey, and extract serviceParams against THAT function's input schema:${fnsText}`
+            : `Extract its input parameters into serviceParams, matching this input schema:\n${JSON.stringify(a.inputSchema ?? {})}`),
       );
     } else if (allowed.length > 1) {
       const list = allowed
         .map(
           (a) =>
-            `- ${a.name}${a.description ? `: ${a.description}` : ''}\n  input schema: ${JSON.stringify(a.inputSchema ?? {})}`,
+            `- ${a.name}${a.description ? `: ${a.description}` : ''}` +
+            (functionsBlurb(a.functions) ||
+              `\n  input schema: ${JSON.stringify(a.inputSchema ?? {})}`),
         )
         .join('\n');
       parts.push(
         `The user restricted you to ONLY these services (an allow-list). Set kind="hire", pick the ` +
-          `single best one for the instruction, put its exact name in serviceQuery, and extract its ` +
-          `input parameters into serviceParams matching THAT service's schema:\n${list}`,
+          `single best service for the instruction, put its exact name in serviceQuery, pick a ` +
+          `function (functionKey) when it lists them, and extract serviceParams against the chosen ` +
+          `schema:\n${list}`,
       );
     }
     return parts.join('\n\n');
@@ -405,9 +471,15 @@ export class AgentService {
     if (raw.kind === 'hire' || allowed.length) {
       // The allow-list wins: one service forces it; several -> pick the one the model
       // chose (by name in serviceQuery), else the best word overlap, else the first.
-      let svc: { id: string; name: string; pricePerCall: unknown } | null = null;
+      let svc: { id: string; name: string; pricePerCall: unknown; functions: unknown } | null = null;
+      const asSvc = (a: PlanService) => ({
+        id: a.id,
+        name: a.name,
+        pricePerCall: a.pricePerCall,
+        functions: a.functions,
+      });
       if (allowed.length === 1) {
-        svc = { id: allowed[0].id, name: allowed[0].name, pricePerCall: allowed[0].pricePerCall };
+        svc = asSvc(allowed[0]);
       } else if (allowed.length > 1) {
         const q = (raw.serviceQuery ?? '').trim().toLowerCase();
         const pick =
@@ -418,7 +490,7 @@ export class AgentService {
             q.split(/\s+/).some((w) => w.length > 2 && a.name.toLowerCase().includes(w)),
           ) ??
           allowed[0];
-        svc = { id: pick.id, name: pick.name, pricePerCall: pick.pricePerCall };
+        svc = asSvc(pick);
       }
       if (!svc) {
         const q = (raw.serviceQuery ?? '').trim();
@@ -442,7 +514,7 @@ export class AgentService {
                   { category: { contains: w, mode: 'insensitive' as const } },
                 ]),
               },
-              select: { id: true, name: true, pricePerCall: true, attachmentsIn: true },
+              select: { id: true, name: true, pricePerCall: true, attachmentsIn: true, functions: true },
               take: 5,
             })
           : [];
@@ -458,7 +530,25 @@ export class AgentService {
         );
         return this.none(source, raw.rationale || 'I could not find a matching service.', warnings);
       }
-      const budget = Math.max(Number(raw.budget) || 0, Number(svc.pricePerCall));
+
+      // Multi-function service: the agent picks the function itself (never asking the
+      // user). Price + the dispatched functionKey come from the chosen function so the
+      // hire is well-formed and the budget is grounded.
+      const fns = asFunctions(svc.functions);
+      let functionKey: string | undefined;
+      let functionLabel: string | undefined;
+      let displayName = svc.name;
+      let budget: number;
+      if (fns.length) {
+        const fn = pickFunction(fns, raw.functionKey ?? '');
+        functionKey = fn.key;
+        functionLabel = fn.label;
+        displayName = `${svc.name}: ${fn.label}`;
+        // Budget is the cap; floor at 1 cent so even a free function can escrow-hire.
+        budget = Math.max(fnPrice(fn), 0.01);
+      } else {
+        budget = Math.max(Number(raw.budget) || 0, Number(svc.pricePerCall));
+      }
       if (available > 0 && budget > available) {
         warnings.push(
           `Budget $${budget.toFixed(2)} exceeds the $${available.toFixed(2)} available.`,
@@ -470,11 +560,12 @@ export class AgentService {
       return {
         kind: 'hire',
         lines: [],
-        service: { id: svc.id, name: svc.name, pricePerCall: Number(svc.pricePerCall) },
+        service: { id: svc.id, name: displayName, pricePerCall: budget },
         budget,
-        rationale: raw.rationale || `Hire ${svc.name} with a $${budget.toFixed(2)} budget.`,
+        rationale: raw.rationale || `Hire ${displayName} with a $${budget.toFixed(2)} budget.`,
         warnings,
         source,
+        ...(functionKey ? { functionKey, functionLabel } : {}),
         ...(input ? { input } : {}),
       };
     }
@@ -520,6 +611,7 @@ function fallbackParse(instruction: string): { plan: RawPlan; source: AgentPlan[
         kind: 'pay',
         lines: [{ payee: m[2], amount: Number(m[1]), reason: (m[3] ?? '').trim() }],
         serviceQuery: '',
+        functionKey: '',
         budget: 0,
         rationale: 'Parsed a direct payment.',
       },
@@ -537,6 +629,7 @@ function fallbackParse(instruction: string): { plan: RawPlan; source: AgentPlan[
         kind: 'disburse',
         lines: addrs.map((payee) => ({ payee, amount, reason: '' })),
         serviceQuery: '',
+        functionKey: '',
         budget: 0,
         rationale: `Parsed a disbursement of ${amount} USDC each to ${addrs.length} recipient${addrs.length > 1 ? 's' : ''}.`,
       },
@@ -549,6 +642,7 @@ function fallbackParse(instruction: string): { plan: RawPlan; source: AgentPlan[
       kind: 'none',
       lines: [],
       serviceQuery: '',
+      functionKey: '',
       budget: 0,
       rationale:
         'I couldn’t read that. Use the Pay, Disburse, or Hire buttons below, or phrase it simply, like "pay 5 to G… for data" or "send 1 each to G…, G…, G…".',
@@ -567,6 +661,7 @@ function normalizeRaw(input: unknown): RawPlan {
     kind,
     lines,
     serviceQuery: typeof o.serviceQuery === 'string' ? o.serviceQuery : '',
+    functionKey: typeof o.functionKey === 'string' ? o.functionKey : '',
     budget: typeof o.budget === 'number' ? o.budget : 0,
     rationale: typeof o.rationale === 'string' ? o.rationale : '',
     serviceParams:
