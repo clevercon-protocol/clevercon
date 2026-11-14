@@ -42,7 +42,10 @@ export async function searchServicesHandler(
 
 export const getServiceSchema = {
   name: 'get_service',
-  description: 'Get details for one service (name, provider, price per call, rating) by id.',
+  description:
+    'Get details for one service by id: name, owner, pricing, rating, usage requirements, ' +
+    'and its `functions` (each with a key, price, and input schema). When hiring a service ' +
+    'that lists functions, pass the chosen function’s key as functionKey to hire_agent.',
   inputSchema: {
     type: 'object',
     properties: { id: { type: 'string', description: 'Service id' } },

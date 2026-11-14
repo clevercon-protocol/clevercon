@@ -16,7 +16,8 @@ import {
 export const hireAgentSchema = {
   name: 'hire_agent',
   description:
-    'Create a task on CleverCon (hire a service). DIRECT pays a chosen serviceId; SEARCH finds and pays one service; COMPOSE runs a multi-service job. Requires an API key.',
+    'Create a task on CleverCon (hire a service). DIRECT pays a chosen serviceId; SEARCH finds and pays one service; COMPOSE runs a multi-service job. ' +
+    'If the service lists `functions` (see get_service), pass the chosen function key as functionKey, and shape `input` to THAT function’s input schema. Requires an API key.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -24,12 +25,17 @@ export const hireAgentSchema = {
       mode: { type: 'string', enum: ['DIRECT', 'SEARCH', 'COMPOSE'] },
       budget: { type: 'number', description: 'Max spend in USDC', exclusiveMinimum: 0 },
       serviceId: { type: 'string', description: 'Required for DIRECT mode' },
+      functionKey: {
+        type: 'string',
+        description:
+          'For a multi-function service: the key of the function to hire (e.g. "github.search_repos"), from the service’s `functions` list. Omit for single-function services.',
+      },
       policyId: { type: 'string', description: 'Spend policy to enforce on-chain' },
       description: { type: 'string', maxLength: 2000 },
       input: {
         type: 'object',
         description:
-          "Structured job input for the service (validated against its inputSchema). Put required files in input.attachments as an array of ArtifactRef { url, hash, contentType, size }.",
+          "Structured job input for the service/function (validated against its input schema). Put required files in input.attachments as an array of ArtifactRef { url, hash, contentType, size }.",
       },
     },
     required: ['title', 'mode', 'budget'],
@@ -41,7 +47,7 @@ export async function hireAgentHandler(
   config: ApiConfig,
 ): Promise<ToolResult> {
   try {
-    const { title, mode, budget, serviceId, policyId, description, input } = args;
+    const { title, mode, budget, serviceId, functionKey, policyId, description, input } = args;
     if (typeof title !== 'string' || title.trim() === '') throw new Error('title is required');
     if (mode !== 'DIRECT' && mode !== 'SEARCH' && mode !== 'COMPOSE')
       throw new Error('mode must be DIRECT, SEARCH, or COMPOSE');
@@ -49,6 +55,8 @@ export async function hireAgentHandler(
       throw new Error('budget must be a positive number');
     if (mode === 'DIRECT' && (typeof serviceId !== 'string' || serviceId === ''))
       throw new Error('serviceId is required for DIRECT mode');
+    if (functionKey !== undefined && typeof functionKey !== 'string')
+      throw new Error('functionKey must be a string');
     if (input !== undefined && (typeof input !== 'object' || input === null || Array.isArray(input)))
       throw new Error('input must be an object');
 
@@ -58,6 +66,7 @@ export async function hireAgentHandler(
       mode,
       budget,
       ...(serviceId ? { serviceId } : {}),
+      ...(functionKey ? { functionKey } : {}),
       ...(policyId ? { policyId } : {}),
       ...(description ? { description } : {}),
       ...(input ? { input } : {}),
