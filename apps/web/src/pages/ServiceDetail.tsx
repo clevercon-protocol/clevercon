@@ -205,6 +205,16 @@ function RequirementsPanel({ serviceId }: { serviceId: string }) {
                   <span className="h-2 w-2 rounded-full bg-amber-400" />
                 )}
                 {p.label}
+                {satisfied && (isOAuth || isField) && (
+                  <button
+                    type="button"
+                    onClick={() => save.mutate({ [p.key]: '' })}
+                    disabled={save.isPending}
+                    className="ml-auto text-[11px] font-normal text-slate-500 hover:text-rose-300 disabled:opacity-50"
+                  >
+                    {isOAuth ? 'Disconnect' : 'Remove'}
+                  </button>
+                )}
               </div>
               <p className="mt-1 text-xs leading-relaxed text-slate-500">{p.instructions}</p>
               {p.url && (
