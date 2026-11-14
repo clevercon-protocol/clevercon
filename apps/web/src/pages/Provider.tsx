@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DollarSign,
@@ -780,6 +780,57 @@ function OwnerSelect({
   );
 }
 
+// A browser-local draft of the registration form, so a session blip (or an accidental
+// navigation) never loses a half-filled service. Saved continuously while filling a NEW
+// registration; cleared on a successful register or an explicit discard. Edits are not
+// drafted (they already pre-fill from the live service).
+type RegDraft = {
+  name: string;
+  description: string;
+  category: string;
+  price: string;
+  endpoint: string;
+  capability: string;
+  address: string;
+  paymentModel: 'escrow' | 'x402' | 'mpp-session' | 'subscription';
+  interaction: 'sync' | 'async' | 'human';
+  needsFile: boolean;
+  accept: string;
+  tier: 'T1' | 'T2' | 'T3';
+  vmethod: string;
+  specJson: string;
+  inJson: string;
+  outJson: string;
+  prereqs: Prerequisite[];
+  functions: FnDraft[];
+  contact: ContactLinks;
+  ownerOrgId: string;
+  mode: 'single' | 'multi';
+};
+const REG_DRAFT_KEY = 'cc:register:draft:v1';
+function loadRegDraft(): Partial<RegDraft> | null {
+  try {
+    const raw = localStorage.getItem(REG_DRAFT_KEY);
+    return raw ? (JSON.parse(raw) as Partial<RegDraft>) : null;
+  } catch {
+    return null;
+  }
+}
+function saveRegDraft(d: RegDraft) {
+  try {
+    localStorage.setItem(REG_DRAFT_KEY, JSON.stringify(d));
+  } catch {
+    /* ignore quota / private-mode errors */
+  }
+}
+function clearRegDraft() {
+  try {
+    localStorage.removeItem(REG_DRAFT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onDone: () => void }) {
   const qc = useQueryClient();
   // Pre-fill every field from the service being edited (the owner's own view carries
@@ -787,27 +838,43 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
   const jsonOf = (v: unknown) => (v ? JSON.stringify(v, null, 2) : '');
   const editInteraction =
     edit?.interaction === 'async' || edit?.interaction === 'human' ? edit.interaction : 'sync';
-  const [name, setName] = useState(edit?.name ?? '');
-  const [description, setDescription] = useState(edit?.description ?? '');
-  const [category, setCategory] = useState(edit?.category ?? '');
-  const [price, setPrice] = useState(edit ? String(edit.pricePerCall) : '');
-  const [endpoint, setEndpoint] = useState(edit?.endpoint ?? '');
-  const [capability, setCapability] = useState(edit?.capabilities?.[0] ?? '');
-  const [address, setAddress] = useState(edit?.stellarAddress ?? '');
+  // Restore an in-progress NEW registration (never for an edit, which pre-fills live).
+  const d = edit ? null : loadRegDraft();
+  const [name, setName] = useState(edit?.name ?? d?.name ?? '');
+  const [description, setDescription] = useState(edit?.description ?? d?.description ?? '');
+  const [category, setCategory] = useState(edit?.category ?? d?.category ?? '');
+  const [price, setPrice] = useState(edit ? String(edit.pricePerCall) : (d?.price ?? ''));
+  const [endpoint, setEndpoint] = useState(edit?.endpoint ?? d?.endpoint ?? '');
+  const [capability, setCapability] = useState(edit?.capabilities?.[0] ?? d?.capability ?? '');
+  const [address, setAddress] = useState(edit?.stellarAddress ?? d?.address ?? '');
   const [paymentModel, setPaymentModel] = useState<
     'escrow' | 'x402' | 'mpp-session' | 'subscription'
-  >((edit?.paymentModel as 'escrow' | 'x402' | 'mpp-session' | 'subscription') ?? 'escrow');
-  const [interaction, setInteraction] = useState<'sync' | 'async' | 'human'>(editInteraction);
-  const [needsFile, setNeedsFile] = useState(!!edit?.attachmentsIn?.required);
-  const [accept, setAccept] = useState(edit?.attachmentsIn?.accept?.join(', ') ?? '');
+  >(
+    (edit?.paymentModel as 'escrow' | 'x402' | 'mpp-session' | 'subscription') ??
+      d?.paymentModel ??
+      'escrow',
+  );
+  const [interaction, setInteraction] = useState<'sync' | 'async' | 'human'>(
+    edit ? editInteraction : (d?.interaction ?? 'sync'),
+  );
+  const [needsFile, setNeedsFile] = useState(
+    edit ? !!edit.attachmentsIn?.required : (d?.needsFile ?? false),
+  );
+  const [accept, setAccept] = useState(
+    edit ? (edit.attachmentsIn?.accept?.join(', ') ?? '') : (d?.accept ?? ''),
+  );
   // Acceptance contract: how delivery is judged before you are paid.
   const [tier, setTier] = useState<'T1' | 'T2' | 'T3'>(
-    (edit?.tier as 'T1' | 'T2' | 'T3') ?? 'T2',
+    (edit?.tier as 'T1' | 'T2' | 'T3') ?? d?.tier ?? 'T2',
   );
-  const [vmethod, setVmethod] = useState<string>(edit?.verification?.method ?? 'onchain');
-  const [specJson, setSpecJson] = useState(jsonOf(edit?.verification?.spec));
-  const [inJson, setInJson] = useState(jsonOf(edit?.inputSchema));
-  const [outJson, setOutJson] = useState(jsonOf(edit?.outputSchema));
+  const [vmethod, setVmethod] = useState<string>(
+    edit?.verification?.method ?? d?.vmethod ?? 'onchain',
+  );
+  const [specJson, setSpecJson] = useState(
+    edit ? jsonOf(edit.verification?.spec) : (d?.specJson ?? ''),
+  );
+  const [inJson, setInJson] = useState(edit ? jsonOf(edit.inputSchema) : (d?.inJson ?? ''));
+  const [outJson, setOutJson] = useState(edit ? jsonOf(edit.outputSchema) : (d?.outJson ?? ''));
   const [jsonErr, setJsonErr] = useState<string | null>(null);
   // Usage requirements a buyer must set up before hiring (auth/install/API key/info).
   const [prereqs, setPrereqs] = useState<Prerequisite[]>(
@@ -818,7 +885,9 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
       instructions: p.instructions,
       url: p.url,
       secret: p.secret,
-    })) ?? [],
+    })) ??
+      d?.prereqs ??
+      [],
   );
   const addPrereq = () =>
     setPrereqs((ps) => [...ps, { kind: 'info', key: '', label: '', instructions: '' }]);
@@ -840,14 +909,16 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
       unit: f.pricing.unit ?? '',
       period: f.pricing.period ?? 'month',
       tier: (f.tier as 'T1' | 'T2' | 'T3') ?? 'T2',
-    })) ?? [],
+    })) ??
+      d?.functions ??
+      [],
   );
-  const [contact, setContact] = useState<ContactLinks>(edit?.contactLinks ?? {});
+  const [contact, setContact] = useState<ContactLinks>(edit?.contactLinks ?? d?.contact ?? {});
   // Whether this service is ONE operation (the simple fields above describe it) or
   // MANY functions (each with its own io, requirements, and price). A service edited
   // with declared functions opens in multi mode.
   const [mode, setMode] = useState<'single' | 'multi'>(
-    edit?.functions?.length ? 'multi' : 'single',
+    edit?.functions?.length ? 'multi' : (d?.mode ?? 'single'),
   );
   const chooseMode = (m: 'single' | 'multi') => {
     setMode(m);
@@ -856,7 +927,59 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
   };
   // Who lists the service: yourself ('') or an organization you belong to.
   const { data: myOrgs = [] } = useQuery({ queryKey: ['my-orgs'], queryFn: getMyOrgs });
-  const [ownerOrgId, setOwnerOrgId] = useState<string>(edit?.ownerOrgId ?? '');
+  const [ownerOrgId, setOwnerOrgId] = useState<string>(edit?.ownerOrgId ?? d?.ownerOrgId ?? '');
+
+  // Continuously save the in-progress NEW registration so a session blip or an
+  // accidental navigation cannot lose it.
+  useEffect(() => {
+    if (edit) return;
+    saveRegDraft({
+      name,
+      description,
+      category,
+      price,
+      endpoint,
+      capability,
+      address,
+      paymentModel,
+      interaction,
+      needsFile,
+      accept,
+      tier,
+      vmethod,
+      specJson,
+      inJson,
+      outJson,
+      prereqs,
+      functions,
+      contact,
+      ownerOrgId,
+      mode,
+    });
+  }, [
+    edit,
+    name,
+    description,
+    category,
+    price,
+    endpoint,
+    capability,
+    address,
+    paymentModel,
+    interaction,
+    needsFile,
+    accept,
+    tier,
+    vmethod,
+    specJson,
+    inJson,
+    outJson,
+    prereqs,
+    functions,
+    contact,
+    ownerOrgId,
+    mode,
+  ]);
 
   const reg = useMutation({
     // pricingModel is fixed at register time: the update endpoint ignores it, so the
@@ -864,6 +987,7 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
     mutationFn: (input: RegisterServiceInput) =>
       edit ? updateService(edit.id, input) : registerService(input),
     onSuccess: async () => {
+      if (!edit) clearRegDraft();
       await refreshRoles();
       qc.invalidateQueries({ queryKey: ['provider-services'] });
       qc.invalidateQueries({ queryKey: ['services'] });
@@ -1080,6 +1204,24 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
           Buyers pay you from their vault under a private, policy-bounded release, you are never given
           their key or their rule.
         </p>
+      )}
+      {!edit && (
+        <div className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-1.5 text-[11px] text-slate-500">
+          <span>
+            Your progress is saved in this browser, so a dropped session won&apos;t lose it.
+            Finish and register anytime.
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              clearRegDraft();
+              onDone();
+            }}
+            className="shrink-0 text-slate-400 hover:text-rose-300"
+          >
+            Discard draft
+          </button>
+        </div>
       )}
       <Section title="Service basics" required>
         <div className="grid gap-3 sm:grid-cols-2">
