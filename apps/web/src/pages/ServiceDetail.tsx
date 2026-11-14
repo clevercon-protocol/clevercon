@@ -239,6 +239,21 @@ function RequirementsPanel({ serviceId }: { serviceId: string }) {
                       <Github size={13} /> {connecting ? 'Redirecting…' : satisfied ? 'Reconnect GitHub' : 'Connect GitHub'}
                     </button>
                   )}
+                  {oauth?.configured && (
+                    <p className="text-[10px] leading-relaxed text-slate-500">
+                      Reconnect is instant because GitHub keeps the app authorized. To switch
+                      accounts or fully revoke access,{' '}
+                      <a
+                        href="https://github.com/settings/applications"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-0.5 text-slate-400 hover:text-slate-200"
+                      >
+                        revoke it on GitHub <ExternalLink size={9} />
+                      </a>{' '}
+                      first, then connect again.
+                    </p>
+                  )}
                   {/* Fallback for anyone who prefers to paste a token (or when OAuth
                       is not configured on this server). Stored encrypted, like OAuth. */}
                   <details className="text-[11px] text-slate-500">
