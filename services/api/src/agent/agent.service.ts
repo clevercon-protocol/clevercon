@@ -235,6 +235,70 @@ export class AgentService {
     return this.validate(raw.plan, raw.source, available, hasAttachment, allowed);
   }
 
+  /**
+   * Turn a service's result into a plain-language answer to the user's original
+   * request. The agent reads the result and responds in its own words instead of
+   * dumping raw JSON. Returns '' when no LLM is configured (the client shows the raw
+   * result as a fallback).
+   */
+  async interpret(instruction: string, result: unknown): Promise<string> {
+    if (this.provider() === 'none') return '';
+    const system =
+      'You are a spending agent reporting the result of a service you hired for the user. ' +
+      "Answer the user's request directly and concisely in plain language, using the result. " +
+      'Summarize lists readably. Do not mention JSON, APIs, or that a service was called; just ' +
+      'answer. If the result is empty or an error, say so plainly and suggest the next step.';
+    const user = `User request: "${instruction}"\n\nResult:\n${JSON.stringify(result).slice(0, 8000)}`;
+    try {
+      return (await this.complete(system, user)).trim();
+    } catch (err) {
+      this.logger.warn(`interpret failed: ${(err as Error).message}`);
+      return '';
+    }
+  }
+
+  /** A plain text completion (no tool-use), for interpreting results conversationally. */
+  private async complete(system: string, user: string): Promise<string> {
+    if (this.provider() === 'anthropic') {
+      const client = new Anthropic({
+        apiKey: process.env.ANTHROPIC_API_KEY ?? '',
+        timeout: 30_000,
+        maxRetries: 1,
+      });
+      const res = await client.messages.create({
+        model: process.env.ANTHROPIC_MODEL ?? 'claude-opus-4-8',
+        max_tokens: 600,
+        system,
+        messages: [{ role: 'user', content: user }],
+      });
+      return res.content
+        .filter((b) => b.type === 'text')
+        .map((b) => (b as { text: string }).text)
+        .join('\n');
+    }
+    const baseUrl = (process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/+$/, '');
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${process.env.OPENAI_API_KEY ?? ''}`,
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
+        max_tokens: 600,
+        temperature: 0.2,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) throw new Error(`llm ${res.status}`);
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    return data.choices?.[0]?.message?.content ?? '';
+  }
+
   private async parseWithLlm(
     userId: string,
     instruction: string,
@@ -544,8 +608,10 @@ export class AgentService {
         functionKey = fn.key;
         functionLabel = fn.label;
         displayName = `${svc.name}: ${fn.label}`;
-        // Budget is the cap; floor at 1 cent so even a free function can escrow-hire.
-        budget = Math.max(fnPrice(fn), 0.01);
+        // Budget is the cap: a paid function's exact price (so a $0.005 call is capped at
+        // $0.005, not rounded up); a free one needs a nominal positive cap to escrow-hire.
+        const price = fnPrice(fn);
+        budget = price > 0 ? price : 0.01;
       } else {
         budget = Math.max(Number(raw.budget) || 0, Number(svc.pricePerCall));
       }

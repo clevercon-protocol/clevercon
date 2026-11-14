@@ -44,6 +44,7 @@ import {
   answerStep,
   createTask,
   planInstruction,
+  interpretResult,
   type HireMode,
   type TaskStepView,
   type TaskDetail,
@@ -119,6 +120,8 @@ type Plan = {
   bind: Bind;
   serviceName?: string;
   serviceId?: string;
+  // The user's original request, so the agent can interpret the result against it.
+  instruction?: string;
   // For a multi-function service: the function the agent chose (the dispatched action).
   functionKey?: string;
   // Buyer-supplied input files for a hire (uploaded to R2 as content-addressed
@@ -139,6 +142,7 @@ type Msg =
       role: 'job';
       taskId: string;
       title: string;
+      instruction?: string;
       policyId?: string;
       publicRuleId?: string;
       lane?: 'private' | 'public';
@@ -677,6 +681,7 @@ export function CommandChat() {
           bind,
           serviceName: result.service.name,
           serviceId: result.service.id,
+          instruction,
           ...(result.functionKey ? { functionKey: result.functionKey } : {}),
           ...(attachments ? { attachments } : {}),
           ...(result.input ? { input: result.input } : {}),
@@ -869,6 +874,7 @@ export function CommandChat() {
           role: 'job',
           taskId: task.id,
           title: plan.serviceName ?? 'Service',
+          instruction: plan.instruction,
           // Settle under the exact rule the buyer picked for this hire.
           policyId: plan.bind.policyId,
           publicRuleId: plan.bind.publicRuleId,
@@ -1411,12 +1417,14 @@ function unpaidReleased(task: TaskDetail | undefined) {
 function JobCard({
   taskId,
   title,
+  instruction,
   policyId: propPolicyId,
   publicRuleId: propPublicRuleId,
   lane: propLane,
 }: {
   taskId: string;
   title: string;
+  instruction?: string;
   policyId?: string;
   publicRuleId?: string;
   lane?: 'private' | 'public';
@@ -1491,6 +1499,25 @@ function JobCard({
   const running = !done && !failed && !inputStep && !awaiting;
   const progress = task?.steps.find((s) => s.status === 'RUNNING' && s.progress)?.progress;
   const results = task?.steps.filter((s) => s.output || s.artifact) ?? [];
+  // The agent reads the delivered output and answers the original request in plain
+  // language, instead of leaving the user to read raw JSON. Runs once when done.
+  const outputs = results
+    .filter((s) => s.output)
+    .map((s) => {
+      try {
+        return JSON.parse(s.output as string) as unknown;
+      } catch {
+        return s.output as string;
+      }
+    });
+  const { data: answer } = useQuery({
+    queryKey: ['interpret', taskId],
+    queryFn: () =>
+      interpretResult(instruction ?? title, outputs.length === 1 ? outputs[0] : outputs),
+    enabled: done && !!instruction && outputs.length > 0,
+    staleTime: Infinity,
+    retry: false,
+  });
   const label = failed
     ? 'Failed'
     : done
@@ -1533,6 +1560,10 @@ function JobCard({
             {task?.steps.find((s) => s.error)?.error ?? 'The job failed.'}
           </p>
         )}
+        {/* The agent's plain-language answer to the request, from the delivered result. */}
+        {done && answer && (
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{answer}</p>
+        )}
         {results.map((s) => (
           <div key={s.index} className="mt-2 space-y-1">
             {s.artifact && (
@@ -1546,11 +1577,23 @@ function JobCard({
                 {s.artifact.size ? ` · ${(s.artifact.size / 1024).toFixed(0)} KB` : ''}
               </a>
             )}
-            {s.output && (
-              <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg bg-black/30 p-2 text-[11px] text-slate-400">
-                {s.output}
-              </pre>
-            )}
+            {s.output &&
+              // Once the agent has answered in plain language, keep the raw payload
+              // available but tucked away; otherwise show it directly.
+              (answer ? (
+                <details className="text-[11px] text-slate-500">
+                  <summary className="cursor-pointer select-none hover:text-slate-300">
+                    Raw result
+                  </summary>
+                  <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded-lg bg-black/30 p-2 text-slate-400">
+                    {s.output}
+                  </pre>
+                </details>
+              ) : (
+                <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg bg-black/30 p-2 text-[11px] text-slate-400">
+                  {s.output}
+                </pre>
+              ))}
           </div>
         ))}
         {settle.phase === 'paying' && (
@@ -1621,6 +1664,7 @@ function ChatBubble({
       <JobCard
         taskId={msg.taskId}
         title={msg.title}
+        instruction={msg.instruction}
         policyId={msg.policyId}
         publicRuleId={msg.publicRuleId}
         lane={msg.lane}

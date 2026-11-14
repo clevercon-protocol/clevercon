@@ -19,6 +19,12 @@ const planSchema = z.object({
   serviceIds: z.array(z.string().min(1)).max(20).optional(),
 });
 
+const interpretSchema = z.object({
+  instruction: z.string().min(1).max(2000),
+  // The delivered result(s) to explain in plain language.
+  result: z.unknown(),
+});
+
 /**
  * The chat agent's brain: parse a natural-language instruction into a structured
  * spending plan. It only PROPOSES; the human approves and the vault enforces the
@@ -33,5 +39,12 @@ export class AgentController {
   plan(@CurrentUser() user: AuthUser, @Body() body: unknown) {
     const { instruction, hasAttachment, serviceId, serviceIds } = parseBody(planSchema, body);
     return this.agent.plan(user.userId, instruction, { hasAttachment, serviceId, serviceIds });
+  }
+
+  /** Explain a delivered result in plain language, answering the original request. */
+  @Post('interpret')
+  async interpret(@Body() body: unknown) {
+    const { instruction, result } = parseBody(interpretSchema, body);
+    return { answer: await this.agent.interpret(instruction, result) };
   }
 }

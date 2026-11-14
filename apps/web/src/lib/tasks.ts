@@ -238,6 +238,21 @@ export async function planInstruction(
   });
 }
 
+/** Explain a delivered result in plain language, answering the original request.
+ *  Returns '' when no LLM is configured (the caller shows the raw result instead). */
+export async function interpretResult(instruction: string, result: unknown): Promise<string> {
+  if (isDemo()) return '';
+  try {
+    const { answer } = await apiPost<{ answer: string }>('/agent/interpret', {
+      instruction,
+      result,
+    });
+    return answer ?? '';
+  } catch {
+    return '';
+  }
+}
+
 /** Raise a dispute on one of the caller's tasks. */
 /**
  * Open a dispute on a hired task. The server records it and returns the
