@@ -150,6 +150,14 @@ type Msg =
 
 const short = (a: string) => (a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
 
+// Money display that keeps sub-cent precision: a $0.005 call shows "$0.005", not "$0.01"
+// (two-decimal rounding made a correct on-chain amount look wrong). Larger amounts keep
+// the usual 2 decimals.
+function usd(n: number): string {
+  if (n > 0 && n < 0.01) return `$${n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+  return `$${n.toFixed(2)}`;
+}
+
 const AGENT_INTRO =
   "I'm your spending agent. Tell me what to do with your budget, or use a quick action. I'll propose a plan and you approve before anything moves. The vault enforces the rule you pick, so I can never overspend or pay outside it.";
 
@@ -675,7 +683,7 @@ export function CommandChat() {
         plan: {
           kind: 'hire',
           lane,
-          summary: `Hire ${result.service.name} (budget $${result.budget.toFixed(2)})`,
+          summary: `Hire ${result.service.name} (budget ${usd(result.budget)})`,
           lines: [{ payee: result.service.name, amount: result.budget, reason: 'service' }],
           limit: appliedLimit,
           bind,
@@ -807,7 +815,7 @@ export function CommandChat() {
       plan = {
         kind: 'hire',
         lane,
-        summary: `Hire ${svc.name} (budget $${bud.toFixed(2)})`,
+        summary: `Hire ${svc.name} (budget ${usd(bud)})`,
         lines: [{ payee: svc.name, amount: bud, reason: 'service' }],
         limit: applied,
         bind,
@@ -815,7 +823,7 @@ export function CommandChat() {
         serviceId: svc.id,
         ...(attachments ? { attachments } : {}),
       };
-      userText = `Hire ${svc.name} with a $${bud.toFixed(2)} budget${attachments ? ' (with an attachment)' : ''}.`;
+      userText = `Hire ${svc.name} with a ${usd(bud)} budget${attachments ? ' (with an attachment)' : ''}.`;
     }
     if (!plan) return;
     push(
@@ -1614,7 +1622,7 @@ function JobCard({
         )}
         {paidTotal > 0 && settle.phase !== 'paying' && (
           <p className="mt-2 flex items-center gap-1.5 text-[11px] text-emerald-300">
-            <CheckCircle2 size={12} /> Paid ${paidTotal.toFixed(2)} to the provider under your rule.
+            <CheckCircle2 size={12} /> Paid {usd(paidTotal)} to the provider under your rule.
           </p>
         )}
         <Link
@@ -1706,14 +1714,14 @@ function ChatBubble({
                 {plan.kind === 'hire' ? l.payee : short(l.payee)}
               </span>
               <span className="text-slate-400">
-                ${l.amount.toFixed(2)}
+                {usd(l.amount)}
                 {l.reason ? <span className="ml-2 text-slate-600">{l.reason}</span> : null}
               </span>
             </div>
           ))}
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
-          <span>total ${total.toFixed(2)}</span>
+          <span>total {usd(total)}</span>
           <span className="inline-flex items-center gap-1 text-violet-300">
             {plan.limit.isPrivate ? <EyeOff size={11} /> : <Eye size={11} />} rule:{' '}
             {plan.limit.label}

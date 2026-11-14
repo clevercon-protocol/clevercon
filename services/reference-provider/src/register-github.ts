@@ -81,36 +81,49 @@ async function main(): Promise<void> {
   const token = await login(api, kp);
   const authHeaders = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
   const ownerOrgId = await resolveOrg(api, authHeaders);
-  console.log(`Signed in as ${kp.publicKey()}; registering the GitHub tool at ${endpoint}`);
 
-  const res = await fetch(`${api}/provider/services`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({
-      name: GITHUB_SERVICE.name,
-      description: GITHUB_SERVICE.description,
-      category: GITHUB_SERVICE.category,
-      capabilities: GITHUB_SERVICE.capabilities,
-      pricingModel: GITHUB_SERVICE.pricingModel,
-      pricePerCall: GITHUB_SERVICE.pricePerCall,
-      endpoint,
-      stellarAddress: kp.publicKey(),
-      tier: GITHUB_SERVICE.tier,
-      verification: GITHUB_SERVICE.verification,
-      interaction: GITHUB_SERVICE.interaction,
-      paymentModel: GITHUB_SERVICE.paymentModel,
-      prerequisites: GITHUB_SERVICE.prerequisites,
-      functions: GITHUB_SERVICE.functions,
-      contactLinks: GITHUB_SERVICE.contactLinks,
-      ...(ownerOrgId ? { ownerOrgId } : {}),
-    }),
-  });
+  // Idempotent: if a "GitHub Tool" already exists for this provider, UPDATE it (so
+  // re-running picks up new functions and prices) instead of creating a duplicate.
+  const mineRes = await fetch(`${api}/provider/services`, { headers: authHeaders });
+  const mine = mineRes.ok
+    ? ((await mineRes.json()) as { items?: { id: string; name: string }[] }).items ?? []
+    : [];
+  const existing = mine.find((s) => s.name === GITHUB_SERVICE.name);
+
+  const body = {
+    name: GITHUB_SERVICE.name,
+    description: GITHUB_SERVICE.description,
+    category: GITHUB_SERVICE.category,
+    capabilities: GITHUB_SERVICE.capabilities,
+    endpoint,
+    stellarAddress: kp.publicKey(),
+    tier: GITHUB_SERVICE.tier,
+    verification: GITHUB_SERVICE.verification,
+    interaction: GITHUB_SERVICE.interaction,
+    paymentModel: GITHUB_SERVICE.paymentModel,
+    prerequisites: GITHUB_SERVICE.prerequisites,
+    functions: GITHUB_SERVICE.functions,
+    contactLinks: GITHUB_SERVICE.contactLinks,
+    ...(ownerOrgId ? { ownerOrgId } : {}),
+    // pricingModel/pricePerCall are only accepted on create (fixed thereafter).
+    ...(existing ? {} : { pricingModel: GITHUB_SERVICE.pricingModel, pricePerCall: GITHUB_SERVICE.pricePerCall }),
+  };
+
+  console.log(
+    `Signed in as ${kp.publicKey()}; ${existing ? 'updating' : 'registering'} the GitHub tool at ${endpoint}`,
+  );
+  const res = await fetch(
+    existing ? `${api}/provider/services/${existing.id}` : `${api}/provider/services`,
+    { method: existing ? 'PATCH' : 'POST', headers: authHeaders, body: JSON.stringify(body) },
+  );
   if (!res.ok) {
-    console.error(`x register failed: ${res.status} ${await res.text()}`);
+    console.error(`x ${existing ? 'update' : 'register'} failed: ${res.status} ${await res.text()}`);
     process.exit(1);
   }
   const out = (await res.json()) as { agentId?: string; id?: string };
-  console.log(`ok GitHub Tool registered (agentId ${out.agentId ?? '?'}, id ${out.id ?? '?'})`);
+  console.log(
+    `ok GitHub Tool ${existing ? 'updated' : 'registered'} (agentId ${out.agentId ?? '?'}, id ${out.id ?? existing?.id ?? '?'})`,
+  );
   console.log(`${GITHUB_SERVICE.functions.length} functions, ${GITHUB_SERVICE.prerequisites.length} requirement(s).`);
 }
 
