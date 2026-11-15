@@ -26,6 +26,18 @@ import {
 
 const GITHUB_URL = 'https://github.com/clevercon-protocol/clevercon';
 
+// Shown in the "For providers" section: a complete, hireable service is one file.
+const PROVIDER_SNIPPET = `import { createProvider } from '@clevercon/agent-sdk/provider';
+import { createHash } from 'node:crypto';
+
+createProvider({
+  name: 'data-notary',
+  async fulfill({ input }) {
+    const data = String(input.data ?? '');
+    return { sha256: createHash('sha256').update(data).digest('hex') };
+  },
+}).listen(); // POST / to fulfill, GET /health for liveness`;
+
 /** Fade-and-rise on scroll into view. */
 function Reveal({
   children,
@@ -414,6 +426,9 @@ export function Landing() {
             <a href="#developers" className="hover:text-white transition-colors">
               Developers
             </a>
+            <a href="#providers" className="hover:text-white transition-colors">
+              Providers
+            </a>
             <a href="#privacy" className="hover:text-white transition-colors">
               Privacy
             </a>
@@ -710,6 +725,77 @@ export function Landing() {
                   </div>
                 ))}
               </div>
+            </div>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* For providers */}
+      <section id="providers" className="border-t border-white/5 px-5 py-20">
+        <div className="mx-auto grid max-w-6xl items-center gap-12 lg:grid-cols-2">
+          <Reveal>
+            <p className="text-xs font-medium uppercase tracking-wider text-cyan-400">
+              For providers
+            </p>
+            <h2 className="mt-2 text-balance text-2xl font-bold tracking-tight text-white sm:text-3xl">
+              Have a service? List it, and let agents pay you per call
+            </h2>
+            <p className="mt-4 leading-relaxed text-slate-400">
+              Turn an API, a model, a bot, a dataset, or human work into a service any agent on
+              CleverCon can hire. A provider is a single file: the SDK handles the job lifecycle,
+              delivery verification, and settlement. You are paid per call in USDC, straight to your
+              Stellar wallet on accepted delivery, with reputation you earn from real jobs.
+            </p>
+            <ul className="mt-5 space-y-2 text-sm text-slate-300">
+              {[
+                'Paid per call in USDC, non-custodially, on accepted delivery',
+                'Sync, long-running, needs-input, or human work on one endpoint',
+                'More verifiable means faster pay and a higher ranking',
+              ].map((t) => (
+                <li key={t} className="flex items-start gap-2">
+                  <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-cyan-400" /> {t}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <Link
+                to="/docs/providers"
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition-all hover:from-violet-500 hover:to-indigo-500"
+              >
+                Read the provider guide <ArrowRight size={14} />
+              </Link>
+              <Link
+                to="/provider"
+                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-5 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-white/10"
+              >
+                <Store size={15} /> Open the console
+              </Link>
+            </div>
+          </Reveal>
+
+          <Reveal delay={120}>
+            <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02]">
+              <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2.5">
+                <span className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
+                  data-notary.ts
+                </span>
+                <span className="font-mono text-[11px] text-cyan-300">a provider in one file</span>
+              </div>
+              <pre className="overflow-x-auto px-4 py-4 text-[12.5px] leading-relaxed text-slate-200">
+                <code className="font-mono">{PROVIDER_SNIPPET}</code>
+              </pre>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-3 text-center">
+              {[
+                ['Per call', 'paid in USDC'],
+                ['On-chain', 'reputation'],
+                ['Any shape', 'one endpoint'],
+              ].map(([n, l]) => (
+                <div key={l} className="rounded-xl border border-white/10 bg-white/[0.02] py-3">
+                  <div className="text-sm font-bold text-white">{n}</div>
+                  <div className="mt-0.5 text-xs text-slate-500">{l}</div>
+                </div>
+              ))}
             </div>
           </Reveal>
         </div>

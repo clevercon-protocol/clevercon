@@ -1151,7 +1151,7 @@ function DeveloperQuickstart() {
           {
             to: '/docs/providers',
             title: 'Be a provider',
-            desc: 'List a service agents can hire and pay.',
+            desc: 'Build, list, and earn from a service agents can hire. A full guide.',
           },
         ]}
       />
@@ -1474,178 +1474,575 @@ function ConfigKeys() {
   );
 }
 
-const PROVIDER_CODE = `import { createProvider } from '@clevercon/agent-sdk/provider';
+const PROVIDER_MIN = `import { createProvider } from '@clevercon/agent-sdk/provider';
+import { createHash } from 'node:crypto';
 
+// A Data Notary: one function, tier T1 (anyone can re-hash the input and get the
+// same answer), so the vault pays the instant the worker re-checks it.
 const provider = createProvider({
-  name: 'price-oracle',
+  name: 'data-notary',
   port: 4200,
-  async fulfill({ action, taskId }) {
-    const price = await lookupPrice(action);
-    return { action, price, at: new Date().toISOString() };
+  async fulfill({ input }) {
+    const data = String(input.data ?? '');
+    const sha256 = createHash('sha256').update(data).digest('hex');
+    return { sha256, algo: 'sha256', bytes: data.length };
   },
 });
 
 provider.listen(); // POST / to fulfill, GET /health for liveness`;
 
+const PROVIDER_IMAGE = `import { createProvider, fetchAttachment, artifactRef } from '@clevercon/agent-sdk/provider';
+import sharp from 'sharp';
+
+// Image Resizer: a file in, a file out. The manifest sets attachmentsIn.required,
+// so the buyer must attach an image before any charge.
+const provider = createProvider({
+  name: 'image-tools',
+  async fulfill({ input, attachments }) {
+    const ref = attachments[0];
+    if (!ref) return { status: 'failed', error: 'no image attached' };
+
+    // fetchAttachment downloads the buyer's file and verifies its content hash
+    // before you touch it, so a swapped or tampered file is rejected.
+    const { bytes } = await fetchAttachment(ref);
+    const out = await sharp(bytes)
+      .resize({ width: Number(input.width) || 800, withoutEnlargement: true })
+      .toFormat('webp', { quality: 80 })
+      .toBuffer();
+
+    // host the result on any public URL, then hand it back as a content-addressed
+    // reference; the buyer downloads it and the hash is the integrity check.
+    const url = await uploadToBucket(out, 'image/webp');
+    return {
+      status: 'completed',
+      data: { bytes: out.length },
+      artifact: artifactRef(url, out, 'image/webp'),
+    };
+  },
+});
+provider.listen();`;
+
+const PROVIDER_MULTI = `// One endpoint can serve many functions: the worker sends the function's action,
+// so dispatch on it. This is exactly how the reference provider runs four
+// services from a single process.
+const HANDLERS = {
+  'account.balances': accountBalances,
+  'data.hash': dataNotary,
+  'market.snapshot': marketSnapshot,
+  'image.transform': imageTransform,
+};
+
+const provider = createProvider({
+  name: 'reference-provider',
+  async fulfill(req) {
+    const handler = HANDLERS[req.action];
+    if (!handler) return { status: 'failed', error: \`unknown action: \${req.action}\` };
+    return handler(req);
+  },
+});`;
+
+const PROVIDER_CREDS = `// The buyer connected their GitHub once, in the dapp. At job time the token is
+// decrypted server-side and sent only to your endpoint as credentials, NEVER to
+// the planning model. Never ask for a secret in input; read it from credentials.
+async fulfill({ input, credentials }) {
+  const token = credentials.github_token;
+  const res = await fetch(\`https://api.github.com/repos/\${input.repo}/issues\`, {
+    headers: { authorization: \`Bearer \${token}\`, 'user-agent': 'clevercon' },
+  });
+  if (!res.ok) return { status: 'failed', error: \`github \${res.status}\` };
+  return res.json();
+}`;
+
+const PROVIDER_ASYNC = `// Long-running work: return 'working' with a durable handle; the worker polls
+// your endpoint (kind:'poll') until you return 'completed'. The buyer sees your
+// progress and the task money stays locked until you deliver or time out.
+async fulfill(req) {
+  if (req.kind === 'dispatch') {
+    const handle = await startRender(req.input);
+    return { status: 'working', handle, progress: { pct: 0, message: 'queued' } };
+  }
+  if (req.kind === 'poll') {
+    const job = await getRender(req.handle);
+    return job.done
+      ? { status: 'completed', data: job.result }
+      : { status: 'working', handle: req.handle, progress: { pct: job.pct } };
+  }
+}`;
+
+const PROVIDER_INPUT = `// Needs-input: pause and ask a typed question. The agent answers from context or
+// puts it to the user; the reply resumes the job as kind:'answer', with the
+// answer on req.inputResponse.
+async fulfill(req) {
+  if (!req.input.targetLang) {
+    return {
+      status: 'input_required',
+      inputRequest: { requestId: 'lang', prompt: 'Which language should I translate into?' },
+    };
+  }
+  return translate(String(req.input.text), String(req.input.targetLang));
+}`;
+
+const PROVIDER_LOCAL_TEST = `# liveness (the directory polls this; a 404 is fine, only 5xx/timeout count as down)
+curl localhost:4200/health
+
+# a dispatch: exactly what the CleverCon worker POSTs for one step
+curl -X POST localhost:4200 -H 'content-type: application/json' -d '{
+  "action": "data.hash",
+  "taskId": "t_local", "jobId": "j_local",
+  "input": { "data": "hello world" },
+  "kind": "dispatch"
+}'`;
+
+const REGISTER_CURL = `# 1. Sign in with your provider key over SEP-10 (challenge -> sign -> verify).
+#    That key is also your payout wallet, so no separate payout proof is needed.
+# 2. Register the service with its acceptance contract:
+curl -X POST "$CLEVERCON_API_URL/provider/services" \\
+  -H "authorization: Bearer $TOKEN" \\
+  -H "content-type: application/json" \\
+  -d '{
+    "name": "Data Notary",
+    "description": "A sha256 commitment of your data, re-checkable by anyone.",
+    "category": "Compute & Proofs",
+    "capabilities": ["data.hash"],
+    "pricingModel": "X402",
+    "pricePerCall": 0.01,
+    "endpoint": "https://my-provider.example.com",
+    "stellarAddress": "G...YOURPAYOUT",
+    "tier": "T1"
+  }'`;
+
 function Providers() {
   return (
     <>
       <Lead>
-        The other side of the economy: turn a function, an API, a model, or a skill into a service
-        the marketplace can hire and pay per use. The SDK implements the fulfillment contract, so a
-        provider is a single file with no framework.
+        The other side of the economy: turn an API, a model, a bot, a dataset, or human work into a
+        service any agent on CleverCon can hire and pay per use in USDC. You host one HTTPS endpoint
+        and declare what it does; the marketplace handles discovery, the job lifecycle, delivery
+        verification, settlement, and reputation.
       </Lead>
 
-      <UseCase title="Monetize a trading signal or a data feed">
+      <UseCase title="Monetize a trading signal, a data feed, or a skill">
         You run a bot that produces a useful signal. List it once, declare a price per call, and any
         agent on CleverCon can pay you in USDC per use, non-custodially, with the buyer's spend
-        bounded by their own rule. You never hold their keys; they never hold yours.
+        bounded by their own private rule. You never hold their keys; they never hold yours; the
+        vault pays your address on accepted delivery.
       </UseCase>
 
-      <H2 id="build">Build a provider</H2>
-      <CodeBlock code={PROVIDER_CODE} lang="ts" />
+      <H2 id="why">Why list on CleverCon</H2>
+      <UL>
+        <LI>
+          <B>Agent-native demand.</B> Buyers are autonomous agents that discover and hire by
+          capability, not people filling forms. Your service is reachable from the dapp, the SDK,
+          and any MCP agent at once.
+        </LI>
+        <LI>
+          <B>Paid per call in USDC, non-custodially.</B> Settlement goes straight to your Stellar
+          wallet on accepted delivery. No invoicing, no platform float, no chargebacks.
+        </LI>
+        <LI>
+          <B>Trust you earn, not claim.</B> Reputation is built from real settlements (unique
+          payers, dispute rate), and the directory ranks on it. A new service competes on
+          verifiability, not marketing spend.
+        </LI>
+        <LI>
+          <B>One integration, every shape.</B> Sync, long-running, needs-input, and human work all
+          use the same endpoint contract, so you can list anything from a price feed to a freelance
+          workflow.
+        </LI>
+      </UL>
 
-      <H3>The fulfillment contract</H3>
-      <Table
-        head={['Exchange', 'Detail']}
-        rows={[
-          [
-            <Code>POST /</Code>,
-            'request body { action, taskId, input, attachments }; respond with the step result',
-          ],
-          [
-            'input',
-            "the buyer's structured params, validated against your declared io.input JSON Schema",
-          ],
-          [
-            'attachments',
-            'content-addressed file refs { url, hash, size, contentType }; fetch and verify the hash before use',
-          ],
-          [
-            'output',
-            'a string sent verbatim, or an object JSON-encoded (truncated); or host a file and return an artifact reference',
-          ],
-          [
-            'status',
-            'completed, or working (async, with progress), input_required (ask a typed question), or failed',
-          ],
-          ['failure', 'a non-2xx or a timeout fails the step, so the vault does not pay for it'],
-          [<Code>GET /health</Code>, 'liveness; the directory monitors it and auto-recovers'],
+      <H2 id="what">What a service is</H2>
+      <P>
+        A service is one endpoint plus a manifest. The manifest lists your callable <B>functions</B>
+        , each a capability with its own input schema, price, tier, and requirements; the endpoint
+        answers a job for each. One endpoint can serve many functions: the reference provider runs
+        four from a single process.
+      </P>
+      <Flow
+        steps={[
+          { label: 'Buyer hires a function', sub: 'from the dapp, SDK, or an MCP agent' },
+          { label: 'Worker POSTs the step', sub: 'to your endpoint, with input + credentials' },
+          { label: 'You deliver', sub: 'a result, a file, or a question' },
+          { label: 'Vault pays you', sub: "on accepted delivery, under the buyer's rule" },
         ]}
       />
 
-      <H2 id="tier">Pick a verification tier</H2>
+      <H2 id="shapes">The shapes you can list</H2>
+      <Table
+        head={['Shape', 'What it means', 'You return']}
+        rows={[
+          [
+            'Sync',
+            'Immediate request and response (a price, a hash, a lookup)',
+            <Code>completed</Code>,
+          ],
+          [
+            'Long-running',
+            'Work that takes time (a render, a training run)',
+            <>
+              <Code>working</Code> + a handle the worker polls
+            </>,
+          ],
+          ['Needs-input', 'You must ask the buyer something mid-job', <Code>input_required</Code>],
+          [
+            'Human (T3)',
+            'A person does the work; released on approval',
+            <>
+              <Code>completed</Code> on buyer accept
+            </>,
+          ],
+          ['Metered', 'Pay-per-call APIs and streams (x402 / MPP)', 'billed per call, not per task'],
+        ]}
+      />
+
+      <H2 id="tiers">Verification tiers (the trust ladder)</H2>
       <P>
-        Higher verifiability means instant pay and higher trust, which is the incentive to be
-        checkable.
+        The more checkable your delivery, the faster you are paid and the higher you rank. That is
+        the incentive to be verifiable. You declare a tier and a method; the method is exercised on
+        your first real job, so a service cannot claim a tier it does not meet.
       </P>
       <UL>
         <LI>
-          <B>T1</B>: your output can be re-derived, hashed, or signature-checked (a price feed, a
-          VRF, a content-addressed fetch). Paid instantly.
+          <B>T1, trustless.</B> Your output can be re-derived, re-hashed, or signature-checked (a
+          price feed, a sha256 notary, a content-addressed file). The worker re-checks it and pays
+          instantly.
         </LI>
         <LI>
-          <B>T2</B>: your output is judged against a schema with a dispute window (a summary, a
-          translation, an extraction).
+          <B>T2, judged.</B> Your output is checked against your declared schema and an automated
+          judge, with a dispute window before release (a summary, a translation, an extraction).
         </LI>
         <LI>
-          <B>T3</B>: human or milestone work, released on buyer approval.
+          <B>T3, human / milestone.</B> Human or long-form work, released when the buyer approves.
         </LI>
       </UL>
 
-      <H2 id="declare">Declare how your service behaves</H2>
+      <Callout kind="note" title="A live catalog to copy">
+        The reference provider is a real, hireable example you can read and clone: Stellar Account
+        Intelligence (T1), Data Notary (T1), Market Oracle (T2), and an Image Resizer (T2, file in /
+        file out), all on one process. Source:{' '}
+        <A href="https://github.com/clevercon-protocol/clevercon/tree/main/services/reference-provider">
+          services/reference-provider
+        </A>
+        .
+      </Callout>
+
+      <Cards
+        items={[
+          {
+            to: '/docs/build-a-service',
+            title: 'Build a service',
+            desc: 'The fulfillment contract, a full worked example, files, credentials, and the async shapes.',
+          },
+          {
+            to: '/docs/register-service',
+            title: 'Register and earn',
+            desc: 'Deploy, list it field by field, ensure a trustline, and get paid with reputation.',
+          },
+        ]}
+      />
+    </>
+  );
+}
+
+function BuildService() {
+  return (
+    <>
+      <Lead>
+        A provider is a single file, no framework. The SDK (
+        <Code>@clevercon/agent-sdk/provider</Code>) handles the health check, body parsing, the sync
+        / async / needs-input encoding, and error mapping, so the only thing you write is the work
+        itself.
+      </Lead>
+
+      <H2 id="install">Install and the minimal service</H2>
+      <CodeBlock code="npm install @clevercon/agent-sdk" lang="bash" />
+      <CodeBlock code={PROVIDER_MIN} lang="ts" title="data-notary.ts" />
       <P>
-        A service carries a manifest so the agent and the dapp know what it needs before committing,
-        and so the platform treats any service uniformly. You declare it at registration:
+        That is a complete, hireable service. <Code>fulfill</Code> receives the job and returns the
+        result; a bare value is a completed synchronous delivery. Run it and it answers{' '}
+        <Code>POST /</Code> for jobs and <Code>GET /health</Code> for liveness.
       </P>
-      <UL>
-        <LI>
-          <B>Interaction shape:</B> immediate (sync), long-running (async), needs-input, human (T3),
-          or metered. The buyer's UI and the agent adapt to it.
-        </LI>
-        <LI>
-          <B>Payment model:</B> how you are paid for that shape (per accepted delivery, or metered
-          per call).
-        </LI>
-        <LI>
-          <B>Inputs and files:</B> an <Code>io.input</Code> JSON Schema for your parameters, and
-          whether you require an attachment (accepted content types and a size limit). A missing
-          required field is asked of the user before any charge.
-        </LI>
-        <LI>
-          <B>Pricing, tier, and category</B> so you are discoverable and priced correctly.
-        </LI>
-      </UL>
+
+      <H2 id="request">The fulfillment request</H2>
+      <P>Your handler receives one typed request per step:</P>
+      <Table
+        head={['Field', 'What it is']}
+        rows={[
+          [
+            <Code>action</Code>,
+            'The function the buyer hired (the capability). Dispatch on it if you serve several.',
+          ],
+          [
+            <Code>input</Code>,
+            "The structured params, validated against that function's input JSON Schema.",
+          ],
+          [
+            <Code>attachments</Code>,
+            'Buyer files by reference; fetch and hash-verify with fetchAttachment before use.',
+          ],
+          [
+            <Code>credentials</Code>,
+            "The buyer's satisfied requirements (an API key, an OAuth token). Decrypted to you only, never to the LLM.",
+          ],
+          [
+            <Code>idempotencyKey</Code>,
+            'A retried hire carries the same key; dedupe side-effecting work on it.',
+          ],
+          [
+            <>
+              <Code>kind</Code> / <Code>handle</Code>
+            </>,
+            "'dispatch' starts a job, 'poll' checks an async handle, 'answer' resumes a needs-input step.",
+          ],
+        ]}
+      />
+
+      <H2 id="return">What you return</H2>
+      <Table
+        head={['Return', 'Meaning']}
+        rows={[
+          [
+            'a bare value',
+            'Completed sync delivery (a string is sent verbatim; anything else is JSON-encoded).',
+          ],
+          [
+            <Code>{"{ status: 'completed', data, artifact? }"}</Code>,
+            'An explicit completed delivery, optionally with a file.',
+          ],
+          [
+            <Code>{"{ status: 'working', handle, progress? }"}</Code>,
+            'A long job; the worker polls the handle.',
+          ],
+          [
+            <Code>{"{ status: 'input_required', inputRequest }"}</Code>,
+            'Ask the buyer a typed question.',
+          ],
+          [
+            <Code>{"{ status: 'failed', error }"}</Code>,
+            'Fail the step; the lock refunds and you are not paid.',
+          ],
+        ]}
+      />
+      <Callout kind="warn" title="Failure means no pay">
+        A thrown handler, a non-2xx, or a timeout (the worker aborts at 15 seconds) fails the step,
+        and the vault does not pay for it. Keep sync work under the deadline; use the{' '}
+        <Code>working</Code> shape for anything slow.
+      </Callout>
 
       <H2 id="files">Files in, files out</H2>
       <P>
-        A service can take a file and return one. Declare the accepted types and max size; the buyer
-        attaches a file, which arrives as a content-addressed reference you fetch and hash-verify.
-        To return a file, host the bytes and return an artifact reference{' '}
-        <Code>{'{ url, hash, size, contentType }'}</Code>; the buyer downloads it from the job and
-        the hash is the integrity check. The reference Image Resizer and Converter is exactly this:
-        an image in, a resized or converted image out.
+        A service can take a file and return one. Declare the accepted types and max size (so the
+        buyer must attach before any charge); the file arrives as a content-addressed reference.{' '}
+        <Code>fetchAttachment</Code> downloads it and verifies the hash; to return a file, host the
+        bytes and wrap them with <Code>artifactRef</Code>.
+      </P>
+      <CodeBlock
+        code={PROVIDER_IMAGE}
+        lang="ts"
+        title="image-tools.ts (the reference Image Resizer, trimmed)"
+      />
+
+      <H2 id="many">Many functions on one endpoint</H2>
+      <CodeBlock code={PROVIDER_MULTI} lang="ts" />
+
+      <H2 id="credentials">Credentials (act on the buyer's behalf)</H2>
+      <P>
+        When a function needs the buyer's API key or an OAuth token (say, their GitHub), they
+        connect it once in the dapp. At job time it is decrypted server-side and sent only to your
+        endpoint as <Code>credentials</Code>, never to the planning model. Read it from there; never
+        ask for a secret in <Code>input</Code>.
+      </P>
+      <CodeBlock code={PROVIDER_CREDS} lang="ts" />
+
+      <H2 id="async">Long-running and needs-input</H2>
+      <CodeBlock code={PROVIDER_ASYNC} lang="ts" />
+      <CodeBlock code={PROVIDER_INPUT} lang="ts" />
+      <P>
+        For human work (T3), there is nothing special to return: deliver as <Code>completed</Code>{' '}
+        and the step is held for the buyer's approval before it releases.
       </P>
 
-      <H2 id="shapes">Long-running, needs-input, and human work</H2>
+      <H2 id="verify">Pick a verification method</H2>
+      <P>Your method maps to a tier and decides how fast you are paid:</P>
+      <Table
+        head={['Method', 'Tier', 'How delivery is checked']}
+        rows={[
+          [<Code>onchain</Code>, 'T1', 'Re-derived from the ledger (a balance, a price). Instant.'],
+          [<Code>witness</Code>, 'T1', 'A predicate the worker recomputes (a sha256). Instant.'],
+          [
+            <Code>content-hash</Code>,
+            'T1',
+            'A delivered file whose bytes hash to the reference. Instant.',
+          ],
+          [
+            <Code>signature</Code>,
+            'T1 / T2',
+            'You sign the payload; the buyer verifies against your declared key.',
+          ],
+          [<Code>attest</Code>, 'T2', 'Output judged against your schema, with a dispute window.'],
+          [<Code>manual</Code>, 'T3', 'Released on human approval.'],
+        ]}
+      />
+
+      <H2 id="test">Test it locally</H2>
+      <CodeBlock code={PROVIDER_LOCAL_TEST} lang="bash" />
+
+      <Cards
+        items={[
+          {
+            to: '/docs/register-service',
+            title: 'Register and earn',
+            desc: 'List your deployed endpoint and start getting paid.',
+          },
+          {
+            to: '/docs/sdk',
+            title: 'SDK reference',
+            desc: 'The spender, sessions, receipts, and the rest of the SDK surface.',
+          },
+        ]}
+      />
+    </>
+  );
+}
+
+function RegisterService() {
+  return (
+    <>
+      <Lead>
+        Once your endpoint is reachable over HTTPS, list it and start earning. Register in the
+        Provider console by hand, or programmatically with your provider key. Either way, settlement
+        goes to your Stellar wallet on accepted delivery.
+      </Lead>
+
+      <H2 id="deploy">1. Deploy your endpoint</H2>
       <P>
-        Beyond immediate request-response, return a status so the job behaves correctly:
+        Host the provider anywhere reachable over HTTPS (Railway, Fly, a VPS, a cloud function). The
+        worker needs <Code>POST /</Code> and <Code>GET /health</Code>. Keep it warm enough to answer
+        within the 15-second step deadline.
+      </P>
+
+      <H2 id="console">2a. Register in the Provider console</H2>
+      <P>
+        Open <A to="/provider">Provider</A> in the app and add a service. The form captures the
+        whole acceptance contract:
+      </P>
+      <Table
+        head={['Field', 'What to put']}
+        rows={[
+          ['Name + description', 'How the service reads in the directory and to the agent.'],
+          [
+            'Category',
+            'Where it is discovered (Data & Oracles, Compute & Proofs, Media & Files, ...).',
+          ],
+          ['Endpoint', 'Your HTTPS URL. The worker POSTs each job here.'],
+          ['Payout address', 'Your Stellar wallet (G...). Needs a USDC trustline (below).'],
+          [
+            'Interaction + payment model',
+            'Sync / async / human / metered, and how you are billed for it.',
+          ],
+          [
+            'Functions',
+            'One row per capability: label, action key, input schema, verification tier, and price.',
+          ],
+          [
+            'Requirements',
+            'Anything the buyer must connect first (an API key, an OAuth account); see below.',
+          ],
+          ['Owner / identity', 'List under your profile or an organization, with contact links.'],
+        ]}
+      />
+      <Callout kind="tip" title="Action key = action">
+        A function's action key is the exact <Code>action</Code> your endpoint receives. It
+        auto-fills from the label (<Code>Create issue</Code> gives <Code>create_issue</Code>), and
+        your <Code>fulfill</Code> dispatches on it.
+      </Callout>
+
+      <H2 id="programmatic">2b. Register programmatically</H2>
+      <P>
+        Prefer scripts? Sign in over SEP-10 with your provider key and POST the service. This is
+        exactly what the reference provider's register script does.
+      </P>
+      <CodeBlock code={REGISTER_CURL} lang="bash" />
+
+      <H2 id="requirements">Requirements the buyer connects</H2>
+      <P>
+        If a function needs the buyer to bring something, declare it as a requirement so the buyer
+        is prompted once, before any charge, and the value arrives at your endpoint as a credential:
       </P>
       <UL>
         <LI>
-          <B>working</B>: a long job returns a durable handle and progress; the agent tracks it and
-          fetches the result when done.
+          <B>info</B>: a non-secret value (a handle, a region).
         </LI>
         <LI>
-          <B>input_required</B>: pause to ask a typed question; the agent answers from context or
-          asks the user, and the reply resumes the job.
+          <B>apiKey</B>: a secret key, stored encrypted and sent only to your endpoint.
         </LI>
         <LI>
-          <B>human (T3)</B>: the step is held for approval; it is released when the buyer accepts.
+          <B>oauth</B>: a connected account (like GitHub); the buyer authorizes once and you receive
+          a scoped token.
+        </LI>
+        <LI>
+          <B>install</B>: a one-time setup step the buyer confirms.
         </LI>
       </UL>
 
-      <H2 id="register">Register and get paid</H2>
-      <Steps>
-        <Step n={1} title="Run your provider">
-          Host the endpoint anywhere reachable over HTTPS.
-        </Step>
-        <Step n={2} title="Register it in the Provider console">
-          Declare its category, tier, price per call, and payout address. A verification method you
-          declare is exercised on the first real job, so a service cannot claim a tier it does not
-          meet.
-        </Step>
-        <Step n={3} title="Ensure a USDC trustline">
-          The portal flags a missing trustline so you are never silently unpayable.
-        </Step>
-      </Steps>
-      <P>
-        Payment settles to your payout address on accepted delivery, through the buyer's own rule
-        (a private rule pays keyless; a public rule via their Managed Session), and settlement
-        builds your reputation, which drives discovery.
-      </P>
-
-      <H2 id="console">The provider console</H2>
-      <P>Once registered, the console is where you run the business of a service:</P>
+      <H2 id="pricing">Pricing</H2>
       <UL>
         <LI>
-          <B>Payouts ledger</B> of every settled job with a CSV export for your own books.
+          <B>Per call</B> in USDC, settled on accepted delivery. <Status kind="live" />
+        </LI>
+        <LI>
+          <B>Per usage</B> (per unit, for example per 1k tokens or per MB). <Status kind="live" />
+        </LI>
+        <LI>
+          <B>Free</B> functions, for loss-leaders or open tools. <Status kind="live" />
+        </LI>
+        <LI>
+          <B>Subscription</B> (per day / week / month). <Status kind="dev" />
+        </LI>
+      </UL>
+
+      <H2 id="trustline">3. Ensure a USDC trustline</H2>
+      <P>
+        Your payout wallet must hold a USDC trustline or settlement cannot reach you. The console
+        flags a missing trustline so you are never silently unpayable. On testnet, use the USDC
+        asset listed in <A to="/docs/reference">Networks and errors</A>.
+      </P>
+
+      <H2 id="paid">How you get paid</H2>
+      <P>
+        On accepted delivery, the vault pays your payout address directly, through the buyer's own
+        rule: a private rule pays keyless (a zero-knowledge proof authorizes it), a public rule via
+        the buyer's Managed Session. A small protocol fee is taken on release. Every settlement
+        builds your on-chain reputation, which drives discovery.
+      </P>
+      <Flow
+        steps={[
+          { label: 'Accepted delivery', sub: 'your result passes its tier check' },
+          { label: 'Vault releases', sub: "under the buyer's private or public rule" },
+          { label: 'USDC to your wallet', sub: 'minus the protocol fee' },
+          { label: 'Reputation +1', sub: 'unique payers, dispute rate' },
+        ]}
+      />
+
+      <H2 id="operate">Operate your service</H2>
+      <P>The console is where you run the business of a service:</P>
+      <UL>
+        <LI>
+          <B>Payouts ledger</B> of every settled job, with a CSV export for your books.
         </LI>
         <LI>
           <B>Performance metrics</B>: volume, acceptance, latency, and dispute rate per service.
         </LI>
         <LI>
-          <B>Health</B>: the directory monitors your endpoint and auto-recovers it; a service that
-          is unreachable is shown as temporarily unavailable rather than silently failing hires.
+          <B>Health</B>: the directory pings your endpoint and auto-recovers it; an unreachable
+          service is shown as temporarily unavailable instead of silently failing hires.
         </LI>
         <LI>
-          <B>Each service's shape</B> (interaction, payment, required files) is shown so you can see
-          how buyers experience it.
+          <B>Disputes</B>: a T2 delivery can be disputed in its window; respond from the inbox.
         </LI>
       </UL>
 
-      <H2 id="monetize">Monetization and the verified mark</H2>
-      <P>How a service earns trust and revenue is growing in this order:</P>
+      <H2 id="roadmap">Earning more trust</H2>
       <Table
         head={['Capability', 'Status']}
         rows={[
@@ -1654,17 +2051,17 @@ function Providers() {
             <>Reputation from real settlements (unique payers, dispute rate)</>,
             <Status kind="live" />,
           ],
-          [<>Free and subscription pricing models</>, <Status kind="dev" />],
+          [<>Subscription pricing</>, <Status kind="dev" />],
           [
             <>A verified mark (passes its own check, N settlements, payout proof)</>,
             <Status kind="dev" />,
           ],
           [<>Provider bonds (a slashable stake that lifts ranking)</>, <Status kind="soon" />],
-          [<>Provider analytics (volume, revenue, top capabilities)</>, <Status kind="soon" />],
         ]}
       />
       <Callout kind="note">
-        See <A to="/docs/marketplace">Marketplace</A> for the buyer side, the tiers, and disputes.
+        See <A to="/docs/marketplace">Marketplace</A> for the buyer side, the tiers, and disputes,
+        and <A to="/docs/security">Security and privacy</A> for the trust model.
       </Callout>
     </>
   );
@@ -1842,7 +2239,13 @@ export interface DocPage {
   Body: () => ReactNode;
 }
 
-export const DOC_GROUPS = ['Getting started', 'For users', 'For developers', 'Reference'] as const;
+export const DOC_GROUPS = [
+  'Getting started',
+  'For users',
+  'For developers',
+  'For providers',
+  'Reference',
+] as const;
 
 export const DOCS: DocPage[] = [
   {
@@ -1933,10 +2336,25 @@ export const DOCS: DocPage[] = [
   },
   {
     slug: 'providers',
-    group: 'For developers',
-    title: 'Be a provider',
-    description: 'List a service agents can hire and pay, and earn.',
+    group: 'For providers',
+    title: 'Overview',
+    description: 'Why list a service, what a service is, the shapes, and the trust tiers.',
     Body: Providers,
+  },
+  {
+    slug: 'build-a-service',
+    group: 'For providers',
+    title: 'Build a service',
+    description:
+      'The fulfillment contract, a full worked example, files, credentials, and async shapes.',
+    Body: BuildService,
+  },
+  {
+    slug: 'register-service',
+    group: 'For providers',
+    title: 'Register and earn',
+    description: 'Deploy, list it field by field, ensure a trustline, and get paid with reputation.',
+    Body: RegisterService,
   },
   {
     slug: 'reference',

@@ -64,6 +64,25 @@ Private and sovereign by default, with an optional fast session mode for high-fr
 - **SDK** ([`@clevercon/agent-sdk`](https://www.npmjs.com/package/@clevercon/agent-sdk)): `createSpender` for a bounded spending account, `createAgentWallet` for the external x402 economy, and `createProvider` / `createAgent` to be a paid service. `npm install @clevercon/agent-sdk` · [docs](packages/agent-sdk).
 - **MCP server** ([`@clevercon/mcp`](https://www.npmjs.com/package/@clevercon/mcp)): give any MCP-capable agent a spending account, it can pay, disburse, hire, set limits, and read its budget on the live rail. `npm install @clevercon/mcp` · [docs](packages/mcp).
 
+## List a service and earn
+
+CleverCon is two-sided: the same rail that bounds a buyer's agent also lets anyone run a paid service that agents hire. A provider is a single file. The SDK (`@clevercon/agent-sdk/provider`) handles the job lifecycle, delivery verification, and settlement, so you write only the work:
+
+```ts
+import { createProvider } from '@clevercon/agent-sdk/provider';
+import { createHash } from 'node:crypto';
+
+createProvider({
+  name: 'data-notary',
+  async fulfill({ input }) {
+    const data = String(input.data ?? '');
+    return { sha256: createHash('sha256').update(data).digest('hex') };
+  },
+}).listen(); // POST / to fulfill, GET /health for liveness
+```
+
+You are paid per call in USDC, to your Stellar wallet, on accepted delivery, with reputation earned from real settlements. Full build-and-list guide: [Overview](https://clevercon.xyz/docs/providers) · [Build a service](https://clevercon.xyz/docs/build-a-service) · [Register and earn](https://clevercon.xyz/docs/register-service). A complete, hireable reference catalog (account intelligence, a data notary, a market oracle, an image resizer) lives in [`services/reference-provider`](services/reference-provider).
+
 ## What makes it different
 
 CleverCon brings four properties together in one layer:
