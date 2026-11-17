@@ -40,8 +40,10 @@ import type {
  *   GET <endpoint>/health -> 200 { status:'ok', provider }
  */
 
-/** The worker truncates completed step output to this many characters; longer is wasted. */
-export const MAX_OUTPUT_CHARS = 2000;
+/** The worker stores completed step output up to this many characters (the whole
+ *  result when it fits; a pathologically large one is replaced by a small valid-JSON
+ *  truncation envelope, never cut mid-token). Host anything bigger as an artifact. */
+export const MAX_OUTPUT_CHARS = 100_000;
 
 export interface FulfillmentRequest {
   /** The plan step action the buyer asked this provider to perform (a capability). */
@@ -364,7 +366,7 @@ export function createProvider(options: ProviderOptions): Provider {
         const { contentType, body: out } = encodePlain(result);
         if (out.length > MAX_OUTPUT_CHARS) {
           log.info(
-            `[${name}] output for "${request.action}" is ${out.length} chars; the worker will truncate to ${MAX_OUTPUT_CHARS}`,
+            `[${name}] output for "${request.action}" is ${out.length} chars; beyond ${MAX_OUTPUT_CHARS} it is summarized on storage, so host large results as an artifact`,
           );
         }
         res.writeHead(200, { 'content-type': contentType });

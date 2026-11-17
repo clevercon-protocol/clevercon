@@ -109,6 +109,32 @@ export function isAcceptableOutput(output: string): boolean {
   return true;
 }
 
+/** Generous cap for the stored step output; the column is text, so this is only to
+ *  stop a pathological provider bloating the row. Realistic JSON results fit whole. */
+export const MAX_STORED_OUTPUT = 100_000;
+
+/**
+ * Serialize a delivery for storage WITHOUT corrupting JSON. The old code sliced the
+ * serialized output to 2000 chars, which cut a JSON result mid-token and made an
+ * agent's JSON.parse(output) throw. Now: a string is stored as-is (truncated only if
+ * enormous); structured data is JSON-encoded and stored whole when it fits; only a
+ * pathologically large result is replaced by a VALID JSON envelope that flags the
+ * truncation, so JSON.parse always succeeds. The full result stays available via the
+ * delivered artifact when the service hosts one.
+ */
+export function toStoredOutput(data: unknown, artifact?: unknown): string {
+  if (typeof data === 'string') {
+    return data.length > MAX_STORED_OUTPUT ? data.slice(0, MAX_STORED_OUTPUT) : data;
+  }
+  const json = JSON.stringify(data ?? artifact ?? '');
+  if (json.length <= MAX_STORED_OUTPUT) return json;
+  return JSON.stringify({
+    _truncated: true,
+    bytes: json.length,
+    note: `output exceeded ${MAX_STORED_OUTPUT} chars; narrow the request or fetch the delivered artifact`,
+  });
+}
+
 /**
  * Normalize a provider response into the standard JobResultEnvelope. New providers
  * return the envelope directly; older ones return a bare value (JSON or text),
@@ -301,11 +327,7 @@ async function finalizeDelivery(
     const v = await verifyDelivery(verification, input, envelope);
     if (!v.ok) throw new Error(`verification failed: ${v.reason}`);
   }
-  const storedOutput = (
-    typeof envelope.data === 'string'
-      ? envelope.data
-      : JSON.stringify(envelope.data ?? envelope.artifact ?? '')
-  ).slice(0, 2000);
+  const storedOutput = toStoredOutput(envelope.data, envelope.artifact);
   // A provider may return a file as an ArtifactRef {url, hash, contentType, size};
   // persist it so the buyer can download + verify it (content-hash).
   const artifact = (envelope.artifact ?? null) as object | null;

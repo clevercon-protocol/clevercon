@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { executeTask, isAcceptableOutput, releaseHeldStep, pollStep } from './executor.js';
+import {
+  executeTask,
+  isAcceptableOutput,
+  releaseHeldStep,
+  pollStep,
+  toStoredOutput,
+  MAX_STORED_OUTPUT,
+} from './executor.js';
 
 interface Service {
   endpoint: string;
@@ -45,11 +52,35 @@ function mockPrisma(task: Task | null) {
         return s;
       }),
     },
+    // A step with a serviceId triggers loadCredentials -> serviceSetup.findUnique; no
+    // configured setup in these tests, so return null (the job runs without credentials).
+    serviceSetup: { findUnique: vi.fn(async () => null) },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 }
 
 const okFetch = vi.fn(async () => new Response('result-body', { status: 200 }));
+
+describe('toStoredOutput', () => {
+  it('stores structured JSON whole (valid JSON, not cut mid-token)', () => {
+    const data = { issues: Array.from({ length: 50 }, (_, i) => ({ n: i, title: `issue ${i}` })) };
+    const stored = toStoredOutput(data);
+    expect(() => JSON.parse(stored)).not.toThrow();
+    expect(JSON.parse(stored)).toEqual(data);
+  });
+
+  it('stores a plain string as-is', () => {
+    expect(toStoredOutput('hello world')).toBe('hello world');
+  });
+
+  it('replaces a pathologically large result with a VALID JSON truncation envelope', () => {
+    const huge = { blob: 'x'.repeat(MAX_STORED_OUTPUT + 10) };
+    const stored = toStoredOutput(huge);
+    const parsed = JSON.parse(stored) as { _truncated?: boolean; bytes?: number };
+    expect(parsed._truncated).toBe(true);
+    expect(parsed.bytes).toBeGreaterThan(MAX_STORED_OUTPUT);
+  });
+});
 
 describe('executeTask', () => {
   it('runs a reachable step and completes the task', async () => {
