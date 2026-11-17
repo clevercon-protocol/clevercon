@@ -1182,8 +1182,10 @@ function Mcp() {
 
       <H2 id="setup">Setup, step by step</H2>
       <P>
-        Two minutes: get what your lane needs from the app, add one config block, restart. There is
-        nothing to install; the client runs it on demand with npx.
+        Two minutes: get what your lane needs from the app, add one config block, restart. For the
+        fastest, most reliable start, install the package once and point your client at the installed{' '}
+        <Code>clevercon-mcp</Code>. A plain <Code>npx -y</Code> cold start downloads a large
+        dependency set and can exceed an MCP client's startup timeout on first run.
       </P>
       <Steps>
         <Step n={1} title="Fund the vault">
@@ -1223,10 +1225,22 @@ function Mcp() {
         Provide the keys for the lane you want. The vault and USDC asset default to the live testnet
         contracts, so most lanes need just one secret.
       </P>
+      <Callout kind="warn" title="Your keys are spend authority">
+        The policy key, session secret, and API key can each move funds within your rule. They live
+        in your MCP client config (for example <Code>.mcp.json</Code>), so keep that file out of
+        version control (<Code>.gitignore</Code> it) and do not share it. Connected-account secrets
+        (like a GitHub token) are different: they are brokered server-side and never placed in your
+        config or shown to the model.
+      </Callout>
       <H3>Private (self-custody, keyless)</H3>
       <P>
         The policy key packs your rule and its salt; the agent proves locally and relays only the
         proof. Add <Code>CLEVERCON_GLOBAL_KEY</Code> only if the account has a global-private rule.
+      </P>
+      <P>
+        The same configured rule also bounds your <B>hires</B>: a hire with no explicit policy binds
+        it (matched to your pinned rule on-chain), exactly like picking a rule in the app, instead of
+        a throwaway. Set <Code>CLEVERCON_POLICY_ID</Code> to bind a rule by id directly.
       </P>
       <CodeBlock code={MCP_PRIVATE} title="private" />
       <H3>Public, local (the agent holds a session key)</H3>

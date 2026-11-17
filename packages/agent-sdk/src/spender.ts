@@ -266,6 +266,55 @@ export function createSpender(options: SpenderOptions): CleverConClient {
     );
   }
 
+  // Resolve, once per process, the policyId a hire should bind to: an explicit
+  // CLEVERCON_POLICY_ID, else the commitment of the configured private rule matched to
+  // one of the owner's pinned rules. Undefined when nothing is configured (the API then
+  // derives a tight public policy from the payee + budget). Throws when a private rule
+  // is configured but is not pinned on-chain, so a hire never runs under the wrong rule.
+  let cachedHirePolicyId: string | null | undefined;
+  async function resolveHirePolicyId(): Promise<string | undefined> {
+    if (cachedHirePolicyId !== undefined) return cachedHirePolicyId ?? undefined;
+    const explicit = env('CLEVERCON_POLICY_ID')?.trim();
+    if (explicit) {
+      cachedHirePolicyId = explicit;
+      return explicit;
+    }
+    let bundle: PolicyBundle | null = null;
+    try {
+      bundle = resolveBundle();
+    } catch {
+      bundle = null; // no private rule configured: let the API derive the safety net
+    }
+    if (!bundle) {
+      cachedHirePolicyId = null;
+      return undefined;
+    }
+    const { commitmentForBundle } = await import('./payments/private-disburse.js');
+    const { resolveArtifacts } = await import('./payments/artifacts.js');
+    const resolved = await resolveArtifacts({
+      wasmPath: options.proverArtifacts?.wasmPath,
+      zkeyPath: options.proverArtifacts?.zkeyPath,
+    });
+    const commitment = (
+      await commitmentForBundle(bundle, { ...resolved, poseidon: options.proverArtifacts?.poseidon })
+    ).toLowerCase();
+    const { items } = await request<{ items: { id: string; commitment: string; status: string }[] }>(
+      'GET',
+      '/policies',
+    );
+    const match = items.find(
+      (p) => p.commitment?.toLowerCase() === commitment && p.status !== 'archived',
+    );
+    if (!match) {
+      throw new CleverConError(
+        400,
+        'Your configured private rule is not pinned on-chain for this account, so a hire cannot bind to it. Pin it on the Rules tab, then hire again.',
+      );
+    }
+    cachedHirePolicyId = match.id;
+    return match.id;
+  }
+
   // Resolve the owner's global-private bundle, if any: option, else the single
   // CLEVERCON_GLOBAL_KEY token, else a legacy CLEVERCON_GLOBAL_POLICY_JSON. Null when
   // no global-private is set on the account.
@@ -388,16 +437,22 @@ export function createSpender(options: SpenderOptions): CleverConClient {
         ...(ruleId ? { ruleId } : {}),
       }),
     getSession: () => request<unknown>('GET', '/vault/session'),
-    hire: (opts) =>
-      request<Spend>('POST', '/tasks', {
+    hire: async (opts) => {
+      // Bind the hire to a policy the same way the dapp binds the rule you pick: an
+      // explicit opts.policyId wins, else your configured rule (CLEVERCON_POLICY_ID, or
+      // the commitment of CLEVERCON_POLICY_KEY matched to a pinned rule). Only when
+      // nothing is configured does the API derive a tight public policy from the payee.
+      const policyId = opts.policyId ?? (await resolveHirePolicyId());
+      return request<Spend>('POST', '/tasks', {
         title: opts.title,
         mode: opts.mode ?? 'DIRECT',
         budget: opts.budget,
         ...(opts.serviceId ? { serviceId: opts.serviceId } : {}),
-        ...(opts.policyId ? { policyId: opts.policyId } : {}),
+        ...(policyId ? { policyId } : {}),
         ...(opts.input ? { input: opts.input } : {}),
         ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
-      }),
+      });
+    },
     getTask: (taskId) => request<unknown>('GET', `/tasks/${encodeURIComponent(taskId)}`),
     answer: (taskId, stepId, response) =>
       request<{ ok: boolean; stepId: string }>(

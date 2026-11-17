@@ -12,6 +12,7 @@ import {
   type ApiConfig,
   type ToolResult,
 } from '../api-client.js';
+import { resolveConfiguredPolicyId } from '../policy-resolve.js';
 
 export const hireAgentSchema = {
   name: 'hire_agent',
@@ -30,7 +31,11 @@ export const hireAgentSchema = {
         description:
           'For a multi-function service: the key of the function to hire (e.g. "github.search_repos"), from the service’s `functions` list. Omit for single-function services.',
       },
-      policyId: { type: 'string', description: 'Spend policy to enforce on-chain' },
+      policyId: {
+        type: 'string',
+        description:
+          'Spend policy to enforce on-chain. Omit to bind your configured rule (CLEVERCON_POLICY_ID, or the CLEVERCON_POLICY_KEY you copied from the Rules tab), exactly like picking a rule in the app. Only when no rule is configured does the vault derive a tight public policy from the payee + budget.',
+      },
       description: { type: 'string', maxLength: 2000 },
       input: {
         type: 'object',
@@ -61,13 +66,19 @@ export async function hireAgentHandler(
       throw new Error('input must be an object');
 
     const client = createApiClient(config);
+    // Bind the hire to a policy the SAME way the dapp does: an explicit policyId wins,
+    // else your configured rule (CLEVERCON_POLICY_ID / CLEVERCON_POLICY_KEY). Only when
+    // nothing is configured does the API derive a tight public policy from payee + budget.
+    const boundPolicyId =
+      (typeof policyId === 'string' && policyId ? policyId : undefined) ??
+      (await resolveConfiguredPolicyId(client));
     const task = await client.post('/tasks', {
       title: title.trim(),
       mode,
       budget,
       ...(serviceId ? { serviceId } : {}),
       ...(functionKey ? { functionKey } : {}),
-      ...(policyId ? { policyId } : {}),
+      ...(boundPolicyId ? { policyId: boundPolicyId } : {}),
       ...(description ? { description } : {}),
       ...(input ? { input } : {}),
     });
