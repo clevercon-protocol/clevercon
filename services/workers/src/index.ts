@@ -14,6 +14,8 @@ import {
   STEP_POLL_QUEUE,
   HEALTH_QUEUE,
   healthQueue,
+  RECONCILE_QUEUE,
+  reconcileQueue,
   redisConnection,
   redisUrl,
   type TaskExecutionJob,
@@ -29,6 +31,7 @@ import {
   settleStep,
   settleBatch,
   finalizeTaskIfComplete,
+  reconcileSettlements,
   type BatchSettlePayload,
 } from './settlement.js';
 import { deliverWebhooks } from './webhooks.js';
@@ -307,6 +310,31 @@ function main(): void {
     logger.error({ err: err.message }, 'health sweep failed'),
   );
 
+  // Settlement reconciliation: one repeatable scheduler across all worker instances
+  // re-drives any delivered-but-unpaid step (RELEASED with no CONFIRMED release) so a
+  // lost enqueue, a retry-exhausted job, or a hire whose policy never attached still
+  // pays the provider. settleStep is idempotent, so this never double-pays.
+  const RECONCILE_SWEEP_MS =
+    Math.max(60, Number(process.env.SETTLEMENT_RECONCILE_SECONDS ?? 120)) * 1000;
+  const reconcileQ = reconcileQueue();
+  void reconcileQ
+    .upsertJobScheduler('settlement-reconcile', { every: RECONCILE_SWEEP_MS }, { name: 'sweep' })
+    .catch((err) =>
+      logger.error({ err: (err as Error).message }, 'failed to schedule settlement reconcile'),
+    );
+  const reconcileWorker = new Worker(RECONCILE_QUEUE, async () => reconcileSettlements(prisma), {
+    connection: redisConnection(),
+    concurrency: 1,
+  });
+  reconcileWorker.on('completed', (_job, result) => {
+    // Quiet when there was nothing to do; log only when the sweep actually acted.
+    if (result && (result.scanned ?? 0) > 0)
+      logger.info({ result }, 'settlement reconcile processed');
+  });
+  reconcileWorker.on('failed', (_job, err) =>
+    logger.error({ err: err.message }, 'settlement reconcile failed'),
+  );
+
   logger.info(
     { concurrency: CONCURRENCY },
     'task-execution + proof-generation + settlement + step-release + step-poll + health + batch workers up',
@@ -319,6 +347,7 @@ function main(): void {
     await releaseWorker.close();
     await pollWorker.close();
     await healthWorker.close();
+    await reconcileWorker.close();
     await batchWorker.close();
     await prisma.$disconnect();
     process.exit(0);

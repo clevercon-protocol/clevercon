@@ -754,6 +754,82 @@ export async function finalizeTaskIfComplete(
   };
 }
 
+// ── Reconciliation: re-drive delivered-but-unpaid steps ───────────────────────
+
+export interface ReconcileResult {
+  scanned: number;
+  settled: number;
+  skipped: number;
+  failed: number;
+}
+
+/**
+ * The settlement safety net. A step pays by: reach RELEASED -> enqueue settlement
+ * -> settleStep writes a CONFIRMED VAULT_RELEASE payment. There are three ways a
+ * release can be lost AFTER the step is RELEASED, each leaving a delivered-but-
+ * unpaid step with no error (the provider delivered, the buyer is not charged):
+ *   1. the enqueue was lost to a worker crash between the RELEASED commit and the
+ *      queue add,
+ *   2. the settlement job exhausted its retries on a transient chain error (and
+ *      the task was already COMPLETED, so the retry-exhaustion handler, which only
+ *      rescues RUNNING tasks, silently swallowed it),
+ *   3. the task's policy was never attached because the eager on-chain lock at
+ *      hire time was skipped (delegate not yet registered) or threw.
+ * This sweep finds RELEASED steps with no CONFIRMED VAULT_RELEASE payment and
+ * re-drives settleStep for them. settleStep is idempotent (the vault is idempotent
+ * by (task_id, step_id) and the Payment idempotencyKey is unique) and per-signer
+ * serialized, so re-driving a step that actually settled is a safe no-op, and
+ * calling it directly bypasses the BullMQ `settle-<stepId>` jobId dedupe that makes
+ * a plain re-enqueue a no-op once the original job sits in the failed set.
+ *
+ * Only steps older than `graceMs` are swept, so a step still inside its normal
+ * settlement window is left to the queue. Bounded per run by `batch`.
+ */
+export async function reconcileSettlements(
+  prisma: PrismaClient,
+  opts: {
+    graceMs?: number;
+    batch?: number;
+    settle?: (prisma: PrismaClient, stepId: string) => Promise<SettleResult>;
+  } = {},
+): Promise<ReconcileResult> {
+  const result: ReconcileResult = { scanned: 0, settled: 0, skipped: 0, failed: 0 };
+  if (!settlementConfigured()) return result;
+  const graceMs = opts.graceMs ?? 90_000;
+  const batch = opts.batch ?? 25;
+  const settle = opts.settle ?? settleStep;
+  const cutoff = new Date(Date.now() - graceMs);
+
+  const stranded = await prisma.taskStep.findMany({
+    where: {
+      status: 'RELEASED',
+      estimatedCost: { gt: 0 },
+      updatedAt: { lt: cutoff },
+      task: { status: { notIn: [TaskStatus.FAILED, TaskStatus.CANCELLED] } },
+      payments: { none: { method: PaymentMethod.VAULT_RELEASE, status: PaymentStatus.CONFIRMED } },
+    },
+    select: { id: true },
+    take: batch,
+    orderBy: { updatedAt: 'asc' },
+  });
+  result.scanned = stranded.length;
+
+  for (const s of stranded) {
+    try {
+      const r = await settle(prisma, s.id);
+      if (r.status === 'settled') result.settled++;
+      else if (r.status === 'failed') result.failed++;
+      else result.skipped++;
+    } catch (err) {
+      result.failed++;
+      logger.error({ stepId: s.id, err: (err as Error).message }, 'reconcile settle threw');
+    }
+  }
+  if (result.scanned > 0)
+    logger.info(result as unknown as Record<string, number>, 'settlement reconcile swept');
+  return result;
+}
+
 // ── Recovery: unlock orphan batch-disburse locks ──────────────────────────────
 // Each pp/2 batch locks an on-chain task that has no DB Task row. Before the
 // finalize-on-settle fix above, those locks were never freed, so a disburse could

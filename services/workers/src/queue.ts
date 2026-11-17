@@ -27,6 +27,11 @@ export const STEP_POLL_QUEUE = 'step-poll';
 // its /health endpoint, recording an auto-recovering health flag. One scheduler
 // across all worker instances (BullMQ dedups), so the sweep runs once per interval.
 export const HEALTH_QUEUE = 'service-health';
+// The settlement-reconcile queue: a repeatable job sweeps RELEASED steps that have
+// no CONFIRMED VAULT_RELEASE payment (delivered-but-unpaid) and re-drives their
+// settlement, the safety net for a lost enqueue, a retry-exhausted job, or a hire
+// whose policy was never attached. One scheduler across all worker instances.
+export const RECONCILE_QUEUE = 'settlement-reconcile';
 
 export interface TaskExecutionJob {
   taskId: string;
@@ -182,6 +187,16 @@ export function healthQueue(): Queue<Record<string, never>> {
       connection: redisConnection(),
     });
   return healthQueueInstance;
+}
+
+let reconcileQueueInstance: Queue<Record<string, never>> | null = null;
+
+export function reconcileQueue(): Queue<Record<string, never>> {
+  if (!reconcileQueueInstance)
+    reconcileQueueInstance = new Queue<Record<string, never>>(RECONCILE_QUEUE, {
+      connection: redisConnection(),
+    });
+  return reconcileQueueInstance;
 }
 
 /**

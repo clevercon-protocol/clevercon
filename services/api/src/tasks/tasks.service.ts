@@ -368,6 +368,14 @@ export class TasksService {
       }
     }
     if (policyId) {
+      // Attach the bounding policy to the task up front, decoupled from the on-chain
+      // lock below. Settlement binds to task.policy.commitment and can lazily lock the
+      // task itself, so a skipped or failed eager lock here (delegate not yet
+      // registered, a transient RPC error) must NOT leave the task with no policy and
+      // therefore permanently unsettleable. The reconciliation sweep then pays it.
+      await this.prisma.task
+        .update({ where: { id: created.id }, data: { policy: { connect: { id: policyId } } } })
+        .catch(() => {});
       await this.lockOnChain(userId, created.id, policyId, params.budget);
     }
     // A task with steps (a DIRECT hire) is ready to run now; hand it to the

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Keypair } from '@stellar/stellar-sdk';
 import { encryptSecret } from '@clevercon/db';
-import { settleStep } from './settlement.js';
+import { settleStep, reconcileSettlements } from './settlement.js';
 
 interface StepRow {
   id: string;
@@ -249,5 +249,57 @@ describe('settleStep guards', () => {
     const r = await settleStep(prisma, 's1', fakeRelease);
     // The on-chain release already happened; the mirror write is retryable.
     expect(r).toMatchObject({ status: 'failed', reason: 'db down', retryable: true });
+  });
+});
+
+describe('reconcileSettlements', () => {
+  beforeEach(() => {
+    process.env.DELEGATE_ENCRYPTION_KEY = 'a'.repeat(64);
+    process.env.AGENT_VAULT_CONTRACT_ID = 'CVAULT';
+    process.env.USDC_SAC = 'CUSDC';
+  });
+  afterEach(() => {
+    delete process.env.DELEGATE_ENCRYPTION_KEY;
+    delete process.env.AGENT_VAULT_CONTRACT_ID;
+    delete process.env.USDC_SAC;
+  });
+
+  function mockReconcilePrisma(ids: string[]) {
+    const findMany = vi.fn(async () => ids.map((id) => ({ id })));
+    return { prisma: { taskStep: { findMany } } as never, findMany };
+  }
+
+  it('re-drives every stranded released step through settleStep', async () => {
+    const { prisma, findMany } = mockReconcilePrisma(['s1', 's2']);
+    const settle = vi.fn(async () => ({ status: 'settled', txHash: 'TX' }) as never);
+    const res = await reconcileSettlements(prisma, { settle, graceMs: 0 });
+    expect(settle).toHaveBeenCalledTimes(2);
+    expect(res).toMatchObject({ scanned: 2, settled: 2, skipped: 0, failed: 0 });
+    // Only delivered-but-unpaid steps: RELEASED with no CONFIRMED VAULT_RELEASE payment.
+    const where = findMany.mock.calls[0][0].where;
+    expect(where.status).toBe('RELEASED');
+    expect(where.payments.none).toMatchObject({ method: 'VAULT_RELEASE', status: 'CONFIRMED' });
+  });
+
+  it('counts skips and failures, and a thrown settle does not abort the sweep', async () => {
+    const { prisma } = mockReconcilePrisma(['s1', 's2', 's3']);
+    const settle = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 'settled' })
+      .mockRejectedValueOnce(new Error('rpc down'))
+      .mockResolvedValueOnce({ status: 'skipped', reason: 'already settled' });
+    const res = await reconcileSettlements(prisma, { settle: settle as never, graceMs: 0 });
+    expect(settle).toHaveBeenCalledTimes(3);
+    expect(res).toMatchObject({ scanned: 3, settled: 1, skipped: 1, failed: 1 });
+  });
+
+  it('no-ops when settlement is not configured', async () => {
+    delete process.env.AGENT_VAULT_CONTRACT_ID;
+    const { prisma, findMany } = mockReconcilePrisma(['s1']);
+    const settle = vi.fn();
+    const res = await reconcileSettlements(prisma, { settle: settle as never });
+    expect(findMany).not.toHaveBeenCalled();
+    expect(settle).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ scanned: 0, settled: 0 });
   });
 });
