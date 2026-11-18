@@ -40,8 +40,7 @@ clevercon/
 │   ├── common/             # shared types, policy-input encoding, binding proof
 │   ├── db/                 # Prisma schema + client, secret crypto
 │   ├── agent-sdk/          # createSpender, createAgentWallet, createProvider, createAgent
-│   ├── mcp/                # Stellar MCP server (12 tools)
-│   └── dashboard/          # the public Vercel demo (contract-direct, no backend)
+│   └── mcp/                # Stellar MCP server
 ├── scripts/               # setup, wallet, and the E2E testnet harness
 └── docs/                  # architecture, private-policies spec, development
 ```

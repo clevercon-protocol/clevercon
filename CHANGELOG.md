@@ -100,13 +100,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   MPP.
 - React dashboard (`packages/dashboard`) for wallet connection, vault
   funding, task submission and approval, and vault/task history.
-- Render deployment blueprint (`render.yaml`, 7 services) and local
-  development scripts (`scripts/start.sh`, `scripts/stop.sh`,
-  `scripts/bootstrap.ts`, wallet setup scripts).
+- Deployment blueprint and local development scripts (`scripts/start.sh`,
+  `scripts/stop.sh`, `scripts/bootstrap.ts`, wallet setup scripts).
 
 ### Fixed
 
-- Render build and deployment issues: missing build dependencies, dashboard
+- Build and deployment issues: missing build dependencies, dashboard
   build tooling placement, WebSocket protocol for production (`wss://`), and
   cold-start health-check timing.
 - Orchestrator state persistence across redeploys, on-chain registration

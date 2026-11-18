@@ -18,7 +18,7 @@ interface VerifyResp {
 }
 
 /**
- * Sign-in flow. Demo mode (default, and what the free Vercel deploy uses) sets a
+ * Sign-in flow. Demo mode (default, the backendless preview build) sets a
  * mock session with no backend. Full mode connects a real wallet and runs the
  * SEP-10 flow against /auth: challenge -> signTransaction -> verify.
  */
