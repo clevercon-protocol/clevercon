@@ -31,3 +31,13 @@ Thumbs.db
 
 # Internal working files
 .local/
+circuits/*/target/
+.env.local
+.env.*.local
+
+# Local-only internal runbook (deploy + grant/credits steps; not for GitHub)
+deploy/DEPLOY.md
+
+# CI-generated ZK fixture + proving artifacts (regenerated in the zk-fixture job)
+scripts/zk/build/
+contracts/policy-verifier/tests/fixture_data.rs

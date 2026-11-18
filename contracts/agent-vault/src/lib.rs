@@ -1,4 +1,11 @@
 #![no_std]
+// `release_payment_proved` keeps `release_payment`'s flat parameter style
+// (issue #122's proposed public surface) and adds `payee`, `nullifier`, and
+// `proof` to the existing five parameters. That exceeds Clippy's default
+// arg-count threshold in the wrapper/spec code the `#[contractimpl]` macro
+// generates, where a function- or impl-scoped `#[allow]` does not reach. This
+// is the only signature in the crate over the threshold.
+#![allow(clippy::too_many_arguments)]
 //! AgentVault — Soroban smart contract (v2)
 //!
 //! Trustless treasury for AgentForge. Holds multiple whitelisted assets (USDC, XLM, etc.)
@@ -18,9 +25,52 @@
 //!    per-asset `AssetSupported` flags so `get_supported_assets` and `is_supported_asset` never disagree.
 
 use soroban_sdk::contracterror;
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
-    contract, contractevent, contractimpl, contracttype, log, token, Address, Env, String, Vec,
+    contract, contractclient, contractevent, contractimpl, contracttype, log, token, vec, Address,
+    Bytes, BytesN, Env, String, Vec,
 };
+
+/// Interface of the external, privacy-preserving policy verifier contract
+/// (tracked as issue #64). [`AgentVault::release_payment_proved`] calls
+/// [`PolicyVerifier::verify_policy`] with the task's committed policy hash plus
+/// the release's public parameters. A `true` return is the **only** signal that
+/// authorizes the release; any other outcome — a `false`, a contract error, or
+/// a trap — is treated as a rejection and moves no funds.
+///
+/// Public-input ordering is fixed here as `(commitment, payee, amount,
+/// nullifier)` in the absence of issue #66's authoritative specification. The
+/// real verifier and that document must agree with this order, or this call
+/// site changes.
+#[contractclient(name = "PolicyVerifierClient")]
+pub trait PolicyVerifier {
+    fn verify_policy(
+        env: Env,
+        commitment: BytesN<32>,
+        payee: Address,
+        amount: i128,
+        nullifier: BytesN<32>,
+        proof: Bytes,
+    ) -> bool;
+
+    /// pp/2 trustless Groth16/BLS12-381 verification against the verifier's
+    /// stored VK. The vault assembles `public_inputs` in the circuit's exact
+    /// order and only moves funds on `true`. Mirrors
+    /// `PolicyVerifier::verify_groth16_stored`.
+    fn verify_groth16_stored(env: Env, proof: Groth16Proof, public_inputs: Vec<BytesN<32>>)
+        -> bool;
+}
+
+/// A Groth16 proof over BLS12-381 (uncompressed points), structurally identical
+/// to the policy-verifier's `Groth16Proof` so the cross-contract call encodes to
+/// the same ScVal: A in G1 (96 bytes), B in G2 (192), C in G1 (96).
+#[contracttype]
+#[derive(Clone)]
+pub struct Groth16Proof {
+    pub a: BytesN<96>,
+    pub b: BytesN<192>,
+    pub c: BytesN<96>,
+}
 
 // Events
 
@@ -156,6 +206,214 @@ pub struct FeeClaimedEvent {
     pub amount: i128,
 }
 
+/// Emitted whenever the admin sets or changes the policy-verifier contract.
+/// `old` is `None` on the first set. Present so any swap of the verifier —
+/// which the admin can do at any time — is publicly observable on-chain.
+#[contractevent]
+pub struct PolicyVerifierSetEvent {
+    #[topic]
+    pub admin: Address,
+    pub old: Option<Address>,
+    pub new: Address,
+}
+
+/// Emitted by `create_task_with_policy` after the task is created and its
+/// private spending-policy commitment recorded. The commitment is an opaque
+/// hash; it reveals nothing about the policy itself.
+#[contractevent]
+pub struct PolicyCommittedEvent {
+    #[topic]
+    pub task_id: u64,
+    pub commitment: BytesN<32>,
+}
+
+#[contractevent]
+pub struct PolicyCommitmentPinnedEvent {
+    #[topic]
+    pub user: Address,
+    pub commitment: BytesN<32>,
+}
+
+#[contractevent]
+pub struct PolicyCommitmentUnpinnedEvent {
+    #[topic]
+    pub user: Address,
+    pub commitment: BytesN<32>,
+}
+
+#[contractevent]
+pub struct GlobalRuleSetEvent {
+    #[topic]
+    pub user: Address,
+    pub lane: Lane,
+    pub commitment: BytesN<32>,
+}
+
+#[contractevent]
+pub struct GlobalRuleClearedEvent {
+    #[topic]
+    pub user: Address,
+    pub lane: Lane,
+}
+
+/// The second proof carried by a keyless release when a global-private rule is
+/// set: it proves the SAME batch (payees/amounts/window) also satisfies the user's
+/// hidden global rule, under the global commitment's own per-commitment window.
+/// Omitted (`None`) when no global-private is set. The plan's "one extra proof per
+/// private spend": a global is an AND filter, so a release must satisfy both.
+#[contracttype]
+#[derive(Clone)]
+pub struct GlobalProof {
+    /// Must equal the user's pinned global-private commitment.
+    pub commitment: BytesN<32>,
+    /// Per-active-payee nullifiers for the global proof (distinct salt => distinct
+    /// from the primary nullifiers).
+    pub nullifiers: Vec<BytesN<32>>,
+    pub reset_r2: bool,
+    pub reset_r7: bool,
+    pub proof: Groth16Proof,
+}
+
+/// One approved payee on a public rule's allowlist, with an optional tighter
+/// per-payee cap (R5). `cap` of 0 means only the rule's `per_payment_max` applies.
+#[contracttype]
+#[derive(Clone)]
+pub struct PublicPayee {
+    pub addr: Address,
+    pub cap: i128,
+}
+
+/// A PUBLIC rule: the same clause vocabulary as a private rule, but stored CLEARTEXT
+/// on-chain and checked directly by the vault on every session (fast-lane) spend, with
+/// no proof. Each field is independently optional (a 0 / empty value disables that
+/// clause). The vault enforces all of it, so a session key can never spend outside it.
+#[contracttype]
+#[derive(Clone)]
+pub struct PublicRule {
+    /// R1 ceiling: max per payment (stroops); 0 = no cap.
+    pub per_payment_max: i128,
+    /// R1 floor: min per payment (stroops); 0 = no floor.
+    pub per_payment_min: i128,
+    /// R2 rolling cap over `rolling_window_secs` (stroops); 0 = no rolling cap.
+    pub rolling_cap: i128,
+    pub rolling_window_secs: u64,
+    /// R7 velocity: max releases over `velocity_window_secs`; 0 = no velocity cap.
+    pub velocity_max: u32,
+    pub velocity_window_secs: u64,
+    /// R3 allowlist (+ R5 per-payee cap). Empty = any payee allowed.
+    pub allowlist: Vec<PublicPayee>,
+    /// R4 deny-list: these payees are blocked when `amount > denylist_threshold`
+    /// (threshold 0 = blocked for any amount).
+    pub denylist: Vec<Address>,
+    pub denylist_threshold: i128,
+    /// R6 calendar: a release's ledger time must fall in [start, end]; 0 = no window.
+    pub calendar_start: u64,
+    pub calendar_end: u64,
+}
+
+/// Emitted when a user sets (or replaces) a named public rule.
+#[contractevent]
+pub struct PublicRuleSetEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub rule_id: BytesN<32>,
+}
+
+/// Emitted when a user clears a named public rule.
+#[contractevent]
+pub struct PublicRuleClearedEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub rule_id: BytesN<32>,
+}
+
+/// Emitted when a user marks one of their public rules as the account global-public.
+#[contractevent]
+pub struct GlobalPublicSetEvent {
+    #[topic]
+    pub user: Address,
+    pub rule_id: BytesN<32>,
+}
+
+/// Emitted when a user clears their global-public rule.
+#[contractevent]
+pub struct GlobalPublicClearedEvent {
+    #[topic]
+    pub user: Address,
+}
+
+/// Emitted by `release_proved_keyless` on a successful keyless (proof-authorized)
+/// release. No orchestrator/session key authorized it: the pinned commitment + the
+/// zero-knowledge proof + a fresh nullifier are the authorization. Proof bytes are
+/// deliberately never included here or logged.
+#[contractevent]
+pub struct ReleaseProvedKeylessEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub commitment: BytesN<32>,
+    pub asset: Address,
+    pub amount: i128,
+    pub nullifier: BytesN<32>,
+}
+
+/// Emitted by `release_payment_proved` on a successful proof-gated release.
+/// Mirrors [`ReleaseEvent`] plus the spent `nullifier`, so indexers can track
+/// replay protection. The zero-knowledge proof bytes are deliberately **never**
+/// included here or written to any log.
+#[contractevent]
+pub struct ReleaseProvedEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub orchestrator: Address,
+    #[topic]
+    pub task_id: u64,
+    pub asset: Address,
+    pub amount: i128,
+    pub nullifier: BytesN<32>,
+}
+
+/// Emitted when a user registers a Fast-lane session key (`register_session`).
+/// The scope (budget, expiry, allowlist) is authorized once and enforced on-chain.
+#[contractevent]
+pub struct SessionRegisteredEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub session: Address,
+    pub asset: Address,
+    pub expiry: u64,
+    pub server_held: bool,
+}
+
+/// Emitted when a session key is revoked (`revoke_session`): it can authorize
+/// nothing thereafter.
+#[contractevent]
+pub struct SessionRevokedEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub session: Address,
+}
+
+/// Emitted on a successful session-authorized release (`release_payment_session`).
+/// Carries the remaining budget so indexers can track a session's drawdown.
+#[contractevent]
+pub struct ReleaseSessionEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub session: Address,
+    #[topic]
+    pub payee: Address,
+    pub asset: Address,
+    pub amount: i128,
+    pub rule_id: BytesN<32>,
+}
+
 #[contracterror]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum VaultError {
@@ -186,6 +444,104 @@ pub enum VaultError {
     TooManyStepReleases = 25,
     FeeBpsExceedsCap = 26,
     NoFeesAccrued = 27,
+    /// `create_task_with_policy` was given an all-zero commitment, which no
+    /// real proof could ever satisfy.
+    InvalidCommitment = 28,
+    /// `release_payment_proved` was called but no policy verifier is
+    /// configured. Fail closed — no verifier call is attempted, no funds move.
+    PolicyVerifierNotSet = 29,
+    /// Plain `release_payment` was called on a task that carries a policy
+    /// commitment. Such tasks can only be released via `release_payment_proved`.
+    PolicyProofRequired = 30,
+    /// `release_payment_proved` was called on a task with no policy commitment.
+    /// Such tasks can only be released via plain `release_payment`.
+    NoPolicyCommitment = 31,
+    /// The policy verifier did not return an explicit `true` for the supplied
+    /// proof and public inputs. Funds do not move and the nullifier is NOT
+    /// marked spent.
+    PolicyProofRejected = 32,
+    /// This nullifier has already been consumed for this task. Rejected as a
+    /// replay before the verifier is contacted.
+    NullifierAlreadyUsed = 33,
+    /// A batched proof-gated release had an empty, oversized, or mismatched
+    /// set of payees/amounts/nullifiers.
+    BatchSizeInvalid = 34,
+    /// Two releases in the same batch carried the same nullifier.
+    BatchDuplicateNullifier = 35,
+    /// The current ledger time is outside the proof's validity window
+    /// `[valid_after, valid_before]` (the R6 calendar check).
+    OutsideValidityWindow = 36,
+    /// A user tried to pin more than `MAX_POLICY_COMMITMENTS` commitments to
+    /// their account's bounded set.
+    CommitmentSetFull = 37,
+    /// `unpin_policy_commitment` named a commitment that is not currently in the
+    /// user's pinned set.
+    CommitmentNotPinned = 38,
+    /// A proof-gated release named a commitment that is not pinned to the task
+    /// owner's account. The operator cannot lock a task under a rule the user
+    /// never authorized: a release proceeds only against a user-pinned commitment.
+    CommitmentNotAuthorized = 39,
+    /// A pp/2 batch release's validity window reaches further ahead than
+    /// `MAX_VALIDITY_SECS`. Bounded so the globally-scoped nullifier marker's
+    /// ~30-day TTL always outlives the window (no replay once the marker archives).
+    ValidityWindowTooLong = 40,
+    /// A session key is already registered under this address. Revoke it first (or
+    /// use a fresh key) to change a session's scope.
+    SessionAlreadyExists = 41,
+    /// `release_payment_session` / `revoke_session` named a key that is not
+    /// registered, or was revoked.
+    SessionNotFound = 42,
+    /// The session's hard expiry has passed; it can authorize nothing further.
+    SessionExpired = 43,
+    /// The payee is not on the session's on-chain allowlist.
+    PayeeNotAllowed = 44,
+    /// The payment would exceed the session's remaining on-chain budget.
+    SessionBudgetExceeded = 45,
+    /// Only the registering user may revoke their own session.
+    NotYourSession = 46,
+    /// `register_session` was given a non-positive budget, a non-future expiry, or
+    /// an empty / oversized allowlist.
+    InvalidSessionParams = 47,
+    /// A global-private rule is set for the user but the keyless release was called
+    /// without the required second proof against it.
+    GlobalProofRequired = 48,
+    /// The global proof's commitment does not match the user's pinned global-private
+    /// commitment.
+    GlobalCommitmentMismatch = 49,
+    /// A public spend's payee is denied by the public rule (on the deny-list, or
+    /// absent from a non-empty allowlist).
+    GlobalPayeeDenied = 50,
+    /// A public spend exceeds the public rule's per-payment (or per-payee) cap.
+    GlobalCapExceeded = 51,
+    /// The session key itself has expired.
+    GlobalExpired = 52,
+    /// The session key is paused; unpause it to spend again.
+    SessionPaused = 53,
+    /// The public rule a session runs under (or the account global) does not exist.
+    PublicRuleNotFound = 54,
+    /// A public spend is below the public rule's per-payment minimum.
+    BelowMinPayment = 55,
+    /// A public spend would exceed the public rule's rolling cap over its window.
+    RollingCapExceeded = 56,
+    /// A public spend would exceed the public rule's velocity (count per window).
+    VelocityExceeded = 57,
+    /// A public spend's ledger time is outside the public rule's calendar window.
+    OutsideCalendar = 58,
+    /// `register_session` was given a non-future expiry (server-held keys must be
+    /// time-boxed), or `set_public_rule` had invalid clause params.
+    InvalidPublicParams = 59,
+    /// A session key must be bounded by a spend cap and/or a named rule; it had
+    /// neither, so it could never spend.
+    SessionUnbounded = 60,
+}
+
+/// A spend lane: `Private` (proof-enforced, hidden rule) or `Public` (session
+/// key, cleartext scope). Selects which per-account global rule applies.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Lane {
+    Private,
+    Public,
 }
 
 // Storage keys
@@ -229,9 +585,123 @@ pub enum DataKey {
     FeeConfig,
     /// Per-asset accrued (but unclaimed) protocol fees: asset → i128.
     AccruedFees(Address),
+    /// The external policy-verifier contract address. Admin-set, mutable at any
+    /// time (mirrors [`DataKey::DisputeResolver`]). Absent means the proof-gated
+    /// release path is disabled and fails closed.
+    PolicyVerifier,
+    /// Per-task consumed-nullifier marker for the SINGLE binding release path
+    /// (`release_payment_proved`): `(task_id, nullifier) → ()`. Scoped per task so
+    /// the entries share the task's TTL lifecycle and are pruned on finalization.
+    /// The pp/2 BATCH path instead uses the globally-scoped [`DataKey::Nullifier`]
+    /// so a batch release cannot be replayed under a DIFFERENT task.
+    TaskNullifier(u64, BytesN<32>),
+    /// Enumerable index of a task's consumed nullifiers (single-release path only),
+    /// for unit TTL refresh and cleanup on finalization. Mirrors [`DataKey::TaskStepIds`].
+    TaskNullifierIds(u64),
+    /// Globally-scoped consumed-nullifier marker for the pp/2 BATCH path:
+    /// `nullifier → ()`. The circuit binds the nullifier to the policy commitment,
+    /// so a global marker blocks replay of the SAME release under any task (the gap
+    /// a per-task marker left open). Not indexed or reclaimed on finalization: a
+    /// standard ~30-day persistent TTL outlives the capped validity window
+    /// ([`MAX_VALIDITY_SECS`]), and past `valid_before` the stale-proof check
+    /// rejects replays, so the marker is free to archive — bounded storage, no
+    /// replay window.
+    Nullifier(BytesN<32>),
+    /// Per-task count of proof-gated releases so far. Superseded by the
+    /// per-commitment [`DataKey::CommitmentAccum`] for R2/R7; retained for
+    /// back-compat and any legacy task row.
+    TaskReleaseCount(u64),
+    /// Per-COMMITMENT tumbling-window accumulator for R2 (rolling cap) and R7
+    /// (velocity): `commitment → CommitmentAccumulator`. Lets the rolling cap and
+    /// velocity hold ACROSS tasks under the same pinned rule (a reusable rule, not
+    /// a per-task reset). The circuit resets a window when `valid_after - anchor`
+    /// reaches that rule's PRIVATE window and tells the vault via the proven
+    /// `reset_*` flags, so the window cadence never leaves the circuit.
+    CommitmentAccum(BytesN<32>),
+    /// The user's bounded set of pinned policy commitments (the selectable
+    /// private/public rules). A proof-gated release's commitment must be a
+    /// member. Capped at `MAX_POLICY_COMMITMENTS`; only the user's own signature
+    /// may add or remove entries (`set_policy_commitment` / `unpin_policy_commitment`).
+    PolicyCommitments(Address),
+    /// The user's optional per-lane global rule commitment, applied to every
+    /// spend in that lane as an AND prescreen on the release path. Zero or one
+    /// per lane; set and cleared only by the user's own signature. The PRIVATE
+    /// lane's global is enforced in `release_proved_keyless` via a second proof.
+    GlobalCommitment(Address, Lane),
+    /// A named cleartext PUBLIC rule: `(user, rule_id) → PublicRule`. The full clause
+    /// vocabulary, checked directly by the vault on every session spend (no proof).
+    /// A local (owner-held) session key spends under a named rule; a server-held key
+    /// spends under whichever rule is the account global-public.
+    PublicRule(Address, BytesN<32>),
+    /// Which of the user's public rules is the active account global-public:
+    /// `user → rule_id`. Required before any server-held session key can spend.
+    PublicGlobalId(Address),
+    /// Live usage for a public rule: `(user, rule_id) → PublicUsage` (rolling-cap R2
+    /// + velocity R7 windows + lifetime totals). The public lane has no proof, so the
+    /// vault rolls these windows itself on each session spend.
+    PublicAccum(Address, BytesN<32>),
+    /// A bounded Fast-lane (public) session key and its on-chain scope:
+    /// `session_pubkey → SessionInfo`. Authorized once by the user, enforced on
+    /// every `release_payment_session`, revocable instantly. The only non-proof
+    /// spend path; its scope (budget / expiry / allowlist) bounds it regardless of
+    /// who holds the key (a local agent key, or a KMS-held Managed Sessions key).
+    Session(Address),
 }
 
 // Data structs
+
+/// Per-commitment tumbling-window accumulator for R2 (rolling cap) and R7
+/// (velocity). `window_spent`/`window_count` are the spend/release totals in the
+/// CURRENT window; `anchor_*` is the window's start (a prior spend's `valid_after`,
+/// or 0 for a fresh window). The circuit decides when a window has elapsed (using
+/// its PRIVATE length) and the vault rolls the window forward on the proven reset.
+#[contracttype]
+#[derive(Clone)]
+pub struct CommitmentAccumulator {
+    pub anchor_r2: u64,
+    pub window_spent: u128,
+    pub anchor_r7: u64,
+    pub window_count: u64,
+}
+
+/// A Fast-lane (public mode) session key. Authorized once by the user; pausable,
+/// editable, and revocable any time. A key is bounded two ways, and at least one must
+/// be set: a `spend_cap` (total it may ever spend under this key) and/or a named
+/// `rule_id` (a cleartext public rule the vault enforces per spend). A server-held
+/// key (platform/Managed Sessions) is the simple cap+expiry form; a local key runs
+/// under a rule. If the account also has an active global-public rule, it is AND-
+/// enforced on top. `expiry` is a hard cutoff (0 = none; required for server keys).
+/// `spent` + `release_count` are live usage, readable for observability.
+#[contracttype]
+#[derive(Clone)]
+pub struct SessionInfo {
+    pub user: Address,
+    pub asset: Address,
+    pub expiry: u64,
+    pub spend_cap: i128,
+    pub rule_id: Option<BytesN<32>>,
+    pub server_held: bool,
+    pub paused: bool,
+    pub spent: i128,
+    pub release_count: u32,
+}
+
+/// Live usage for a public rule, so an owner can see how much of each window is
+/// used/left and how many times the rule has authorized a spend. The vault rolls the
+/// R2 (spend) and R7 (count) windows itself since the public lane has no proof.
+#[contracttype]
+#[derive(Clone)]
+pub struct PublicUsage {
+    /// R2 rolling window: start anchor + spend in the current window.
+    pub anchor_r2: u64,
+    pub window_spent: i128,
+    /// R7 velocity window: start anchor + release count in the current window.
+    pub anchor_r7: u64,
+    pub window_count: u32,
+    /// Lifetime totals (never reset), for observability.
+    pub lifetime_spent: i128,
+    pub lifetime_count: u32,
+}
 
 /// Asset-specific balances and history for a user.
 #[contracttype]
@@ -305,6 +775,14 @@ pub struct TaskInfo {
     /// resolution by the configured `dispute_resolver`. A resolved dispute
     /// leaves this flag set as an audit record; the task is then `completed`.
     pub disputed: bool,
+    /// Private spending-policy commitment, set only by
+    /// [`AgentVault::create_task_with_policy`]. `Some` routes every release for
+    /// this task through the proof-gated [`AgentVault::release_payment_proved`]
+    /// path; `None` (the plain [`AgentVault::create_task`] path) routes it
+    /// through [`AgentVault::release_payment`]. This single field on the single
+    /// task record is the sole discriminator between the two paths — one value,
+    /// one TTL lifecycle, so the two paths can never both (or neither) apply.
+    pub policy_commitment: Option<BytesN<32>>,
     /// Ledger timestamp when this task was created.
     pub created_at: u64,
 }
@@ -364,11 +842,33 @@ const MAX_USER_TASK_INFOS_PAGE_SIZE: u32 = 50;
 /// prevents a hostile orchestrator from creating unbounded persistent keys.
 const MAX_RELEASE_STEPS_PER_TASK: u32 = 256;
 
+/// Batch size of the pp/2 spend-policy circuit (`policy_batch.circom`, N=4). The
+/// vault reconstructs exactly this many slots; the active releases come first and
+/// the remainder are zero-padded null slots, matching the circuit.
+const BATCH_N: u32 = 4;
+
 const PERSISTENT_TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const PERSISTENT_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
+/// Upper bound on how far ahead a pp/2 batch release's validity window may reach
+/// (`valid_before - ledger_time`). Keeps a globally-scoped consumed-nullifier
+/// marker's required lifetime well under its ~30-day persistent TTL, so the marker
+/// never archives while a replay is still inside the window. Generous vs the
+/// clients' ~1-day windows.
+const MAX_VALIDITY_SECS: u64 = 604_800; // 7 days
+
+/// Upper bound on a Fast-lane session's payee allowlist. Bounds the on-chain
+/// membership scan in `release_payment_session` (and the stored vector), so a
+/// session's scope stays cheap to enforce. A session needing more payees uses a
+/// broader rule class, not an unbounded list.
+const MAX_SESSION_ALLOWLIST: u32 = 32;
 
 const INSTANCE_TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const INSTANCE_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
+
+/// Maximum number of policy commitments a user may pin at once (the bounded
+/// set). Keeps account storage and the "which rule authorized this" lookup
+/// small and auditable; separate accounts give more isolation if ever needed.
+const MAX_POLICY_COMMITMENTS: u32 = 16;
 
 /// Compile-time contract version, exposed on-chain via `version()`.
 ///
@@ -377,7 +877,7 @@ const INSTANCE_TTL_EXTEND_TO: u32 = 518_400; // ~30 days
 /// deployment before assuming a given function or storage layout
 /// exists, especially important on Soroban where the same address
 /// can be upgraded in place.
-const CONTRACT_VERSION: u32 = 5;
+const CONTRACT_VERSION: u32 = 6;
 
 // Contract
 
@@ -511,6 +1011,13 @@ impl AgentVault {
     // Deposits & Withdrawals
 
     /// Deposit supported tokens from user's external wallet into their vault balance.
+    ///
+    /// CEI note: this is a pull (`user` is the token's `from`), so the token
+    /// contract runs as part of a transfer the CALLER authorized against
+    /// themselves, not against the vault's funds — a re-entrant call made
+    /// from inside this transfer sees `asset_account.balance` still at its
+    /// PRE-deposit value, which cannot be leveraged for a double-credit.
+    /// Audited for CEI; no reordering was needed.
     pub fn deposit(
         env: Env,
         user: Address,
@@ -565,6 +1072,9 @@ impl AgentVault {
     /// Only the unlocked portion (`balance - locked`) of the given asset may be
     /// withdrawn; funds locked by active tasks for that asset stay reserved, so a
     /// withdrawal succeeds even while other funds — or other assets — are locked.
+    ///
+    /// CEI ordering: `asset_account.balance` is debited before the external
+    /// transfer. See the comment at the transfer call site — do not reorder.
     pub fn withdraw(
         env: Env,
         user: Address,
@@ -608,12 +1118,19 @@ impl AgentVault {
         }
 
         Self::extend_instance_ttl(&env);
-        let token_client = token::Client::new(&env, &asset);
-        token_client.transfer(&env.current_contract_address(), &user, &amount);
 
+        // CEI ordering: all state writes for this withdrawal are committed
+        // BEFORE the external token transfer below. A token whose `transfer`
+        // re-enters this contract (e.g. via a transfer hook) will observe the
+        // already-debited balance, so a second `withdraw` in the same call
+        // stack cannot double-spend the same funds. Do not move the transfer
+        // above this block.
         asset_account.balance -= amount;
         env.storage().persistent().set(&asset_key, &asset_account);
         Self::extend_persistent_ttl(&env, &asset_key);
+
+        let token_client = token::Client::new(&env, &asset);
+        token_client.transfer(&env.current_contract_address(), &user, &amount);
 
         WithdrawEvent {
             user: user.clone(),
@@ -630,6 +1147,474 @@ impl AgentVault {
             asset_account.balance
         );
         Ok(())
+    }
+
+    // ── Session keys: the Fast / public lane ────────────────────────────────
+    //
+    // A session key spends from the user's balance WITHOUT a per-payment proof,
+    // bounded by an on-chain scope (budget + payee allowlist + hard expiry) that
+    // the user authorizes ONCE with their wallet. The scope is enforced in the
+    // contract on every release, so the bound holds no matter who holds the key:
+    // a local key in a persistent agent (custody: self + public), or a tight,
+    // short, KMS-held key the server signs with (Managed Sessions = server +
+    // public). Even a fully compromised key or a malicious server can never pay a
+    // non-allowlisted payee, exceed the budget, or spend past expiry, and the user
+    // revokes instantly. This replaces the old server-logic-enforced Autopay by
+    // moving the limits on-chain.
+
+    /// Register a bounded session key. `user` authorizes (one wallet signature) a
+    /// key that may spend up to `budget` of `asset` to any payee on `allowlist`,
+    /// until `expiry`. The budget is a CAP, not an escrow: it is not locked from the
+    /// balance, so each release also checks the live available balance. One session
+    /// per key; revoke + re-register (or use a new key) to change scope.
+    /// Register a Fast-lane session key, bounded by a `spend_cap` (total it may ever
+    /// spend; 0 = none) and/or a named public `rule_id` (full clause enforcement;
+    /// None = none). At least one must be set. `server_held` marks a platform key and
+    /// requires a future `expiry` (time-boxed). Server keys are the simple cap+expiry
+    /// form (rule_id None); local keys run under a rule. A global-public, if set, is
+    /// AND-enforced on top.
+    pub fn register_session(
+        env: Env,
+        user: Address,
+        session: Address,
+        asset: Address,
+        expiry: u64,
+        spend_cap: i128,
+        rule_id: Option<BytesN<32>>,
+        server_held: bool,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        Self::require_not_paused(&env)?;
+        if spend_cap < 0 {
+            return Err(VaultError::InvalidPublicParams);
+        }
+        // A key must be bounded by a cap and/or a rule, else it could spend unbounded.
+        if spend_cap == 0 && rule_id.is_none() {
+            return Err(VaultError::SessionUnbounded);
+        }
+        // Server-held keys must be time-boxed AND capped (the platform holds them);
+        // local keys may be open-ended (0 expiry) because the owner holds the key.
+        if server_held {
+            if expiry <= env.ledger().timestamp() || spend_cap <= 0 {
+                return Err(VaultError::InvalidPublicParams);
+            }
+        } else if expiry != 0 && expiry <= env.ledger().timestamp() {
+            return Err(VaultError::InvalidPublicParams);
+        }
+        // A named rule must exist before a key can run under it.
+        if let Some(ref rid) = rule_id {
+            if !env
+                .storage()
+                .persistent()
+                .has(&DataKey::PublicRule(user.clone(), rid.clone()))
+            {
+                return Err(VaultError::PublicRuleNotFound);
+            }
+        }
+        if !Self::is_supported_asset(env.clone(), asset.clone()) {
+            return Err(VaultError::AssetNotSupported);
+        }
+
+        let session_key = DataKey::Session(session.clone());
+        if env.storage().persistent().has(&session_key) {
+            return Err(VaultError::SessionAlreadyExists);
+        }
+
+        // Ensure the user has an account on record (so there is a balance to draw
+        // from and a config TTL to track), mirroring deposit/withdraw.
+        let config = Self::get_or_create_config(&env, &user);
+        let config_key = DataKey::UserConfig(user.clone());
+        env.storage().persistent().set(&config_key, &config);
+        Self::extend_persistent_ttl(&env, &config_key);
+        Self::extend_instance_ttl(&env);
+
+        let info = SessionInfo {
+            user: user.clone(),
+            asset: asset.clone(),
+            expiry,
+            spend_cap,
+            rule_id,
+            server_held,
+            paused: false,
+            spent: 0,
+            release_count: 0,
+        };
+        env.storage().persistent().set(&session_key, &info);
+        Self::extend_persistent_ttl(&env, &session_key);
+
+        SessionRegisteredEvent {
+            user,
+            session,
+            asset,
+            expiry,
+            server_held,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Pause a session key (temporarily powerless) or unpause it. Only the owner, by
+    /// wallet signature. A paused key's spends fail with `SessionPaused`.
+    pub fn set_session_paused(
+        env: Env,
+        user: Address,
+        session: Address,
+        paused: bool,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        let session_key = DataKey::Session(session.clone());
+        let mut info: SessionInfo = env
+            .storage()
+            .persistent()
+            .get(&session_key)
+            .ok_or(VaultError::SessionNotFound)?;
+        if info.user != user {
+            return Err(VaultError::NotYourSession);
+        }
+        info.paused = paused;
+        env.storage().persistent().set(&session_key, &info);
+        Self::extend_persistent_ttl(&env, &session_key);
+        Self::extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Edit a session key's bounds: extend the expiry and/or raise the total spend
+    /// cap. Only the owner. New values must not shrink below what is already used, and
+    /// a server-held key stays capped + time-boxed. Pass 0 to leave a field unchanged.
+    pub fn update_session(
+        env: Env,
+        user: Address,
+        session: Address,
+        new_expiry: u64,
+        new_spend_cap: i128,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        let session_key = DataKey::Session(session.clone());
+        let mut info: SessionInfo = env
+            .storage()
+            .persistent()
+            .get(&session_key)
+            .ok_or(VaultError::SessionNotFound)?;
+        if info.user != user {
+            return Err(VaultError::NotYourSession);
+        }
+        if new_expiry != 0 {
+            if new_expiry <= env.ledger().timestamp() {
+                return Err(VaultError::InvalidPublicParams);
+            }
+            info.expiry = new_expiry;
+        }
+        if new_spend_cap != 0 {
+            // Cannot set the cap below what has already been spent.
+            if new_spend_cap < info.spent {
+                return Err(VaultError::InvalidPublicParams);
+            }
+            info.spend_cap = new_spend_cap;
+        }
+        if info.server_held && (info.spend_cap <= 0 || info.expiry <= env.ledger().timestamp()) {
+            return Err(VaultError::InvalidPublicParams);
+        }
+        env.storage().persistent().set(&session_key, &info);
+        Self::extend_persistent_ttl(&env, &session_key);
+        Self::extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Instantly revoke a session key. Only the registering user may revoke, by
+    /// wallet signature; afterward the key authorizes nothing.
+    pub fn revoke_session(env: Env, user: Address, session: Address) -> Result<(), VaultError> {
+        user.require_auth();
+        let session_key = DataKey::Session(session.clone());
+        let info: SessionInfo = env
+            .storage()
+            .persistent()
+            .get(&session_key)
+            .ok_or(VaultError::SessionNotFound)?;
+        if info.user != user {
+            return Err(VaultError::NotYourSession);
+        }
+        env.storage().persistent().remove(&session_key);
+        Self::extend_instance_ttl(&env);
+        SessionRevokedEvent { user, session }.publish(&env);
+        Ok(())
+    }
+
+    /// Pay a payee from the session owner's balance, authorized by the SESSION KEY
+    /// itself (`session.require_auth()`) - no proof, no owner signature. This is the
+    /// public/Fast release. The key's spend cap, the named rule it runs under, and the
+    /// account global-public (if any) are all enforced here and fail closed, so the
+    /// spend is bounded regardless of who holds the key.
+    pub fn release_payment_session(
+        env: Env,
+        session: Address,
+        payee: Address,
+        amount: i128,
+        // The public rule to enforce for THIS spend (selected per task, like a private
+        // rule is picked per task). It must be one of the owner's registered public
+        // rules. `None` falls back to the rule bound to the session at registration (if
+        // any); if neither is set, only the key's own cap + expiry bound the spend.
+        rule_id: Option<BytesN<32>>,
+    ) -> Result<(), VaultError> {
+        session.require_auth();
+        Self::require_not_paused(&env)?;
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+
+        let session_key = DataKey::Session(session.clone());
+        let mut info: SessionInfo = env
+            .storage()
+            .persistent()
+            .get(&session_key)
+            .ok_or(VaultError::SessionNotFound)?;
+        Self::extend_persistent_ttl(&env, &session_key);
+
+        if info.paused {
+            return Err(VaultError::SessionPaused);
+        }
+        let now = env.ledger().timestamp();
+        if info.expiry != 0 && now > info.expiry {
+            return Err(VaultError::SessionExpired);
+        }
+
+        // The key's own total spend cap (0 = none).
+        if info.spend_cap > 0 {
+            let projected = info
+                .spent
+                .checked_add(amount)
+                .ok_or(VaultError::InvalidAmount)?;
+            if projected > info.spend_cap {
+                return Err(VaultError::SessionBudgetExceeded);
+            }
+        }
+
+        // The effective public rule for this spend: the per-call selection wins (the
+        // dapp/agent picks a rule per task), else the session's bound rule (local keys
+        // fixed at registration), else none (cap-only).
+        let effective_rid: Option<BytesN<32>> = rule_id.or_else(|| info.rule_id.clone());
+
+        // The selected public rule, checked + its usage window rolled.
+        let rule_roll: Option<(DataKey, PublicUsage)> = match &effective_rid {
+            Some(rid) => {
+                let rule: PublicRule = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::PublicRule(info.user.clone(), rid.clone()))
+                    .ok_or(VaultError::PublicRuleNotFound)?;
+                Some(Self::check_public_rule(
+                    &env, &info.user, rid, &rule, &payee, amount, now,
+                )?)
+            }
+            None => None,
+        };
+
+        // The account global-public rule (AND filter), if set and not the same rule.
+        let global_roll: Option<(DataKey, PublicUsage)> = match env
+            .storage()
+            .persistent()
+            .get::<_, BytesN<32>>(&DataKey::PublicGlobalId(info.user.clone()))
+        {
+            Some(gid) if effective_rid.as_ref() != Some(&gid) => {
+                let grule: PublicRule = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::PublicRule(info.user.clone(), gid.clone()))
+                    .ok_or(VaultError::PublicRuleNotFound)?;
+                Some(Self::check_public_rule(
+                    &env, &info.user, &gid, &grule, &payee, amount, now,
+                )?)
+            }
+            _ => None,
+        };
+
+        let asset_key = DataKey::UserAsset(info.user.clone(), info.asset.clone());
+        let mut asset_account: UserAssetAccount = env
+            .storage()
+            .persistent()
+            .get(&asset_key)
+            .ok_or(VaultError::InsufficientBalance)?;
+        Self::extend_persistent_ttl(&env, &asset_key);
+        // Only the unlocked portion is spendable: funds reserved for active tasks
+        // (`locked`) stay off-limits to a session, the same guard withdraw uses.
+        let available = asset_account.balance - asset_account.locked;
+        if amount > available {
+            return Err(VaultError::InsufficientAvailable);
+        }
+
+        Self::extend_instance_ttl(&env);
+
+        // ── EFFECTS (checks-effects-interactions): commit every bound BEFORE the
+        // external transfer, so a re-entrant token observes the debited state and a
+        // second release in the same call stack cannot double-spend. ──
+        if let Some((k, u)) = &rule_roll {
+            env.storage().persistent().set(k, u);
+            Self::extend_persistent_ttl(&env, k);
+        }
+        if let Some((k, u)) = &global_roll {
+            env.storage().persistent().set(k, u);
+            Self::extend_persistent_ttl(&env, k);
+        }
+        info.spent += amount;
+        info.release_count += 1;
+        env.storage().persistent().set(&session_key, &info);
+        Self::extend_persistent_ttl(&env, &session_key);
+
+        asset_account.balance -= amount;
+        asset_account.total_spent += amount;
+        env.storage().persistent().set(&asset_key, &asset_account);
+        Self::extend_persistent_ttl(&env, &asset_key);
+
+        // Accrue the protocol fee (same model as the proof-gated release; no task
+        // scope, so this inlines the accrual without the task-keyed fee event).
+        let fee = Self::compute_fee(&env, amount);
+        if fee > 0 {
+            if let Some(fee_config) = env
+                .storage()
+                .instance()
+                .get::<_, FeeConfig>(&DataKey::FeeConfig)
+            {
+                if fee_config.recipient.is_some() {
+                    let fee_key = DataKey::AccruedFees(info.asset.clone());
+                    let current: i128 = env.storage().instance().get(&fee_key).unwrap_or(0i128);
+                    let new_accrued = current.checked_add(fee).expect("fee accrual overflow");
+                    env.storage().instance().set(&fee_key, &new_accrued);
+                }
+            }
+        }
+
+        // ── INTERACTIONS ──
+        let payee_payout = amount.checked_sub(fee).expect("fee arithmetic underflow");
+        let token_client = token::Client::new(&env, &info.asset);
+        token_client.transfer(&env.current_contract_address(), &payee, &payee_payout);
+
+        let event_rule_id = info
+            .rule_id
+            .clone()
+            .unwrap_or_else(|| BytesN::from_array(&env, &[0u8; 32]));
+        ReleaseSessionEvent {
+            user: info.user.clone(),
+            session,
+            payee,
+            asset: info.asset.clone(),
+            amount,
+            rule_id: event_rule_id,
+        }
+        .publish(&env);
+        log!(
+            &env,
+            "release_payment_session user={} amount={} spent={}",
+            info.user,
+            amount,
+            info.spent
+        );
+        Ok(())
+    }
+
+    /// Check a public rule's cleartext clauses for one release and return its rolled
+    /// usage (to store in EFFECTS by the caller). Reads the usage + validates; writes
+    /// nothing. Deny is evaluated first for a clear early reject.
+    fn check_public_rule(
+        env: &Env,
+        user: &Address,
+        rule_id: &BytesN<32>,
+        rule: &PublicRule,
+        payee: &Address,
+        amount: i128,
+        now: u64,
+    ) -> Result<(DataKey, PublicUsage), VaultError> {
+        // R4 deny-list: blocked when amount > threshold (0 = any amount).
+        if rule.denylist.iter().any(|p| &p == payee) && amount > rule.denylist_threshold {
+            return Err(VaultError::GlobalPayeeDenied);
+        }
+        // R3 allowlist (+ R5 per-payee cap). Empty = any payee.
+        if !rule.allowlist.is_empty() {
+            let mut cap: i128 = -1;
+            for e in rule.allowlist.iter() {
+                if &e.addr == payee {
+                    cap = e.cap;
+                    break;
+                }
+            }
+            if cap < 0 {
+                return Err(VaultError::PayeeNotAllowed);
+            }
+            if cap > 0 && amount > cap {
+                return Err(VaultError::GlobalCapExceeded);
+            }
+        }
+        // R1 per-payment max / min.
+        if rule.per_payment_max > 0 && amount > rule.per_payment_max {
+            return Err(VaultError::GlobalCapExceeded);
+        }
+        if rule.per_payment_min > 0 && amount < rule.per_payment_min {
+            return Err(VaultError::BelowMinPayment);
+        }
+        // R6 calendar window.
+        if rule.calendar_end != 0 && (now < rule.calendar_start || now > rule.calendar_end) {
+            return Err(VaultError::OutsideCalendar);
+        }
+
+        // R2 rolling cap + R7 velocity: the vault rolls the windows itself. "Never
+        // used" is `lifetime_count == 0` (NOT `anchor == 0`, since a real ledger time
+        // can legitimately be 0); on first use the window simply starts at `now`.
+        let usage_key = DataKey::PublicAccum(user.clone(), rule_id.clone());
+        let mut usage: PublicUsage =
+            env.storage()
+                .persistent()
+                .get(&usage_key)
+                .unwrap_or(PublicUsage {
+                    anchor_r2: 0,
+                    window_spent: 0,
+                    anchor_r7: 0,
+                    window_count: 0,
+                    lifetime_spent: 0,
+                    lifetime_count: 0,
+                });
+        let fresh = usage.lifetime_count == 0;
+        if rule.rolling_cap > 0 {
+            if fresh {
+                usage.anchor_r2 = now;
+            } else if now >= usage.anchor_r2.saturating_add(rule.rolling_window_secs) {
+                usage.window_spent = 0;
+                usage.anchor_r2 = now;
+            }
+            let new_spent = usage
+                .window_spent
+                .checked_add(amount)
+                .ok_or(VaultError::InvalidAmount)?;
+            if new_spent > rule.rolling_cap {
+                return Err(VaultError::RollingCapExceeded);
+            }
+            usage.window_spent = new_spent;
+        }
+        if rule.velocity_max > 0 {
+            if fresh {
+                usage.anchor_r7 = now;
+            } else if now >= usage.anchor_r7.saturating_add(rule.velocity_window_secs) {
+                usage.window_count = 0;
+                usage.anchor_r7 = now;
+            }
+            if usage.window_count + 1 > rule.velocity_max {
+                return Err(VaultError::VelocityExceeded);
+            }
+            usage.window_count += 1;
+        }
+        usage.lifetime_spent = usage
+            .lifetime_spent
+            .checked_add(amount)
+            .ok_or(VaultError::InvalidAmount)?;
+        usage.lifetime_count += 1;
+        Ok((usage_key, usage))
+    }
+
+    /// View a session's current scope + remaining budget. `SessionNotFound` if the
+    /// key is unregistered or revoked. Lets a client (or Managed Sessions) confirm
+    /// on-chain exactly what a key may still spend.
+    pub fn get_session(env: Env, session: Address) -> Result<SessionInfo, VaultError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Session(session))
+            .ok_or(VaultError::SessionNotFound)
     }
 
     // Orchestrator registration
@@ -812,6 +1797,10 @@ impl AgentVault {
             spent: 0,
             completed: false,
             disputed: false,
+            // The plain task-creation path never records a commitment. The
+            // proof-gated path is reached only via `create_task_with_policy`,
+            // which delegates here and then sets this field.
+            policy_commitment: None,
             created_at: env.ledger().timestamp(),
         };
         let task_key = DataKey::Task(counter);
@@ -852,8 +1841,64 @@ impl AgentVault {
         Ok(counter)
     }
 
+    /// Create a task exactly like [`Self::create_task`], but bind a **private
+    /// spending-policy commitment** to it. Every release for the resulting task
+    /// must go through [`Self::release_payment_proved`] with a proof the
+    /// configured verifier accepts; the plain [`Self::release_payment`] path
+    /// rejects it with [`VaultError::PolicyProofRequired`].
+    ///
+    /// `commitment` is an opaque 32-byte hash of the user's off-chain policy —
+    /// it reveals nothing on its own. An all-zero commitment is rejected: no
+    /// real proof could satisfy it, so it would only create a permanently
+    /// unreleasable, budget-locked task.
+    ///
+    /// This delegates the whole creation path to [`Self::create_task`] (auth,
+    /// pause check, validation, budget lock, counter, indexing, `TaskNewEvent`)
+    /// so that function stays the single source of truth and is provably
+    /// unmodified — a task created through it can never carry a commitment.
+    pub fn create_task_with_policy(
+        env: Env,
+        orchestrator: Address,
+        asset: Address,
+        plan_cost: i128,
+        commitment: BytesN<32>,
+    ) -> Result<u64, VaultError> {
+        if commitment == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(VaultError::InvalidCommitment);
+        }
+
+        let task_id = Self::create_task(env.clone(), orchestrator, asset, plan_cost)?;
+
+        let task_key = DataKey::Task(task_id);
+        let mut task: TaskInfo = env
+            .storage()
+            .persistent()
+            .get(&task_key)
+            .expect("task just created");
+        task.policy_commitment = Some(commitment.clone());
+        env.storage().persistent().set(&task_key, &task);
+        Self::extend_persistent_ttl(&env, &task_key);
+
+        PolicyCommittedEvent {
+            task_id,
+            commitment,
+        }
+        .publish(&env);
+        log!(
+            &env,
+            "create_task_with_policy id={} commitment bound",
+            task_id
+        );
+
+        Ok(task_id)
+    }
+
     /// Release funds for one step: contract transfers `amount` tokens to the ORCHESTRATOR.
     /// Returns true on success.
+    ///
+    /// CEI ordering: the step is recorded and `task.spent` is bumped before
+    /// the external transfer. See the comment at the transfer call site —
+    /// do not reorder.
     pub fn release_payment(
         env: Env,
         orchestrator: Address,
@@ -875,6 +1920,17 @@ impl AgentVault {
             .get(&task_key)
             .ok_or(VaultError::TaskNotFound)?;
         Self::extend_persistent_ttl(&env, &task_key);
+
+        // ── Mutual exclusion with the proof-gated path ───────────────────
+        // A task that carries a private spending-policy commitment can ONLY be
+        // released through `release_payment_proved` (with a verified proof).
+        // This is the negation of the check at the top of that function; the
+        // two conditions read the same single field on the same task record,
+        // so exactly one path applies to any non-finalized task and neither
+        // applies once it is finalized (the `completed` guard below fires).
+        if task.policy_commitment.is_some() {
+            return Err(VaultError::PolicyProofRequired);
+        }
 
         if task.completed {
             return Err(VaultError::TaskAlreadyCompleted);
@@ -906,7 +1962,6 @@ impl AgentVault {
         Self::record_step_release(&env, task_id, step_id, amount)?;
 
         Self::extend_instance_ttl(&env);
-        let token_client = token::Client::new(&env, &asset);
 
         // ── Protocol fee deduction ──────────────────────────────────────
         // Fee rounds DOWN (integer division), so the orchestrator always
@@ -918,11 +1973,17 @@ impl AgentVault {
         let fee = Self::compute_fee(&env, amount);
         let orchestrator_payout = amount.checked_sub(fee).expect("fee arithmetic underflow");
 
-        token_client.transfer(
-            &env.current_contract_address(),
-            &orchestrator,
-            &orchestrator_payout,
-        );
+        // CEI ordering: task.spent and the fee accrual are both written
+        // BEFORE the external token transfers below. record_step_release
+        // above already makes this exact (task_id, step_id) idempotent
+        // against re-entry; bumping task.spent here additionally protects
+        // the task's overall plan_cost cap against a DIFFERENT step_id (or
+        // a different fund-moving function, e.g. withdraw) being invoked
+        // re-entrantly from inside the transfer below. Do not move the
+        // transfers above this block.
+        task.spent += amount;
+        env.storage().persistent().set(&task_key, &task);
+        Self::extend_persistent_ttl(&env, &task_key);
 
         // Accrue the fee (if any) to the configured recipient's claimable balance.
         if fee > 0 {
@@ -948,9 +2009,12 @@ impl AgentVault {
             }
         }
 
-        task.spent += amount;
-        env.storage().persistent().set(&task_key, &task);
-        Self::extend_persistent_ttl(&env, &task_key);
+        let token_client = token::Client::new(&env, &asset);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &orchestrator,
+            &orchestrator_payout,
+        );
 
         ReleaseEvent {
             user: task.user.clone(),
@@ -972,6 +2036,893 @@ impl AgentVault {
         );
 
         Ok(true)
+    }
+
+    /// Release funds for one step of a task that carries a **private
+    /// spending-policy commitment**, gated on a zero-knowledge proof that the
+    /// configured verifier accepts. This is the mirror of
+    /// [`Self::release_payment`] for the committed-task path: a task created by
+    /// [`Self::create_task_with_policy`] can only be paid out here, and a plain
+    /// task can only be paid out via [`Self::release_payment`] — mutual
+    /// exclusion is enforced at the top of both.
+    ///
+    /// Ordering is deliberate and load-bearing:
+    /// 1. cheap local guards first — auth, pause, amount, task lookup, mutual
+    ///    exclusion, lifecycle (`completed`/`disputed`), orchestrator/asset
+    ///    match, step idempotency;
+    /// 2. **budget check before the verifier is ever contacted** — an
+    ///    over-budget request must never pay for a proof verification;
+    /// 3. **nullifier-already-spent check** — a replayed nullifier is rejected
+    ///    before the verifier call;
+    /// 4. **verifier configured?** — if not, fail closed
+    ///    ([`VaultError::PolicyVerifierNotSet`]): no call is attempted and no
+    ///    funds move;
+    /// 5. cross-contract `verify_policy(commitment, payee, amount, nullifier,
+    ///    proof)` — only an explicit `true` authorizes the release; a `false`
+    ///    returns [`VaultError::PolicyProofRejected`] and a verifier that
+    ///    errors or traps reverts the whole call. Either way it fails closed,
+    ///    and the nullifier is **not** marked spent on a failed verification,
+    ///    so a rejected attempt cannot burn a nullifier a later legitimate
+    ///    proof needs;
+    /// 6. CEI — the nullifier marker, the step record, `task.spent` and the fee
+    ///    accrual are all committed **before** the token transfer, exactly as
+    ///    in [`Self::release_payment`].
+    ///
+    /// `payee` is a public input of the proof: the verifier rejects a proof
+    /// generated for a different `(payee, amount)`. Funds are transferred to
+    /// `payee` (fee deducted), which need not be the orchestrator — expressing
+    /// "which payees the policy allows" is a core purpose of the mechanism. The
+    /// caller must still be the task's registered orchestrator.
+    ///
+    /// The proof bytes are never logged or emitted in an event.
+    ///
+    /// (Wide signature: see the crate-level `too_many_arguments` allow.)
+    pub fn release_payment_proved(
+        env: Env,
+        orchestrator: Address,
+        task_id: u64,
+        step_id: u64,
+        asset: Address,
+        amount: i128,
+        payee: Address,
+        nullifier: BytesN<32>,
+        proof: Bytes,
+    ) -> Result<bool, VaultError> {
+        orchestrator.require_auth();
+        Self::require_not_paused(&env)?;
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+
+        let task_key = DataKey::Task(task_id);
+        let mut task: TaskInfo = env
+            .storage()
+            .persistent()
+            .get(&task_key)
+            .ok_or(VaultError::TaskNotFound)?;
+        Self::extend_persistent_ttl(&env, &task_key);
+
+        // ── Mutual exclusion with the plain path ────────────────────────
+        // This entry point serves ONLY tasks that carry a policy commitment.
+        // A plain task (no commitment) must go through `release_payment`. This
+        // is the exact negation of the check in that function.
+        let commitment = task
+            .policy_commitment
+            .clone()
+            .ok_or(VaultError::NoPolicyCommitment)?;
+
+        if task.completed {
+            return Err(VaultError::TaskAlreadyCompleted);
+        }
+        if task.disputed {
+            return Err(VaultError::TaskDisputed);
+        }
+        if task.orchestrator != orchestrator {
+            return Err(VaultError::NotYourOrchestrator);
+        }
+        if task.asset != asset {
+            return Err(VaultError::AssetMismatch);
+        }
+
+        // Step idempotency — identical semantics to `release_payment`. A
+        // genuine replay of an already-succeeded step is an idempotent success
+        // and does NOT re-run verification or re-check the nullifier.
+        let step_key = DataKey::TaskStepRelease(task_id, step_id);
+        if let Some(record) = env.storage().persistent().get::<_, StepRelease>(&step_key) {
+            Self::extend_persistent_ttl(&env, &step_key);
+            Self::extend_task_step_ids_ttl(&env, task_id);
+            Self::extend_task_nullifier_ids_ttl(&env, task_id);
+            if record.amount == amount {
+                return Ok(true);
+            }
+            return Err(VaultError::ReleaseConflict);
+        }
+
+        // (2) Budget check FIRST — cheaper than a cross-contract call, and an
+        // over-budget request must never trigger proof verification.
+        if task.spent + amount > task.plan_cost {
+            return Err(VaultError::ExceedsPlanCost);
+        }
+
+        // (3) Replay check — a nullifier already consumed for this task is
+        // rejected before the verifier is contacted.
+        let nullifier_key = DataKey::TaskNullifier(task_id, nullifier.clone());
+        if env.storage().persistent().has(&nullifier_key) {
+            Self::extend_persistent_ttl(&env, &nullifier_key);
+            return Err(VaultError::NullifierAlreadyUsed);
+        }
+
+        // (3.5) The task's commitment must be pinned to the owner's account.
+        // This is the trust anchor of the proof-gated path: a release proceeds
+        // only against a rule the user authorized, so the operator cannot lock a
+        // task under a commitment the owner never pinned. Checked before the
+        // verifier is contacted, so an unauthorized commitment never pays for a
+        // verification.
+        if !Self::is_commitment_pinned(&env, &task.user, &commitment) {
+            return Err(VaultError::CommitmentNotAuthorized);
+        }
+
+        // (4) Verifier must be configured — fail closed, no call, no funds.
+        let verifier: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PolicyVerifier)
+            .ok_or(VaultError::PolicyVerifierNotSet)?;
+        Self::extend_instance_ttl(&env);
+
+        // (5) Cross-contract verification against the [`PolicyVerifier`]
+        // interface, public inputs in the fixed order
+        // `(commitment, payee, amount, nullifier)` with `proof` last. ONLY an
+        // explicit `true` authorizes the release; a `false` returns here as
+        // `PolicyProofRejected` before a single state write, so the nullifier
+        // is NOT burned by a failed verification. A verifier that errors or
+        // traps reverts the whole call — also fail closed: no funds move and
+        // no state is written.
+        let verified = PolicyVerifierClient::new(&env, &verifier).verify_policy(
+            &commitment,
+            &payee,
+            &amount,
+            &nullifier,
+            &proof,
+        );
+        if !verified {
+            return Err(VaultError::PolicyProofRejected);
+        }
+
+        // ── EFFECTS (checks-effects-interactions) ───────────────────────
+        // Everything that bounds fund movement is committed BEFORE the
+        // transfer: the step record, the consumed-nullifier marker,
+        // `task.spent`, and the fee accrual. A token whose `transfer`
+        // re-enters this contract sees the consumed nullifier (this exact
+        // proved release is now idempotent) and the bumped `task.spent`
+        // (the plan_cost cap holds against any other step or fund-mover
+        // invoked re-entrantly). Do not move the transfer above this block.
+        Self::record_step_release(&env, task_id, step_id, amount)?;
+        Self::record_task_nullifier(&env, task_id, &nullifier)?;
+        Self::extend_instance_ttl(&env);
+
+        let fee = Self::compute_fee(&env, amount);
+        let payee_payout = amount.checked_sub(fee).expect("fee arithmetic underflow");
+
+        task.spent += amount;
+        env.storage().persistent().set(&task_key, &task);
+        Self::extend_persistent_ttl(&env, &task_key);
+
+        // Accrue the fee (if any) to the configured recipient's claimable
+        // balance — identical handling to `release_payment`.
+        if fee > 0 {
+            if let Some(fee_config) = env
+                .storage()
+                .instance()
+                .get::<_, FeeConfig>(&DataKey::FeeConfig)
+            {
+                if let Some(ref recipient) = fee_config.recipient {
+                    let fee_key = DataKey::AccruedFees(asset.clone());
+                    let current: i128 = env.storage().instance().get(&fee_key).unwrap_or(0i128);
+                    let new_accrued = current.checked_add(fee).expect("fee accrual overflow");
+                    env.storage().instance().set(&fee_key, &new_accrued);
+
+                    FeeAccruedEvent {
+                        asset: asset.clone(),
+                        recipient: recipient.clone(),
+                        fee_amount: fee,
+                        task_id,
+                    }
+                    .publish(&env);
+                }
+            }
+        }
+
+        let token_client = token::Client::new(&env, &asset);
+        token_client.transfer(&env.current_contract_address(), &payee, &payee_payout);
+
+        ReleaseProvedEvent {
+            user: task.user.clone(),
+            orchestrator: orchestrator.clone(),
+            task_id,
+            asset: asset.clone(),
+            amount,
+            nullifier: nullifier.clone(),
+        }
+        .publish(&env);
+        log!(
+            &env,
+            "release_payment_proved task={} asset={} amount={} fee={} payee_payout={} total_spent={}",
+            task_id,
+            asset,
+            amount,
+            fee,
+            payee_payout,
+            task.spent
+        );
+
+        Ok(true)
+    }
+
+    /// Proof-gated BATCH release (pp/2). One Groth16 proof authorizes up to
+    /// `BATCH_N` transfers under the task's private policy, verified on-chain by a
+    /// real BLS12-381 pairing. The public inputs are reconstructed here in the
+    /// circuit's exact order and checked against the verifier's stored VK; funds
+    /// move only on a `true`. Mirrors [`Self::release_payment_proved`]'s guards
+    /// and checks-effects-interactions ordering, extended to N releases plus the
+    /// R2 (running spend) and R7 (release count) accumulators.
+    ///
+    /// `payees`, `amounts`, and `nullifiers` are the ACTIVE releases (length
+    /// `1..=BATCH_N`), in the order the prover placed them; the circuit's trailing
+    /// null slots are reconstructed here as zero field elements. `valid_after` /
+    /// `valid_before` are the proof's R6 validity window: the ledger time must lie
+    /// within it (checked here) and the proof shows that window is inside the
+    /// private calendar. `step_id` makes the whole batch idempotent.
+    pub fn release_payment_proved_batch(
+        env: Env,
+        orchestrator: Address,
+        task_id: u64,
+        step_id: u64,
+        asset: Address,
+        payees: Vec<Address>,
+        amounts: Vec<i128>,
+        nullifiers: Vec<BytesN<32>>,
+        valid_after: u64,
+        valid_before: u64,
+        reset_r2: bool,
+        reset_r7: bool,
+        proof: Groth16Proof,
+    ) -> Result<bool, VaultError> {
+        orchestrator.require_auth();
+        Self::require_not_paused(&env)?;
+
+        let m = payees.len();
+        if m == 0 || m > BATCH_N || amounts.len() != m || nullifiers.len() != m {
+            return Err(VaultError::BatchSizeInvalid);
+        }
+
+        // R6 liveness: the ledger time must be inside the proof's validity window.
+        // The proof separately proves that window is within the private calendar.
+        let ledger_time = env.ledger().timestamp();
+        if ledger_time < valid_after || ledger_time > valid_before {
+            return Err(VaultError::OutsideValidityWindow);
+        }
+        // Bound the forward reach of the window so the globally-scoped nullifier
+        // markers recorded below only need to outlive it: a ~30-day persistent TTL
+        // always covers a <= MAX_VALIDITY_SECS window, and past valid_before the
+        // check above rejects any replay. Without this a far-future valid_before
+        // could outlive the marker and reopen a cross-task replay.
+        if valid_before.saturating_sub(ledger_time) > MAX_VALIDITY_SECS {
+            return Err(VaultError::ValidityWindowTooLong);
+        }
+
+        let task_key = DataKey::Task(task_id);
+        let mut task: TaskInfo = env
+            .storage()
+            .persistent()
+            .get(&task_key)
+            .ok_or(VaultError::TaskNotFound)?;
+        Self::extend_persistent_ttl(&env, &task_key);
+
+        let commitment = task
+            .policy_commitment
+            .clone()
+            .ok_or(VaultError::NoPolicyCommitment)?;
+
+        if task.completed {
+            return Err(VaultError::TaskAlreadyCompleted);
+        }
+        if task.disputed {
+            return Err(VaultError::TaskDisputed);
+        }
+        if task.orchestrator != orchestrator {
+            return Err(VaultError::NotYourOrchestrator);
+        }
+        if task.asset != asset {
+            return Err(VaultError::AssetMismatch);
+        }
+
+        // Each active amount must be positive; accumulate the batch total.
+        let mut batch_total: i128 = 0;
+        for a in amounts.iter() {
+            if a <= 0 {
+                return Err(VaultError::InvalidAmount);
+            }
+            batch_total = batch_total
+                .checked_add(a)
+                .ok_or(VaultError::InvalidAmount)?;
+        }
+
+        // Step idempotency — a genuine replay of a succeeded batch step is an
+        // idempotent success and re-runs neither verification nor transfers.
+        let step_key = DataKey::TaskStepRelease(task_id, step_id);
+        if let Some(record) = env.storage().persistent().get::<_, StepRelease>(&step_key) {
+            Self::extend_persistent_ttl(&env, &step_key);
+            Self::extend_task_step_ids_ttl(&env, task_id);
+            if record.amount == batch_total {
+                return Ok(true);
+            }
+            return Err(VaultError::ReleaseConflict);
+        }
+
+        // Budget check before any verifier call.
+        if task.spent + batch_total > task.plan_cost {
+            return Err(VaultError::ExceedsPlanCost);
+        }
+
+        // Replay check: reject a nullifier already consumed for this task, and a
+        // nullifier repeated within this batch.
+        for (i, n) in nullifiers.iter().enumerate() {
+            if env
+                .storage()
+                .persistent()
+                .has(&DataKey::Nullifier(n.clone()))
+            {
+                return Err(VaultError::NullifierAlreadyUsed);
+            }
+            for (j, n2) in nullifiers.iter().enumerate() {
+                if i != j && n == n2 {
+                    return Err(VaultError::BatchDuplicateNullifier);
+                }
+            }
+        }
+
+        // The task's commitment must be pinned to the owner's account (the same
+        // trust anchor as the single-release path), checked before the verifier.
+        if !Self::is_commitment_pinned(&env, &task.user, &commitment) {
+            return Err(VaultError::CommitmentNotAuthorized);
+        }
+
+        // Verifier must be configured — fail closed.
+        let verifier: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PolicyVerifier)
+            .ok_or(VaultError::PolicyVerifierNotSet)?;
+        Self::extend_instance_ttl(&env);
+
+        // Authenticated PER-COMMITMENT accumulator the circuit is proven against:
+        // the running spend (R2) + release count (R7) in the current window, and
+        // each window's anchor. Reusing the SAME pinned rule across tasks keeps
+        // accumulating here, so the rolling cap/velocity hold across tasks. A fresh
+        // commitment starts at zero (anchors 0 => the circuit resets into window 1).
+        let accum_key = DataKey::CommitmentAccum(commitment.clone());
+        let accum: CommitmentAccumulator =
+            env.storage()
+                .persistent()
+                .get(&accum_key)
+                .unwrap_or(CommitmentAccumulator {
+                    anchor_r2: 0,
+                    window_spent: 0,
+                    anchor_r7: 0,
+                    window_count: 0,
+                });
+        let running_spend = accum.window_spent;
+        let prior_count = accum.window_count;
+
+        // Reconstruct the public signals in the circuit's EXACT order (outputs then
+        // inputs):
+        //   outputs: [commitment, nullifier[0..N], reset_r2, reset_r7]
+        //   inputs:  [payee_field[0..N], amount[0..N], valid_after, valid_before,
+        //            running_spend, prior_count, anchor_r2, anchor_r7]
+        // with trailing null slots (m..N) as zero field elements. The reset flags
+        // and anchors are what let the circuit roll the per-commitment window; the
+        // proof BINDS them, so a wrong flag/anchor fails verification below.
+        let zero32: BytesN<32> = BytesN::from_array(&env, &[0u8; 32]);
+        let mut pis: Vec<BytesN<32>> = vec![&env, commitment.clone()];
+        for i in 0..BATCH_N {
+            pis.push_back(if i < m {
+                nullifiers.get_unchecked(i)
+            } else {
+                zero32.clone()
+            });
+        }
+        pis.push_back(Self::u64_to_field(&env, if reset_r2 { 1 } else { 0 }));
+        pis.push_back(Self::u64_to_field(&env, if reset_r7 { 1 } else { 0 }));
+        for i in 0..BATCH_N {
+            pis.push_back(if i < m {
+                Self::address_to_field(&env, &payees.get_unchecked(i))
+            } else {
+                zero32.clone()
+            });
+        }
+        for i in 0..BATCH_N {
+            pis.push_back(if i < m {
+                Self::amount_to_field(&env, amounts.get_unchecked(i))
+            } else {
+                zero32.clone()
+            });
+        }
+        pis.push_back(Self::u64_to_field(&env, valid_after));
+        pis.push_back(Self::u64_to_field(&env, valid_before));
+        pis.push_back(Self::u128_to_field(&env, running_spend));
+        pis.push_back(Self::u64_to_field(&env, prior_count));
+        pis.push_back(Self::u64_to_field(&env, accum.anchor_r2));
+        pis.push_back(Self::u64_to_field(&env, accum.anchor_r7));
+
+        let verified =
+            PolicyVerifierClient::new(&env, &verifier).verify_groth16_stored(&proof, &pis);
+        if !verified {
+            return Err(VaultError::PolicyProofRejected);
+        }
+
+        // ── EFFECTS (checks-effects-interactions) ───────────────────────
+        // All state that bounds fund movement is committed before any transfer.
+        Self::record_step_release(&env, task_id, step_id, batch_total)?;
+        for n in nullifiers.iter() {
+            Self::record_nullifier(&env, &n);
+        }
+        task.spent += batch_total;
+        env.storage().persistent().set(&task_key, &task);
+        Self::extend_persistent_ttl(&env, &task_key);
+
+        // Roll the per-commitment window forward. The reset flags are PROVEN public
+        // outputs (bound into the proof just verified), so on reset the window
+        // restarts at this batch with its anchor moved to valid_after; otherwise it
+        // accumulates. Saturating add is defensive — when R2 is enabled the proof
+        // already bounds spend <= cap, and when disabled the circuit always resets
+        // (window 0), so this never actually saturates.
+        let updated = CommitmentAccumulator {
+            window_spent: if reset_r2 {
+                batch_total as u128
+            } else {
+                running_spend.saturating_add(batch_total as u128)
+            },
+            anchor_r2: if reset_r2 {
+                valid_after
+            } else {
+                accum.anchor_r2
+            },
+            window_count: if reset_r7 {
+                m as u64
+            } else {
+                prior_count.saturating_add(m as u64)
+            },
+            anchor_r7: if reset_r7 {
+                valid_after
+            } else {
+                accum.anchor_r7
+            },
+        };
+        env.storage().persistent().set(&accum_key, &updated);
+        Self::extend_persistent_ttl(&env, &accum_key);
+
+        // ── INTERACTIONS: pay each active payee (amount minus protocol fee) ──
+        let token_client = token::Client::new(&env, &asset);
+        for i in 0..m {
+            let amount = amounts.get_unchecked(i);
+            let payee = payees.get_unchecked(i);
+            let fee = Self::compute_fee(&env, amount);
+            let payee_payout = amount.checked_sub(fee).expect("fee arithmetic underflow");
+            Self::accrue_protocol_fee(&env, &asset, fee, task_id);
+            token_client.transfer(&env.current_contract_address(), &payee, &payee_payout);
+            ReleaseProvedEvent {
+                user: task.user.clone(),
+                orchestrator: orchestrator.clone(),
+                task_id,
+                asset: asset.clone(),
+                amount,
+                nullifier: nullifiers.get_unchecked(i),
+            }
+            .publish(&env);
+        }
+
+        log!(
+            &env,
+            "release_payment_proved_batch task={} count={} total={} spent={}",
+            task_id,
+            m,
+            batch_total,
+            task.spent
+        );
+        Ok(true)
+    }
+
+    /// Keyless, proof-authorized release (the plan's Sovereign private path). NO key
+    /// authorizes this: the pinned commitment (only the user's wallet could pin it),
+    /// the zero-knowledge proof (only the salt-holder can produce it), and a fresh
+    /// nullifier (replay protection) ARE the authorization. Whoever submits the tx
+    /// merely pays the fee; they cannot learn the rule or redirect a cent, because
+    /// payees and amounts are bound into the proof and the nullifier is one-time.
+    /// Draws from `user`'s available balance for `asset` (not a task reservation).
+    /// When a global-private rule is set, a second proof against it is required (an
+    /// AND filter: the batch must satisfy the selected rule AND the global).
+    pub fn release_proved_keyless(
+        env: Env,
+        user: Address,
+        asset: Address,
+        commitment: BytesN<32>,
+        payees: Vec<Address>,
+        amounts: Vec<i128>,
+        nullifiers: Vec<BytesN<32>>,
+        valid_after: u64,
+        valid_before: u64,
+        reset_r2: bool,
+        reset_r7: bool,
+        proof: Groth16Proof,
+        global: Option<GlobalProof>,
+    ) -> Result<bool, VaultError> {
+        // Deliberately NO require_auth: the authorization is the proof + the pinned
+        // commitment + a fresh nullifier, not any key's signature.
+        Self::require_not_paused(&env)?;
+
+        let m = payees.len();
+        if m == 0 || m > BATCH_N || amounts.len() != m || nullifiers.len() != m {
+            return Err(VaultError::BatchSizeInvalid);
+        }
+
+        // R6 liveness + bounded forward window (so the global nullifier markers only
+        // need to outlive it), identical to the batch path.
+        let ledger_time = env.ledger().timestamp();
+        if ledger_time < valid_after || ledger_time > valid_before {
+            return Err(VaultError::OutsideValidityWindow);
+        }
+        if valid_before.saturating_sub(ledger_time) > MAX_VALIDITY_SECS {
+            return Err(VaultError::ValidityWindowTooLong);
+        }
+
+        let mut batch_total: i128 = 0;
+        for a in amounts.iter() {
+            if a <= 0 {
+                return Err(VaultError::InvalidAmount);
+            }
+            batch_total = batch_total
+                .checked_add(a)
+                .ok_or(VaultError::InvalidAmount)?;
+        }
+
+        // The selected rule's commitment must be pinned to THIS user on-chain (the
+        // same trust anchor as every other proved path), checked before the verifier.
+        if !Self::is_commitment_pinned(&env, &user, &commitment) {
+            return Err(VaultError::CommitmentNotAuthorized);
+        }
+
+        let verifier: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PolicyVerifier)
+            .ok_or(VaultError::PolicyVerifierNotSet)?;
+        Self::extend_instance_ttl(&env);
+
+        // Draw from the user's own vault balance for this asset: only the unlocked
+        // portion (balance - locked) is spendable, the same guard withdraw/session use.
+        let asset_key = DataKey::UserAsset(user.clone(), asset.clone());
+        let mut asset_account: UserAssetAccount = env
+            .storage()
+            .persistent()
+            .get(&asset_key)
+            .ok_or(VaultError::InsufficientBalance)?;
+        Self::extend_persistent_ttl(&env, &asset_key);
+        let available = asset_account.balance - asset_account.locked;
+        if batch_total > available {
+            return Err(VaultError::InsufficientAvailable);
+        }
+
+        // Replay: reject a primary nullifier already consumed (globally) or repeated
+        // within the batch.
+        for (i, n) in nullifiers.iter().enumerate() {
+            if env
+                .storage()
+                .persistent()
+                .has(&DataKey::Nullifier(n.clone()))
+            {
+                return Err(VaultError::NullifierAlreadyUsed);
+            }
+            for (j, n2) in nullifiers.iter().enumerate() {
+                if i != j && n == n2 {
+                    return Err(VaultError::BatchDuplicateNullifier);
+                }
+            }
+        }
+
+        // Verify the SELECTED rule's proof and compute its rolled accumulator.
+        let (primary_key, primary_updated) = Self::verify_batch_proof(
+            &env,
+            &verifier,
+            &commitment,
+            &payees,
+            &amounts,
+            &nullifiers,
+            m,
+            valid_after,
+            valid_before,
+            reset_r2,
+            reset_r7,
+            &proof,
+        )?;
+
+        // GLOBAL-private (AND filter): if one is set, a second proof against it is
+        // mandatory, over the SAME batch and window, under its own accumulator.
+        let global_commitment: Option<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::GlobalCommitment(user.clone(), Lane::Private));
+        let global_roll: Option<(DataKey, CommitmentAccumulator, Vec<BytesN<32>>)> =
+            match global_commitment {
+                Some(gc) => {
+                    let g = global.ok_or(VaultError::GlobalProofRequired)?;
+                    if g.commitment != gc {
+                        return Err(VaultError::GlobalCommitmentMismatch);
+                    }
+                    if g.nullifiers.len() != m {
+                        return Err(VaultError::BatchSizeInvalid);
+                    }
+                    for (i, n) in g.nullifiers.iter().enumerate() {
+                        if env
+                            .storage()
+                            .persistent()
+                            .has(&DataKey::Nullifier(n.clone()))
+                        {
+                            return Err(VaultError::NullifierAlreadyUsed);
+                        }
+                        for (j, n2) in g.nullifiers.iter().enumerate() {
+                            if i != j && n == n2 {
+                                return Err(VaultError::BatchDuplicateNullifier);
+                            }
+                        }
+                    }
+                    let (gkey, gupdated) = Self::verify_batch_proof(
+                        &env,
+                        &verifier,
+                        &gc,
+                        &payees,
+                        &amounts,
+                        &g.nullifiers,
+                        m,
+                        valid_after,
+                        valid_before,
+                        g.reset_r2,
+                        g.reset_r7,
+                        &g.proof,
+                    )?;
+                    Some((gkey, gupdated, g.nullifiers))
+                }
+                None => None,
+            };
+
+        // ── EFFECTS (checks-effects-interactions): commit every bound BEFORE any
+        // external transfer, so a re-entrant token observes the debited state. ──
+        for n in nullifiers.iter() {
+            Self::record_nullifier(&env, &n);
+        }
+        if let Some((_, _, gnulls)) = &global_roll {
+            for n in gnulls.iter() {
+                Self::record_nullifier(&env, &n);
+            }
+        }
+        asset_account.balance -= batch_total;
+        asset_account.total_spent += batch_total;
+        env.storage().persistent().set(&asset_key, &asset_account);
+        Self::extend_persistent_ttl(&env, &asset_key);
+        env.storage()
+            .persistent()
+            .set(&primary_key, &primary_updated);
+        Self::extend_persistent_ttl(&env, &primary_key);
+        if let Some((gkey, gupdated, _)) = global_roll {
+            env.storage().persistent().set(&gkey, &gupdated);
+            Self::extend_persistent_ttl(&env, &gkey);
+        }
+
+        // ── INTERACTIONS: pay each active payee (amount minus protocol fee) ──
+        let token_client = token::Client::new(&env, &asset);
+        for i in 0..m {
+            let amount = amounts.get_unchecked(i);
+            let payee = payees.get_unchecked(i);
+            let fee = Self::compute_fee(&env, amount);
+            let payee_payout = amount.checked_sub(fee).expect("fee arithmetic underflow");
+            // Accrue the protocol fee inline (no task scope on the keyless path), the
+            // same model as the session release.
+            if fee > 0 {
+                if let Some(fee_config) = env
+                    .storage()
+                    .instance()
+                    .get::<_, FeeConfig>(&DataKey::FeeConfig)
+                {
+                    if fee_config.recipient.is_some() {
+                        let fee_key = DataKey::AccruedFees(asset.clone());
+                        let current: i128 = env.storage().instance().get(&fee_key).unwrap_or(0i128);
+                        let new_accrued = current.checked_add(fee).expect("fee accrual overflow");
+                        env.storage().instance().set(&fee_key, &new_accrued);
+                    }
+                }
+            }
+            token_client.transfer(&env.current_contract_address(), &payee, &payee_payout);
+            ReleaseProvedKeylessEvent {
+                user: user.clone(),
+                commitment: commitment.clone(),
+                asset: asset.clone(),
+                amount,
+                nullifier: nullifiers.get_unchecked(i),
+            }
+            .publish(&env);
+        }
+
+        log!(
+            &env,
+            "release_proved_keyless user={} count={} total={}",
+            user,
+            m,
+            batch_total
+        );
+        Ok(true)
+    }
+
+    /// Verify a batch proof binds `payees`/`amounts`/`window` to `commitment` under
+    /// that commitment's per-commitment accumulator (R2 rolling spend / R7 velocity),
+    /// and return the accumulator key + the window rolled forward. Pure: reads the
+    /// accumulator and calls the verifier, writes no state and records no nullifier,
+    /// so the caller commits those in CEI order. The public-signal order is identical
+    /// to `release_payment_proved_batch` (the proven pp/2 layout), so both the
+    /// selected rule and a global reuse the SAME circuit.
+    fn verify_batch_proof(
+        env: &Env,
+        verifier: &Address,
+        commitment: &BytesN<32>,
+        payees: &Vec<Address>,
+        amounts: &Vec<i128>,
+        nullifiers: &Vec<BytesN<32>>,
+        m: u32,
+        valid_after: u64,
+        valid_before: u64,
+        reset_r2: bool,
+        reset_r7: bool,
+        proof: &Groth16Proof,
+    ) -> Result<(DataKey, CommitmentAccumulator), VaultError> {
+        let accum_key = DataKey::CommitmentAccum(commitment.clone());
+        let accum: CommitmentAccumulator =
+            env.storage()
+                .persistent()
+                .get(&accum_key)
+                .unwrap_or(CommitmentAccumulator {
+                    anchor_r2: 0,
+                    window_spent: 0,
+                    anchor_r7: 0,
+                    window_count: 0,
+                });
+        let running_spend = accum.window_spent;
+        let prior_count = accum.window_count;
+
+        let zero32: BytesN<32> = BytesN::from_array(env, &[0u8; 32]);
+        let mut pis: Vec<BytesN<32>> = vec![env, commitment.clone()];
+        for i in 0..BATCH_N {
+            pis.push_back(if i < m {
+                nullifiers.get_unchecked(i)
+            } else {
+                zero32.clone()
+            });
+        }
+        pis.push_back(Self::u64_to_field(env, if reset_r2 { 1 } else { 0 }));
+        pis.push_back(Self::u64_to_field(env, if reset_r7 { 1 } else { 0 }));
+        for i in 0..BATCH_N {
+            pis.push_back(if i < m {
+                Self::address_to_field(env, &payees.get_unchecked(i))
+            } else {
+                zero32.clone()
+            });
+        }
+        for i in 0..BATCH_N {
+            pis.push_back(if i < m {
+                Self::amount_to_field(env, amounts.get_unchecked(i))
+            } else {
+                zero32.clone()
+            });
+        }
+        pis.push_back(Self::u64_to_field(env, valid_after));
+        pis.push_back(Self::u64_to_field(env, valid_before));
+        pis.push_back(Self::u128_to_field(env, running_spend));
+        pis.push_back(Self::u64_to_field(env, prior_count));
+        pis.push_back(Self::u64_to_field(env, accum.anchor_r2));
+        pis.push_back(Self::u64_to_field(env, accum.anchor_r7));
+
+        let verified = PolicyVerifierClient::new(env, verifier).verify_groth16_stored(proof, &pis);
+        if !verified {
+            return Err(VaultError::PolicyProofRejected);
+        }
+
+        let mut batch_total: u128 = 0;
+        for i in 0..m {
+            batch_total = batch_total.saturating_add(amounts.get_unchecked(i) as u128);
+        }
+        let updated = CommitmentAccumulator {
+            window_spent: if reset_r2 {
+                batch_total
+            } else {
+                running_spend.saturating_add(batch_total)
+            },
+            anchor_r2: if reset_r2 {
+                valid_after
+            } else {
+                accum.anchor_r2
+            },
+            window_count: if reset_r7 {
+                m as u64
+            } else {
+                prior_count.saturating_add(m as u64)
+            },
+            anchor_r7: if reset_r7 {
+                valid_after
+            } else {
+                accum.anchor_r7
+            },
+        };
+        Ok((accum_key, updated))
+    }
+
+    /// Encode a Soroban `Address` as the pp/2 payee field element: SHA-256 of the
+    /// address's ScVal XDR with the top 3 bits cleared (so the value is < 2^253 <
+    /// r). Byte-for-byte identical to `@clevercon/common`'s `payeeField`, which is
+    /// what binds a proof to the real payee.
+    fn address_to_field(env: &Env, address: &Address) -> BytesN<32> {
+        let xdr: Bytes = address.to_xdr(env);
+        let hash: BytesN<32> = env.crypto().sha256(&xdr).into();
+        let mut arr = hash.to_array();
+        arr[0] &= 0x1f;
+        BytesN::from_array(env, &arr)
+    }
+
+    /// Encode a stroops amount as a 32-byte big-endian scalar (16 zero bytes then
+    /// the u128), matching the circuit's `amount` input.
+    fn amount_to_field(env: &Env, amount: i128) -> BytesN<32> {
+        let mut arr = [0u8; 32];
+        arr[16..32].copy_from_slice(&(amount as u128).to_be_bytes());
+        BytesN::from_array(env, &arr)
+    }
+
+    /// Encode a u64 (ledger time / count) as a 32-byte big-endian scalar.
+    fn u64_to_field(env: &Env, v: u64) -> BytesN<32> {
+        let mut arr = [0u8; 32];
+        arr[24..32].copy_from_slice(&v.to_be_bytes());
+        BytesN::from_array(env, &arr)
+    }
+
+    /// Encode a u128 (running spend) as a 32-byte big-endian scalar.
+    fn u128_to_field(env: &Env, v: u128) -> BytesN<32> {
+        let mut arr = [0u8; 32];
+        arr[16..32].copy_from_slice(&v.to_be_bytes());
+        BytesN::from_array(env, &arr)
+    }
+
+    /// Accrue a protocol fee to the configured recipient's claimable balance for
+    /// `asset`. No-op when the fee is zero or no recipient is configured. Same
+    /// handling as the single proof-gated release.
+    fn accrue_protocol_fee(env: &Env, asset: &Address, fee: i128, task_id: u64) {
+        if fee <= 0 {
+            return;
+        }
+        if let Some(fee_config) = env
+            .storage()
+            .instance()
+            .get::<_, FeeConfig>(&DataKey::FeeConfig)
+        {
+            if let Some(ref recipient) = fee_config.recipient {
+                let fee_key = DataKey::AccruedFees(asset.clone());
+                let current: i128 = env.storage().instance().get(&fee_key).unwrap_or(0i128);
+                let new_accrued = current.checked_add(fee).expect("fee accrual overflow");
+                env.storage().instance().set(&fee_key, &new_accrued);
+                FeeAccruedEvent {
+                    asset: asset.clone(),
+                    recipient: recipient.clone(),
+                    fee_amount: fee,
+                    task_id,
+                }
+                .publish(env);
+            }
+        }
     }
 
     /// Orchestrator marks task complete.
@@ -1295,6 +3246,326 @@ impl AgentVault {
         Ok(accrued)
     }
 
+    // ── Private Spending Policy ─────────────────────────────────────────
+
+    /// Admin sets (or replaces) the external policy-verifier contract used by
+    /// [`Self::release_payment_proved`]. Mutable at any time by the admin,
+    /// deliberately mirroring [`Self::set_dispute_resolver`]: a committed task
+    /// is verified against whichever verifier is configured when its release is
+    /// attempted.
+    ///
+    /// Trust note: a verifier that returned `true` unconditionally would defeat
+    /// every committed task's policy. This is the same trust the contract
+    /// already places in the admin elsewhere (asset whitelist, dispute
+    /// resolver, protocol fee). Every change here is published as
+    /// [`PolicyVerifierSetEvent`] so a swap is observable on-chain.
+    pub fn set_policy_verifier(
+        env: Env,
+        admin: Address,
+        verifier: Address,
+    ) -> Result<(), VaultError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
+
+        let old: Option<Address> = env.storage().instance().get(&DataKey::PolicyVerifier);
+        env.storage()
+            .instance()
+            .set(&DataKey::PolicyVerifier, &verifier);
+        Self::extend_instance_ttl(&env);
+
+        PolicyVerifierSetEvent {
+            admin,
+            old,
+            new: verifier.clone(),
+        }
+        .publish(&env);
+        log!(&env, "Policy verifier set to: {}", verifier);
+        Ok(())
+    }
+
+    /// Pin a policy commitment to the caller's account. Only the user's own
+    /// signature can add one, and a proof-gated release's commitment must be a
+    /// member of this set (enforced on the release path). The set is bounded to
+    /// `MAX_POLICY_COMMITMENTS`; pinning one already present is a no-op. The
+    /// all-zero commitment is rejected (no proof could ever satisfy it).
+    pub fn set_policy_commitment(
+        env: Env,
+        user: Address,
+        commitment: BytesN<32>,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        if commitment == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(VaultError::InvalidCommitment);
+        }
+        let key = DataKey::PolicyCommitments(user.clone());
+        let mut set: Vec<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
+        if set.iter().any(|c| c == commitment) {
+            return Ok(()); // idempotent: already pinned
+        }
+        if set.len() >= MAX_POLICY_COMMITMENTS {
+            return Err(VaultError::CommitmentSetFull);
+        }
+        set.push_back(commitment.clone());
+        env.storage().persistent().set(&key, &set);
+        Self::extend_persistent_ttl(&env, &key);
+        PolicyCommitmentPinnedEvent { user, commitment }.publish(&env);
+        Ok(())
+    }
+
+    /// Remove a previously pinned policy commitment from the caller's account.
+    /// Only the user's own signature may unpin. Errors if it is not pinned.
+    pub fn unpin_policy_commitment(
+        env: Env,
+        user: Address,
+        commitment: BytesN<32>,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        let key = DataKey::PolicyCommitments(user.clone());
+        let set: Vec<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut next: Vec<BytesN<32>> = Vec::new(&env);
+        let mut found = false;
+        for c in set.iter() {
+            if c == commitment {
+                found = true;
+            } else {
+                next.push_back(c);
+            }
+        }
+        if !found {
+            return Err(VaultError::CommitmentNotPinned);
+        }
+        env.storage().persistent().set(&key, &next);
+        Self::extend_persistent_ttl(&env, &key);
+        PolicyCommitmentUnpinnedEvent { user, commitment }.publish(&env);
+        Ok(())
+    }
+
+    /// Returns the user's bounded set of pinned policy commitments.
+    pub fn get_policy_commitments(env: Env, user: Address) -> Vec<BytesN<32>> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PolicyCommitments(user))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// True if `commitment` is pinned to `user`'s account. The proof-gated
+    /// release path uses this to enforce set membership.
+    pub fn is_policy_commitment_pinned(env: Env, user: Address, commitment: BytesN<32>) -> bool {
+        Self::is_commitment_pinned(&env, &user, &commitment)
+    }
+
+    /// Internal, reference-taking twin of [`Self::is_policy_commitment_pinned`],
+    /// used on the proof-gated release path to enforce set membership without
+    /// cloning the owned arguments the public getter takes.
+    fn is_commitment_pinned(env: &Env, user: &Address, commitment: &BytesN<32>) -> bool {
+        let set: Vec<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PolicyCommitments(user.clone()))
+            .unwrap_or_else(|| Vec::new(env));
+        set.iter().any(|c| c == *commitment)
+    }
+
+    /// Pin (or replace) the user's global rule for a lane. The global applies to
+    /// every spend in that lane as an AND prescreen on the release path, so it
+    /// can only tighten, never loosen. Zero or one per lane; only the user's own
+    /// signature may set it. The all-zero commitment is rejected.
+    pub fn set_global(
+        env: Env,
+        user: Address,
+        lane: Lane,
+        commitment: BytesN<32>,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        if commitment == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(VaultError::InvalidCommitment);
+        }
+        let key = DataKey::GlobalCommitment(user.clone(), lane);
+        env.storage().persistent().set(&key, &commitment);
+        Self::extend_persistent_ttl(&env, &key);
+        GlobalRuleSetEvent {
+            user,
+            lane,
+            commitment,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Clear the user's global rule for a lane. Idempotent: a no-op if none set.
+    pub fn clear_global(env: Env, user: Address, lane: Lane) -> Result<(), VaultError> {
+        user.require_auth();
+        let key = DataKey::GlobalCommitment(user.clone(), lane);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+            GlobalRuleClearedEvent { user, lane }.publish(&env);
+        }
+        Ok(())
+    }
+
+    /// Returns the user's global rule commitment for a lane, if one is set.
+    pub fn get_global(env: Env, user: Address, lane: Lane) -> Option<BytesN<32>> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::GlobalCommitment(user, lane))
+    }
+
+    /// Store (or replace) a named cleartext PUBLIC rule: the full clause vocabulary,
+    /// enforced directly by the vault on every session spend that runs under it.
+    /// Wallet-signed.
+    pub fn set_public_rule(
+        env: Env,
+        user: Address,
+        rule_id: BytesN<32>,
+        rule: PublicRule,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        if rule.per_payment_max < 0
+            || rule.per_payment_min < 0
+            || rule.rolling_cap < 0
+            || rule.denylist_threshold < 0
+        {
+            return Err(VaultError::InvalidPublicParams);
+        }
+        if rule.allowlist.len() > MAX_SESSION_ALLOWLIST
+            || rule.denylist.len() > MAX_SESSION_ALLOWLIST
+        {
+            return Err(VaultError::InvalidPublicParams);
+        }
+        let key = DataKey::PublicRule(user.clone(), rule_id.clone());
+        env.storage().persistent().set(&key, &rule);
+        Self::extend_persistent_ttl(&env, &key);
+        PublicRuleSetEvent { user, rule_id }.publish(&env);
+        Ok(())
+    }
+
+    /// Remove a named public rule. If it is the account global-public, the global
+    /// pointer is cleared too. Idempotent.
+    pub fn clear_public_rule(
+        env: Env,
+        user: Address,
+        rule_id: BytesN<32>,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        let key = DataKey::PublicRule(user.clone(), rule_id.clone());
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+            let gkey = DataKey::PublicGlobalId(user.clone());
+            if let Some(gid) = env.storage().persistent().get::<_, BytesN<32>>(&gkey) {
+                if gid == rule_id {
+                    env.storage().persistent().remove(&gkey);
+                    GlobalPublicClearedEvent { user: user.clone() }.publish(&env);
+                }
+            }
+            PublicRuleClearedEvent { user, rule_id }.publish(&env);
+        }
+        Ok(())
+    }
+
+    /// Returns a named public rule, if it exists.
+    pub fn get_public_rule(env: Env, user: Address, rule_id: BytesN<32>) -> Option<PublicRule> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PublicRule(user, rule_id))
+    }
+
+    /// Mark one of the user's public rules as the account global-public (AND-applied
+    /// to every public spend, on top of the key's own rule/cap). The rule must exist.
+    /// Optional: nothing requires a global. Wallet-signed.
+    pub fn set_global_public(
+        env: Env,
+        user: Address,
+        rule_id: BytesN<32>,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::PublicRule(user.clone(), rule_id.clone()))
+        {
+            return Err(VaultError::PublicRuleNotFound);
+        }
+        let key = DataKey::PublicGlobalId(user.clone());
+        env.storage().persistent().set(&key, &rule_id);
+        Self::extend_persistent_ttl(&env, &key);
+        GlobalPublicSetEvent { user, rule_id }.publish(&env);
+        Ok(())
+    }
+
+    /// Clear the account global-public pointer. Idempotent: a no-op if none set.
+    pub fn clear_global_public(env: Env, user: Address) -> Result<(), VaultError> {
+        user.require_auth();
+        let key = DataKey::PublicGlobalId(user.clone());
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+            GlobalPublicClearedEvent { user }.publish(&env);
+        }
+        Ok(())
+    }
+
+    /// Returns the rule_id of the account global-public rule, if one is set.
+    pub fn get_global_public(env: Env, user: Address) -> Option<BytesN<32>> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PublicGlobalId(user))
+    }
+
+    /// Live usage for a public rule (rolling-window spend/count + lifetime totals),
+    /// so an owner can see how much of each window is used/left and how many times the
+    /// rule has authorized a spend.
+    pub fn get_public_usage(env: Env, user: Address, rule_id: BytesN<32>) -> Option<PublicUsage> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PublicAccum(user, rule_id))
+    }
+
+    /// Returns the configured policy-verifier contract, or `None` if the
+    /// proof-gated release path has not been enabled.
+    pub fn get_policy_verifier(env: Env) -> Option<Address> {
+        let result = env.storage().instance().get(&DataKey::PolicyVerifier);
+        Self::extend_instance_ttl(&env);
+        result
+    }
+
+    /// Returns the private spending-policy commitment bound to `task_id` by
+    /// [`Self::create_task_with_policy`], or `None` for a plainly-created task
+    /// (or an unknown task). Presence of a commitment is exactly what routes a
+    /// task to the proof-gated release path.
+    pub fn get_task_policy(env: Env, task_id: u64) -> Option<BytesN<32>> {
+        Self::get_task(env, task_id).and_then(|task| task.policy_commitment)
+    }
+
+    /// The per-commitment R2/R7 accumulator a client must read BEFORE proving a
+    /// pp/2 batch, so the proof binds to the same window state the vault will
+    /// re-derive at settlement. Returns a fresh (all-zero) accumulator for a
+    /// commitment that has never released, which the circuit treats as window 1.
+    pub fn get_commitment_accum(env: Env, commitment: BytesN<32>) -> CommitmentAccumulator {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CommitmentAccum(commitment))
+            .unwrap_or(CommitmentAccumulator {
+                anchor_r2: 0,
+                window_spent: 0,
+                anchor_r7: 0,
+                window_count: 0,
+            })
+    }
+
     /// Computes the fee to deduct from `amount` based on the current fee
     /// config. Returns 0 when no fee is configured or the recipient is absent.
     ///
@@ -1397,20 +3668,6 @@ impl AgentVault {
             }
         }
 
-        if let Some((refund_to_user, payout_to_orchestrator)) = dispute_split {
-            let token_client = token::Client::new(env, &task.asset);
-            if refund_to_user > 0 {
-                token_client.transfer(&env.current_contract_address(), &task.user, &refund_to_user);
-            }
-            if payout_to_orchestrator > 0 {
-                token_client.transfer(
-                    &env.current_contract_address(),
-                    &task.orchestrator,
-                    &payout_to_orchestrator,
-                );
-            }
-        }
-
         let config_key = DataKey::UserConfig(task.user.clone());
         let mut config: UserConfig = env
             .storage()
@@ -1449,6 +3706,32 @@ impl AgentVault {
         env.storage().persistent().set(&task_key, &task);
         Self::extend_persistent_ttl(env, &task_key);
         Self::remove_task_step_releases(env, task_id);
+        // Prune the task's consumed-nullifier set: once the task is completed,
+        // both release paths are blocked by the `completed` guard, so these
+        // markers are dead weight — reclaim their rent. `policy_commitment`
+        // stays on the (now completed) task record as an audit trail, mirroring
+        // how `disputed` is kept; nothing refreshes it, so it lapses naturally.
+        Self::remove_task_nullifiers(env, task_id);
+
+        // CEI ordering: task.completed, asset_account, and config are all
+        // committed above BEFORE the dispute-split transfers below. A token
+        // whose `transfer` re-enters this contract (e.g. via a transfer
+        // hook) will see task.completed == true and be rejected by the
+        // guard at the top of this function, so it cannot trigger a second
+        // payout for the same task. Do not move these transfers earlier.
+        if let Some((refund_to_user, payout_to_orchestrator)) = dispute_split {
+            let token_client = token::Client::new(env, &task.asset);
+            if refund_to_user > 0 {
+                token_client.transfer(&env.current_contract_address(), &task.user, &refund_to_user);
+            }
+            if payout_to_orchestrator > 0 {
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &task.orchestrator,
+                    &payout_to_orchestrator,
+                );
+            }
+        }
 
         if dispute_split.is_none() {
             let refund = task.plan_cost - task.spent;
@@ -1532,6 +3815,92 @@ impl AgentVault {
         if env.storage().persistent().has(&ids_key) {
             env.storage().persistent().remove(&ids_key);
         }
+    }
+
+    /// Marks `nullifier` as consumed for `task_id` and appends it to the
+    /// per-task nullifier index. Mirrors [`Self::record_step_release`]: the
+    /// index is bounded by `MAX_RELEASE_STEPS_PER_TASK` (a task can never
+    /// release more steps than that) so a hostile orchestrator cannot mint
+    /// unbounded persistent keys, and it is removed wholesale on finalization.
+    /// The caller has already verified the marker is absent; the dedup scan
+    /// here only guards the index against a double push.
+    fn record_task_nullifier(
+        env: &Env,
+        task_id: u64,
+        nullifier: &BytesN<32>,
+    ) -> Result<(), VaultError> {
+        let ids_key = DataKey::TaskNullifierIds(task_id);
+        let mut ids: Vec<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&ids_key)
+            .unwrap_or(Vec::new(env));
+
+        if !ids.iter().any(|id| &id == nullifier) {
+            if ids.len() >= MAX_RELEASE_STEPS_PER_TASK {
+                return Err(VaultError::TooManyStepReleases);
+            }
+            ids.push_back(nullifier.clone());
+            env.storage().persistent().set(&ids_key, &ids);
+            Self::extend_persistent_ttl(env, &ids_key);
+        }
+
+        let key = DataKey::TaskNullifier(task_id, nullifier.clone());
+        env.storage().persistent().set(&key, &());
+        Self::extend_persistent_ttl(env, &key);
+        Ok(())
+    }
+
+    /// Refreshes the TTL of a task's whole nullifier set as one unit — the
+    /// index and every marker it references — so no part expires alone and
+    /// re-opens a replay. Mirrors [`Self::extend_task_step_ids_ttl`].
+    fn extend_task_nullifier_ids_ttl(env: &Env, task_id: u64) {
+        let ids_key = DataKey::TaskNullifierIds(task_id);
+        let ids: Vec<BytesN<32>> = match env.storage().persistent().get(&ids_key) {
+            Some(ids) => ids,
+            None => return,
+        };
+        Self::extend_persistent_ttl(env, &ids_key);
+        for nullifier in ids.iter() {
+            let key = DataKey::TaskNullifier(task_id, nullifier);
+            if env.storage().persistent().has(&key) {
+                Self::extend_persistent_ttl(env, &key);
+            }
+        }
+    }
+
+    /// Removes a task's consumed-nullifier markers and their index. Called
+    /// from [`Self::finalize_task`]; mirrors [`Self::remove_task_step_releases`].
+    fn remove_task_nullifiers(env: &Env, task_id: u64) {
+        let ids_key = DataKey::TaskNullifierIds(task_id);
+        let ids: Vec<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&ids_key)
+            .unwrap_or(Vec::new(env));
+        for nullifier in ids.iter() {
+            let key = DataKey::TaskNullifier(task_id, nullifier);
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().remove(&key);
+            }
+        }
+        if env.storage().persistent().has(&ids_key) {
+            env.storage().persistent().remove(&ids_key);
+        }
+    }
+
+    /// Record a globally-scoped consumed nullifier for the pp/2 BATCH path. Unlike
+    /// the per-task markers of `release_payment_proved`, a batch nullifier is keyed
+    /// by its own hash, so the SAME release can never be replayed under a different
+    /// task. It is deliberately NOT indexed or reclaimed on finalization: a standard
+    /// ~30-day persistent TTL outlives the capped validity window
+    /// ([`MAX_VALIDITY_SECS`]), and past `valid_before` the stale-proof check
+    /// rejects any replay — so the marker may archive afterwards, keeping storage
+    /// bounded with no replay window. The caller has already verified it is absent.
+    fn record_nullifier(env: &Env, nullifier: &BytesN<32>) {
+        let key = DataKey::Nullifier(nullifier.clone());
+        env.storage().persistent().set(&key, &());
+        Self::extend_persistent_ttl(env, &key);
     }
 
     /// Loads the user's asset account balance, or returns a zeroed struct if not found.
@@ -1978,6 +4347,27 @@ impl AgentVault {
             new_admin,
         }
         .publish(&env);
+        Ok(())
+    }
+
+    /// Admin upgrades this contract's wasm in place, preserving the contract id
+    /// and all stored state (balances, tasks, commitments). This is what lets
+    /// later phases (pinned commitments, keyless auth, bonds) ship as same-id
+    /// upgrades rather than a fresh deploy that would strand user funds. The
+    /// caller must be the stored admin, and `new_wasm_hash` must already be
+    /// installed on-chain.
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), VaultError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(VaultError::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(VaultError::Unauthorized);
+        }
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Self::extend_instance_ttl(&env);
         Ok(())
     }
 

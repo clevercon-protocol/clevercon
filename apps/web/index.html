@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <meta name="theme-color" content="#6d49d6" />
+    <meta
+      name="description"
+      content="CleverCon: a non-custodial, private spending-control layer and agent economy for AI agents on Stellar."
+    />
+    <title>CleverCon</title>
+    <!-- Critical, inline CSS so the first paint is instant and dark (no white
+         flash on mobile) and a boot loader shows while the app bundle parses.
+         React clears #root on mount, which removes the loader automatically. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #0b0d13;
+        color: #e7e9ee;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+      }
+      #cc-boot {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 24px;
+        background:
+          radial-gradient(60% 50% at 50% 42%, rgba(109, 73, 214, 0.16), transparent 70%), #0b0d13;
+        animation: cc-fade 0.5s ease both;
+      }
+      #cc-boot .cc-logo {
+        display: flex;
+        align-items: center;
+        gap: 13px;
+      }
+      #cc-boot .cc-mark {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 48px;
+        height: 48px;
+        border-radius: 15px;
+        background: linear-gradient(135deg, #8b5cf6, #4338ca);
+        box-shadow: 0 14px 38px rgba(109, 73, 214, 0.5);
+        animation: cc-breathe 2.4s ease-in-out infinite;
+      }
+      #cc-boot .cc-mark svg {
+        width: 29px;
+        height: 29px;
+      }
+      #cc-boot .cc-word {
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        background: linear-gradient(90deg, #ffffff, #c4b5fd);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        -webkit-text-fill-color: transparent;
+      }
+      #cc-boot .cc-bar {
+        position: relative;
+        width: 184px;
+        height: 3px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+      #cc-boot .cc-bar > span {
+        position: absolute;
+        top: 0;
+        left: -45%;
+        height: 100%;
+        width: 45%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, transparent, #a78bfa, #6366f1, transparent);
+        animation: cc-slide 1.25s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+      }
+      @keyframes cc-breathe {
+        0%,
+        100% {
+          transform: scale(1);
+          box-shadow: 0 12px 30px rgba(109, 73, 214, 0.35);
+        }
+        50% {
+          transform: scale(1.07);
+          box-shadow: 0 18px 46px rgba(109, 73, 214, 0.62);
+        }
+      }
+      @keyframes cc-slide {
+        0% {
+          left: -45%;
+        }
+        100% {
+          left: 100%;
+        }
+      }
+      @keyframes cc-fade {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #cc-boot .cc-mark,
+        #cc-boot .cc-bar > span,
+        #cc-boot {
+          animation: none;
+        }
+        #cc-boot .cc-bar > span {
+          left: 0;
+          width: 100%;
+          opacity: 0.5;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="cc-boot" aria-hidden="true">
+        <div class="cc-logo">
+          <span class="cc-mark">
+            <svg
+              viewBox="0 0 32 32"
+              fill="none"
+              stroke="#fff"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <g transform="translate(4 4)">
+                <path
+                  d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"
+                />
+                <path
+                  d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"
+                />
+                <path
+                  d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"
+                />
+              </g>
+            </svg>
+          </span>
+          <span class="cc-word">CleverCon</span>
+        </div>
+        <div class="cc-bar"><span></span></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

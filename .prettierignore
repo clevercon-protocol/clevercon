@@ -3,8 +3,6 @@ dist
 data
 logs
 .local
-packages/dashboard
-packages/orchestrator/public
 contracts/*/target
 *.md
 *.yml

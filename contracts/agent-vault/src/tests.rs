@@ -1,7 +1,12 @@
-use crate::{AgentVault, AgentVaultClient, DataKey, TaskStatus, VaultError};
+mod malicious_token;
+mod mock_verifier;
+
+use crate::{AgentVault, AgentVaultClient, DataKey, Lane, TaskStatus, VaultError};
+use malicious_token::{MaliciousToken, MaliciousTokenClient, ReentryAction, ReentryConfig};
+use mock_verifier::{MockVerifier, MockVerifierClient, VerifyMode};
 use soroban_sdk::testutils::storage::Persistent as _;
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
-use soroban_sdk::{token, Address, Env, IntoVal, Symbol, Val};
+use soroban_sdk::{token, Address, Bytes, BytesN, Env, IntoVal, Symbol, Val};
 
 struct TestEnv {
     env: Env,
@@ -2997,7 +3002,9 @@ mod invariant_tests {
 #[test]
 fn test_version_returns_contract_version() {
     let test_env = setup_test();
-    assert_eq!(test_env.client.version(), 5);
+    // Bumped to 6 by #122: TaskInfo gained `policy_commitment` and new
+    // policy/nullifier storage keys were added.
+    assert_eq!(test_env.client.version(), 6);
 }
 
 // 13. Dispute & Arbitration Tests
@@ -3847,4 +3854,2451 @@ fn test_fee_change_not_retroactive() {
     // Total orchestrator: 1000 (full, no fee) + 900 (after 10% fee) = 1900
     assert_eq!(test_env.token_client.balance(&orchestrator), 1_900);
     assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 100);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Reentrancy hardening (#104): adversarial malicious-token tests
+// ─────────────────────────────────────────────────────────────────────────
+
+struct MaliciousSetup {
+    env: Env,
+    admin: Address,
+    mal_token: Address,
+    mal_client: MaliciousTokenClient<'static>,
+    contract_id: Address,
+    client: AgentVaultClient<'static>,
+}
+
+fn setup_malicious() -> MaliciousSetup {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let mal_token = env.register(MaliciousToken, ());
+    let mal_client = MaliciousTokenClient::new(&env, &mal_token);
+
+    let contract_id = env.register(AgentVault, ());
+    let client = AgentVaultClient::new(&env, &contract_id);
+
+    // init() needs a real-shaped usdc_sac address for the required-asset
+    // slot; the malicious token is added as an additional supported asset.
+    let usdc_sac = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    client.init(&admin, &usdc_sac);
+    client.add_asset(&admin, &mal_token);
+
+    MaliciousSetup {
+        env,
+        admin,
+        mal_token,
+        mal_client,
+        contract_id,
+        client,
+    }
+}
+
+fn disarmed_config(setup: &MaliciousSetup) -> ReentryConfig {
+    // A neutral config with `action = None`; individual tests overwrite the
+    // fields relevant to the action they arm.
+    let zero_addr = setup.admin.clone();
+    ReentryConfig {
+        vault: setup.contract_id.clone(),
+        action: ReentryAction::None,
+        withdraw_user: zero_addr.clone(),
+        withdraw_asset: setup.mal_token.clone(),
+        withdraw_amount: 0,
+        release_orchestrator: zero_addr.clone(),
+        release_task_id: 0,
+        release_step_id: 0,
+        release_asset: setup.mal_token.clone(),
+        release_amount: 0,
+    }
+}
+
+#[test]
+fn test_reentrant_withdraw_cannot_double_withdraw() {
+    let setup = setup_malicious();
+    let user = Address::generate(&setup.env);
+
+    setup.mal_client.mint(&user, &1_000);
+    setup.client.deposit(&user, &setup.mal_token, &1_000);
+    assert_eq!(setup.client.get_balance(&user, &setup.mal_token), 1_000);
+
+    // Arm: while the vault is paying the user 600, the malicious token's
+    // transfer hook tries to withdraw ANOTHER 600 for the same user before
+    // the outer withdraw call has returned.
+    let mut cfg = disarmed_config(&setup);
+    cfg.action = ReentryAction::Withdraw;
+    cfg.withdraw_user = user.clone();
+    cfg.withdraw_asset = setup.mal_token.clone();
+    cfg.withdraw_amount = 600;
+    setup.mal_client.configure(&cfg);
+
+    setup.client.withdraw(&user, &setup.mal_token, &600);
+
+    // CEI fix: the first withdraw already debited the vault balance before
+    // calling transfer, so the re-entrant second withdraw for 600 must have
+    // been rejected (only 400 remained available).
+    assert!(setup.mal_client.reentry_attempted());
+    assert!(!setup.mal_client.reentry_succeeded());
+
+    // Exactly one payout of 600 left the vault — not 1200.
+    assert_eq!(setup.mal_client.balance(&user), 600);
+    assert_eq!(setup.client.get_balance(&user, &setup.mal_token), 400);
+    assert_eq!(setup.client.get_available(&user, &setup.mal_token), 400);
+}
+
+#[test]
+fn test_reentrant_release_payment_cannot_exceed_plan_cost() {
+    let setup = setup_malicious();
+    let user = Address::generate(&setup.env);
+    let orchestrator = Address::generate(&setup.env);
+
+    setup.mal_client.mint(&user, &1_000);
+    setup.client.deposit(&user, &setup.mal_token, &1_000);
+    setup.client.register_orchestrator(
+        &user,
+        &orchestrator,
+        &soroban_sdk::String::from_str(&setup.env, "mal-orchestrator"),
+    );
+    let task_id = setup
+        .client
+        .create_task(&orchestrator, &setup.mal_token, &1_000);
+
+    // Arm: while step 1 releases 700, the token's transfer hook tries to
+    // release a DIFFERENT step (step 2) for another 700 — which would blow
+    // past plan_cost (1000) if task.spent weren't bumped before the transfer.
+    let mut cfg = disarmed_config(&setup);
+    cfg.action = ReentryAction::ReleasePayment;
+    cfg.release_orchestrator = orchestrator.clone();
+    cfg.release_task_id = task_id;
+    cfg.release_step_id = 2;
+    cfg.release_asset = setup.mal_token.clone();
+    cfg.release_amount = 700;
+    setup.mal_client.configure(&cfg);
+
+    setup
+        .client
+        .release_payment(&orchestrator, &task_id, &1, &setup.mal_token, &700);
+
+    assert!(setup.mal_client.reentry_attempted());
+    assert!(!setup.mal_client.reentry_succeeded());
+
+    let task = setup.client.get_task(&task_id).unwrap();
+    assert!(task.spent <= task.plan_cost);
+    assert_eq!(task.spent, 700);
+    assert_eq!(setup.mal_client.balance(&orchestrator), 700);
+}
+
+#[test]
+fn test_cross_function_reentrancy_release_payment_into_withdraw() {
+    let setup = setup_malicious();
+    let user = Address::generate(&setup.env);
+    let orchestrator = Address::generate(&setup.env);
+
+    // Extra unlocked funds sitting in the user's balance, outside the task,
+    // that a cross-function reentrant withdraw would try to drain.
+    setup.mal_client.mint(&user, &1_500);
+    setup.client.deposit(&user, &setup.mal_token, &1_500);
+    setup.client.register_orchestrator(
+        &user,
+        &orchestrator,
+        &soroban_sdk::String::from_str(&setup.env, "mal-orchestrator-2"),
+    );
+    let task_id = setup
+        .client
+        .create_task(&orchestrator, &setup.mal_token, &500);
+    // Available balance outside the task's locked 500: 1500 - 500 = 1000.
+    assert_eq!(setup.client.get_available(&user, &setup.mal_token), 1_000);
+
+    // Arm: release_payment's transfer hook re-enters as a WITHDRAW for the
+    // user, not another release_payment.
+    let mut cfg = disarmed_config(&setup);
+    cfg.action = ReentryAction::Withdraw;
+    cfg.withdraw_user = user.clone();
+    cfg.withdraw_asset = setup.mal_token.clone();
+    cfg.withdraw_amount = 1_000;
+    setup.mal_client.configure(&cfg);
+
+    setup
+        .client
+        .release_payment(&orchestrator, &task_id, &1, &setup.mal_token, &500);
+
+    // The cross-function reentrant withdraw is legitimate on its own (the
+    // 1000 available balance is real and untouched by the task) — CEI
+    // ordering doesn't need to block it, only ensure accounting stays
+    // consistent. release_payment never touches asset_account.balance
+    // directly (only withdraw and finalize_task do), so the vault ledger
+    // here must equal deposit minus whatever the reentrant withdraw paid
+    // out — independent of the orchestrator's separate payout.
+    assert!(setup.mal_client.reentry_attempted());
+    let user_asset_balance = setup.client.get_balance(&user, &setup.mal_token);
+    let user_token_balance = setup.mal_client.balance(&user);
+    let orch_token_balance = setup.mal_client.balance(&orchestrator);
+
+    assert_eq!(orch_token_balance, 500);
+    // Empirically the reentrant withdraw here does not succeed (verified via
+    // cargo test, not assumed): reentry_succeeded() is false and the vault's
+    // own balance write never committed, so user_token_balance stays 0. The
+    // safety property under test doesn't depend on which way this goes --
+    // only that whatever happens is consistent and no double payout occurs.
+    assert!(!setup.mal_client.reentry_succeeded());
+    assert_eq!(user_token_balance, 0);
+    assert_eq!(
+        user_asset_balance,
+        1_500 - user_token_balance,
+        "vault ledger must exactly match tokens actually paid out via withdraw"
+    );
+    // The task's 500 stays locked until finalize_task runs (not yet called
+    // here), so available balance reflects that regardless of the reentrant
+    // withdraw's outcome.
+    assert_eq!(
+        setup.client.get_available(&user, &setup.mal_token),
+        user_asset_balance - 500
+    );
+}
+
+#[test]
+fn test_finalize_task_dispute_reentry_blocked_by_completed_flag() {
+    let setup = setup_malicious();
+    let user = Address::generate(&setup.env);
+    let orchestrator = Address::generate(&setup.env);
+
+    setup.mal_client.mint(&user, &1_000);
+    setup.client.deposit(&user, &setup.mal_token, &1_000);
+    setup.client.register_orchestrator(
+        &user,
+        &orchestrator,
+        &soroban_sdk::String::from_str(&setup.env, "mal-orchestrator-3"),
+    );
+    let task_id = setup
+        .client
+        .create_task(&orchestrator, &setup.mal_token, &1_000);
+    setup
+        .client
+        .set_dispute_resolver(&setup.admin, &setup.admin);
+    setup.client.raise_dispute(&user, &task_id);
+
+    // Arm: the dispute refund/payout transfer's hook tries to re-enter with
+    // ANOTHER withdraw before this contract call returns.
+    let mut cfg = disarmed_config(&setup);
+    cfg.action = ReentryAction::Withdraw;
+    cfg.withdraw_user = user.clone();
+    cfg.withdraw_asset = setup.mal_token.clone();
+    cfg.withdraw_amount = 500;
+    setup.mal_client.configure(&cfg);
+
+    setup
+        .client
+        .resolve_dispute(&setup.admin, &task_id, &500, &500);
+
+    // The full 1000 was locked into this single task, so
+    // finalize_task's asset_account.balance write (committed before either
+    // dispute transfer runs) already brings the user's vault balance to 0.
+    // The reentrant withdraw therefore has nothing left to take — proving
+    // task.completed and the balance write are both visible to the
+    // reentrant call before any token leaves the contract.
+    assert!(setup.mal_client.reentry_attempted());
+    assert!(!setup.mal_client.reentry_succeeded());
+
+    let task = setup.client.get_task(&task_id).unwrap();
+    assert!(task.completed);
+    assert_eq!(setup.client.get_balance(&user, &setup.mal_token), 0);
+    // Refund (500) + orchestrator payout (500) == plan_cost, paid exactly once.
+    assert_eq!(setup.mal_client.balance(&user), 500);
+    assert_eq!(setup.mal_client.balance(&orchestrator), 500);
+}
+
+#[test]
+fn test_paused_reentrant_release_payment_blocked_via_withdraw_hook() {
+    let setup = setup_malicious();
+    let user = Address::generate(&setup.env);
+    let orchestrator = Address::generate(&setup.env);
+
+    setup.mal_client.mint(&user, &1_000);
+    setup.client.deposit(&user, &setup.mal_token, &1_000);
+    setup.client.register_orchestrator(
+        &user,
+        &orchestrator,
+        &soroban_sdk::String::from_str(&setup.env, "mal-orchestrator-4"),
+    );
+    // create_task itself checks require_not_paused, so the task must exist
+    // BEFORE the vault is paused.
+    let task_id = setup
+        .client
+        .create_task(&orchestrator, &setup.mal_token, &400);
+    let task_before = setup.client.get_task(&task_id).unwrap();
+
+    setup.client.pause(&setup.admin);
+
+    // withdraw intentionally bypasses the pause guard (it's the user's exit
+    // hatch), so it's still callable here. Arm the hook to try a reentrant
+    // release_payment from inside withdraw's transfer — release_payment DOES
+    // check require_not_paused, so this must be rejected even though it was
+    // triggered from a call that itself ignores pause.
+    let mut cfg = disarmed_config(&setup);
+    cfg.action = ReentryAction::ReleasePayment;
+    cfg.release_orchestrator = orchestrator.clone();
+    cfg.release_task_id = task_id;
+    cfg.release_step_id = 1;
+    cfg.release_asset = setup.mal_token.clone();
+    cfg.release_amount = 400;
+    setup.mal_client.configure(&cfg);
+
+    // available = balance(1000) - locked(400) = 600.
+    setup.client.withdraw(&user, &setup.mal_token, &600);
+
+    assert!(setup.mal_client.reentry_attempted());
+    assert!(!setup.mal_client.reentry_succeeded());
+
+    // The reentrant release_payment must not have moved anything: task
+    // untouched, nothing paid to the orchestrator, locked funds untouched.
+    let task_after = setup.client.get_task(&task_id).unwrap();
+    assert_eq!(task_after.spent, task_before.spent);
+    assert!(!task_after.completed);
+    assert_eq!(setup.mal_client.balance(&orchestrator), 0);
+
+    // The outer withdraw (which does bypass pause) completed normally.
+    assert_eq!(setup.mal_client.balance(&user), 600);
+    assert_eq!(setup.client.get_balance(&user, &setup.mal_token), 400);
+    // Locked (400) is untouched by either call, so available is 0.
+    assert_eq!(setup.client.get_available(&user, &setup.mal_token), 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Private spending-policy commitment + proof-gated release (#122)
+//
+// Every test below demonstrates one specific way the policy gate could be
+// silently bypassed, and asserts it is rejected:
+//   * a committed task paid through the plain (unconstrained) path,
+//   * a plain task paid through the proof path,
+//   * a nullifier replayed for a second release,
+//   * a proof whose bound (payee, amount) differs from the release,
+//   * a release attempted with no verifier configured (must fail closed),
+//   * a rejected proof burning a nullifier a later valid proof needs,
+//   * the verifier being consulted for an over-budget request,
+//   * a disputed / stale-forced committed task still being paid.
+// ─────────────────────────────────────────────────────────────────────────
+
+struct PolicySetup {
+    env: Env,
+    admin: Address,
+    usdc_sac: Address,
+    contract_id: Address,
+    client: AgentVaultClient<'static>,
+    token_client: token::Client<'static>,
+    verifier_id: Address,
+    verifier: MockVerifierClient<'static>,
+    user: Address,
+    orchestrator: Address,
+}
+
+fn setup_policy() -> PolicySetup {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let usdc_sac = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_id = env.register(AgentVault, ());
+    let client = AgentVaultClient::new(&env, &contract_id);
+    let token_client = token::Client::new(&env, &usdc_sac);
+    let token_admin_client = token::StellarAssetClient::new(&env, &usdc_sac);
+
+    let verifier_id = env.register(MockVerifier, ());
+    let verifier = MockVerifierClient::new(&env, &verifier_id);
+
+    client.init(&admin, &usdc_sac);
+
+    let user = Address::generate(&env);
+    let orchestrator = Address::generate(&env);
+    token_admin_client.mint(&user, &100_000);
+    client.deposit(&user, &usdc_sac, &50_000);
+    client.register_orchestrator(
+        &user,
+        &orchestrator,
+        &soroban_sdk::String::from_str(&env, "policy-orch"),
+    );
+
+    PolicySetup {
+        env,
+        admin,
+        usdc_sac,
+        contract_id,
+        client,
+        token_client,
+        verifier_id,
+        verifier,
+        user,
+        orchestrator,
+    }
+}
+
+/// A non-zero 32-byte commitment seeded distinctly per test.
+fn commitment_of(env: &Env, seed: u8) -> BytesN<32> {
+    let mut b = [0u8; 32];
+    b[0] = seed;
+    b[31] = 0xAA;
+    BytesN::from_array(env, &b)
+}
+
+/// A 32-byte nullifier seeded distinctly per call.
+fn nullifier_of(env: &Env, seed: u8) -> BytesN<32> {
+    let mut b = [0x11u8; 32];
+    b[0] = seed;
+    BytesN::from_array(env, &b)
+}
+
+/// Opaque proof bytes — their content is irrelevant to the vault; the mock
+/// verifier ignores them and the vault never inspects, logs, or emits them.
+fn dummy_proof(env: &Env) -> Bytes {
+    Bytes::from_array(env, &[9, 8, 7, 6, 5, 4, 3, 2, 1])
+}
+
+/// A zeroed Groth16 proof — content is irrelevant to the vault; the mock
+/// verifier ignores it. The real proof is exercised in the zk-fixture CI.
+fn dummy_groth16_proof(env: &Env) -> crate::Groth16Proof {
+    crate::Groth16Proof {
+        a: BytesN::from_array(env, &[0u8; 96]),
+        b: BytesN::from_array(env, &[0u8; 192]),
+        c: BytesN::from_array(env, &[0u8; 96]),
+    }
+}
+
+/// Pin `c` to the policy user's account and create a committed task of `cost`,
+/// returning the task id. The proof-gated release path now requires the task's
+/// commitment to be in the owner's pinned set, so the standard setup pins first.
+fn committed_task(s: &PolicySetup, cost: i128, c: &BytesN<32>) -> u64 {
+    s.client.set_policy_commitment(&s.user, c);
+    s.client
+        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &cost, c)
+}
+
+#[test]
+fn test_release_payment_proved_rejects_unpinned_commitment() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    // A task whose commitment the owner never pinned: the release is rejected
+    // before the verifier is contacted and no funds move, even though the mock
+    // verifier would accept any proof.
+    let c = commitment_of(&s.env, 42);
+    let task_id = s
+        .client
+        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_234, &c);
+    let payee = Address::generate(&s.env);
+    let nf = nullifier_of(&s.env, 42);
+    let proof = dummy_proof(&s.env);
+
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &400,
+        &payee,
+        &nf,
+        &proof,
+    );
+    assert!(res == Err(Ok(VaultError::CommitmentNotAuthorized)));
+    assert_eq!(s.token_client.balance(&payee), 0);
+    assert_eq!(s.verifier.calls(), 0);
+}
+
+#[test]
+fn test_release_payment_proved_batch_happy_path() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 7);
+    let task_id = committed_task(&s, 5_000, &c);
+
+    let p1 = Address::generate(&s.env);
+    let p2 = Address::generate(&s.env);
+    let p3 = Address::generate(&s.env);
+    let payees = soroban_sdk::vec![&s.env, p1.clone(), p2.clone(), p3.clone()];
+    let amounts = soroban_sdk::vec![&s.env, 400i128, 300i128, 200i128];
+    let nullifiers = soroban_sdk::vec![
+        &s.env,
+        nullifier_of(&s.env, 20),
+        nullifier_of(&s.env, 21),
+        nullifier_of(&s.env, 22)
+    ];
+    let proof = dummy_groth16_proof(&s.env);
+
+    // One proof authorizes all three transfers. The default test ledger time is
+    // 0, which lies inside the [0, 86_400] validity window (within MAX_VALIDITY_SECS).
+    let ok = s.client.release_payment_proved_batch(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+    );
+    assert!(ok);
+    assert_eq!(s.token_client.balance(&p1), 400);
+    assert_eq!(s.token_client.balance(&p2), 300);
+    assert_eq!(s.token_client.balance(&p3), 200);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 900);
+    assert_eq!(s.verifier.calls(), 1);
+
+    // A nullifier replay within a later batch is rejected (no double spend).
+    let replay = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 20)];
+    let one = soroban_sdk::vec![&s.env, 100i128];
+    let one_payee = soroban_sdk::vec![&s.env, Address::generate(&s.env)];
+    let res = s.client.try_release_payment_proved_batch(
+        &s.orchestrator,
+        &task_id,
+        &2,
+        &s.usdc_sac,
+        &one_payee,
+        &one,
+        &replay,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+    );
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_release_payment_proved_batch_rejects_and_moves_no_funds() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::RejectAll);
+
+    let c = commitment_of(&s.env, 8);
+    let task_id = committed_task(&s, 5_000, &c);
+    let payee = Address::generate(&s.env);
+    let payees = soroban_sdk::vec![&s.env, payee.clone()];
+    let amounts = soroban_sdk::vec![&s.env, 400i128];
+    let nullifiers = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 30)];
+    let proof = dummy_groth16_proof(&s.env);
+
+    let res = s.client.try_release_payment_proved_batch(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+    );
+    assert!(res.is_err());
+    // Fail-closed: no funds moved, nothing spent.
+    assert_eq!(s.token_client.balance(&payee), 0);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 0);
+}
+
+#[test]
+fn test_release_payment_proved_batch_rejects_outside_validity_window() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+    s.env.ledger().set_timestamp(5000);
+
+    let c = commitment_of(&s.env, 9);
+    let task_id = committed_task(&s, 5_000, &c);
+    let payee = Address::generate(&s.env);
+    let payees = soroban_sdk::vec![&s.env, payee.clone()];
+    let amounts = soroban_sdk::vec![&s.env, 400i128];
+    let nullifiers = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 40)];
+    let proof = dummy_groth16_proof(&s.env);
+
+    // Ledger time 5000 is outside the validity window [0, 1000]: the release is
+    // rejected before the verifier is even contacted, and no funds move.
+    let res = s.client.try_release_payment_proved_batch(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &1000u64,
+        &false,
+        &false,
+        &proof,
+    );
+    assert!(res.is_err());
+    assert_eq!(s.token_client.balance(&payee), 0);
+    assert_eq!(s.verifier.calls(), 0);
+}
+
+#[test]
+fn test_release_payment_proved_batch_nullifier_cannot_replay_across_tasks() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    // Two separate tasks under the SAME pinned commitment (as a replayed proof
+    // would target; committed_task re-pins c, which is a no-op the second time).
+    let c = commitment_of(&s.env, 11);
+    let task1 = committed_task(&s, 5_000, &c);
+    let task2 = committed_task(&s, 5_000, &c);
+
+    let payee = Address::generate(&s.env);
+    let payees = soroban_sdk::vec![&s.env, payee.clone()];
+    let amounts = soroban_sdk::vec![&s.env, 400i128];
+    let nf = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 50)];
+    let proof = dummy_groth16_proof(&s.env);
+
+    // Spend the nullifier under task1.
+    let ok = s.client.release_payment_proved_batch(
+        &s.orchestrator,
+        &task1,
+        &1,
+        &s.usdc_sac,
+        &payees,
+        &amounts,
+        &nf,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+    );
+    assert!(ok);
+    assert_eq!(s.token_client.balance(&payee), 400);
+
+    // Replaying the SAME nullifier under task2 is rejected — the fix: batch
+    // nullifier markers are global, not per task — and no second payment moves.
+    let res = s.client.try_release_payment_proved_batch(
+        &s.orchestrator,
+        &task2,
+        &1,
+        &s.usdc_sac,
+        &payees,
+        &amounts,
+        &nf,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+    );
+    assert!(res == Err(Ok(VaultError::NullifierAlreadyUsed)));
+    assert_eq!(s.token_client.balance(&payee), 400);
+    assert_eq!(s.client.get_task(&task2).unwrap().spent, 0);
+}
+
+#[test]
+fn test_release_payment_proved_batch_rejects_overlong_validity_window() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+    s.env.ledger().set_timestamp(1_000_000);
+
+    let c = commitment_of(&s.env, 12);
+    let task_id = committed_task(&s, 5_000, &c);
+    let payee = Address::generate(&s.env);
+    let payees = soroban_sdk::vec![&s.env, payee.clone()];
+    let amounts = soroban_sdk::vec![&s.env, 400i128];
+    let nf = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 51)];
+    let proof = dummy_groth16_proof(&s.env);
+
+    // valid_before reaches 1s past MAX_VALIDITY_SECS (7 days) ahead of ledger time:
+    // rejected before the verifier, so a far-future window can never outlive the
+    // globally-scoped nullifier marker and reopen a replay.
+    let far = 1_000_000u64 + 604_800u64 + 1;
+    let res = s.client.try_release_payment_proved_batch(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &payees,
+        &amounts,
+        &nf,
+        &0u64,
+        &far,
+        &false,
+        &false,
+        &proof,
+    );
+    assert!(res == Err(Ok(VaultError::ValidityWindowTooLong)));
+    assert_eq!(s.token_client.balance(&payee), 0);
+    assert_eq!(s.verifier.calls(), 0);
+}
+
+#[test]
+fn test_commitment_accumulator_spans_tasks_and_resets() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+    let proof = dummy_groth16_proof(&s.env);
+    let payee = Address::generate(&s.env);
+
+    // The SAME pinned commitment, used by two different tasks — the per-commitment
+    // R2/R7 accumulator must carry ACROSS tasks (a reusable rule, not a per-task
+    // reset). The mock verifier accepts any proof, so this exercises the vault's
+    // accumulator bookkeeping (the reset flags are proven circuit outputs in prod).
+    let c = commitment_of(&s.env, 13);
+    let task1 = committed_task(&s, 5_000, &c);
+    let task2 = committed_task(&s, 5_000, &c);
+    let one = |amt: i128, nf: u8| {
+        (
+            soroban_sdk::vec![&s.env, payee.clone()],
+            soroban_sdk::vec![&s.env, amt],
+            soroban_sdk::vec![&s.env, nullifier_of(&s.env, nf)],
+        )
+    };
+
+    // task1: first spend opens window 1 (reset_r2 = true), +400.
+    let (p1, a1, n1) = one(400, 60);
+    s.client.release_payment_proved_batch(
+        &s.orchestrator,
+        &task1,
+        &1,
+        &s.usdc_sac,
+        &p1,
+        &a1,
+        &n1,
+        &0u64,
+        &86_400u64,
+        &true,
+        &false,
+        &proof,
+    );
+    let acc1 = s.client.get_commitment_accum(&c);
+    assert_eq!(acc1.window_spent, 400);
+    assert_eq!(acc1.window_count, 1);
+
+    // task2 (DIFFERENT task, same commitment), no reset: the window accumulates
+    // across tasks -> 400 + 300 = 700, count 2.
+    let (p2, a2, n2) = one(300, 61);
+    s.client.release_payment_proved_batch(
+        &s.orchestrator,
+        &task2,
+        &1,
+        &s.usdc_sac,
+        &p2,
+        &a2,
+        &n2,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+    );
+    let acc2 = s.client.get_commitment_accum(&c);
+    assert_eq!(acc2.window_spent, 700);
+    assert_eq!(acc2.window_count, 2);
+
+    // A proven reset rolls the window forward: it restarts at just this batch.
+    let (p3, a3, n3) = one(200, 62);
+    s.client.release_payment_proved_batch(
+        &s.orchestrator,
+        &task2,
+        &2,
+        &s.usdc_sac,
+        &p3,
+        &a3,
+        &n3,
+        &0u64,
+        &86_400u64,
+        &true,
+        &true,
+        &proof,
+    );
+    let acc3 = s.client.get_commitment_accum(&c);
+    assert_eq!(acc3.window_spent, 200);
+    assert_eq!(acc3.window_count, 1);
+}
+
+// ── Phase 1: policy commitment & mutual exclusion ──────────────────────
+
+#[test]
+fn test_plain_create_task_records_no_commitment() {
+    let s = setup_policy();
+    let task_id = s.client.create_task(&s.orchestrator, &s.usdc_sac, &1_000);
+    // The plain path must NEVER record a commitment.
+    assert_eq!(s.client.get_task_policy(&task_id), None);
+    assert_eq!(s.client.get_task(&task_id).unwrap().policy_commitment, None);
+}
+
+#[test]
+fn test_create_task_with_policy_records_commitment() {
+    let s = setup_policy();
+    let c = commitment_of(&s.env, 1);
+    let task_id = committed_task(&s, 1_000, &c);
+
+    assert_eq!(s.client.get_task_policy(&task_id), Some(c.clone()));
+    assert_eq!(
+        s.client.get_task(&task_id).unwrap().policy_commitment,
+        Some(c)
+    );
+    // Budget is locked exactly as on the plain path.
+    let acct = s.client.get_account(&s.user, &s.usdc_sac).unwrap();
+    assert_eq!(acct.locked, 1_000);
+    assert_eq!(acct.active_tasks_count, 1);
+}
+
+#[test]
+fn test_create_task_with_policy_rejects_zero_commitment() {
+    let s = setup_policy();
+    let zero = BytesN::from_array(&s.env, &[0u8; 32]);
+    let res = s
+        .client
+        .try_create_task_with_policy(&s.orchestrator, &s.usdc_sac, &1_000, &zero);
+    assert!(res == Err(Ok(VaultError::InvalidCommitment)));
+    // No task created, no budget locked.
+    let acct = s.client.get_account(&s.user, &s.usdc_sac).unwrap();
+    assert_eq!(acct.locked, 0);
+    assert_eq!(acct.active_tasks_count, 0);
+}
+
+#[test]
+fn test_set_policy_verifier_requires_admin() {
+    let s = setup_policy();
+    let not_admin = Address::generate(&s.env);
+
+    let res = s.client.try_set_policy_verifier(&not_admin, &s.verifier_id);
+    assert!(res == Err(Ok(VaultError::Unauthorized)));
+    assert_eq!(s.client.get_policy_verifier(), None);
+
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    assert_eq!(s.client.get_policy_verifier(), Some(s.verifier_id.clone()));
+}
+
+#[test]
+fn test_upgrade_requires_admin() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+
+    let not_admin = Address::generate(&t.env);
+    let fake_hash = BytesN::from_array(&t.env, &[0u8; 32]);
+
+    // A non-admin caller is rejected before any wasm swap is attempted, so the
+    // bogus hash is never used. This guards the in-place upgrade capability.
+    let res = t.client.try_upgrade(&not_admin, &fake_hash);
+    assert!(res == Err(Ok(VaultError::Unauthorized)));
+}
+
+#[test]
+fn test_policy_commitment_set_pin_unpin() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let c1 = BytesN::from_array(&t.env, &[1u8; 32]);
+    let c2 = BytesN::from_array(&t.env, &[2u8; 32]);
+
+    assert_eq!(t.client.get_policy_commitments(&user).len(), 0);
+
+    t.client.set_policy_commitment(&user, &c1);
+    t.client.set_policy_commitment(&user, &c2);
+    t.client.set_policy_commitment(&user, &c1); // idempotent re-pin
+    assert_eq!(t.client.get_policy_commitments(&user).len(), 2);
+    assert!(t.client.is_policy_commitment_pinned(&user, &c1));
+    assert!(t.client.is_policy_commitment_pinned(&user, &c2));
+
+    t.client.unpin_policy_commitment(&user, &c1);
+    assert!(!t.client.is_policy_commitment_pinned(&user, &c1));
+    assert!(t.client.is_policy_commitment_pinned(&user, &c2));
+    assert_eq!(t.client.get_policy_commitments(&user).len(), 1);
+}
+
+#[test]
+fn test_policy_commitment_rejects_zero() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let zero = BytesN::from_array(&t.env, &[0u8; 32]);
+    let res = t.client.try_set_policy_commitment(&user, &zero);
+    assert!(res == Err(Ok(VaultError::InvalidCommitment)));
+}
+
+#[test]
+fn test_policy_commitment_unpin_missing_errors() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let c1 = BytesN::from_array(&t.env, &[9u8; 32]);
+    let res = t.client.try_unpin_policy_commitment(&user, &c1);
+    assert!(res == Err(Ok(VaultError::CommitmentNotPinned)));
+}
+
+#[test]
+fn test_policy_commitment_set_cap() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    // Fill to the cap (16 distinct, non-zero commitments).
+    for i in 0..16u8 {
+        let c = BytesN::from_array(&t.env, &[i + 1; 32]);
+        t.client.set_policy_commitment(&user, &c);
+    }
+    assert_eq!(t.client.get_policy_commitments(&user).len(), 16);
+    // The 17th distinct commitment is rejected.
+    let overflow = BytesN::from_array(&t.env, &[100u8; 32]);
+    let res = t.client.try_set_policy_commitment(&user, &overflow);
+    assert!(res == Err(Ok(VaultError::CommitmentSetFull)));
+}
+
+#[test]
+fn test_global_rule_set_clear() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let gp = BytesN::from_array(&t.env, &[7u8; 32]);
+    let gpub = BytesN::from_array(&t.env, &[8u8; 32]);
+
+    assert_eq!(t.client.get_global(&user, &Lane::Private), None);
+    t.client.set_global(&user, &Lane::Private, &gp);
+    t.client.set_global(&user, &Lane::Public, &gpub);
+    assert_eq!(t.client.get_global(&user, &Lane::Private), Some(gp));
+    assert_eq!(
+        t.client.get_global(&user, &Lane::Public),
+        Some(gpub.clone())
+    );
+
+    // Replacing the private global keeps the public one untouched.
+    let gp2 = BytesN::from_array(&t.env, &[9u8; 32]);
+    t.client.set_global(&user, &Lane::Private, &gp2);
+    assert_eq!(t.client.get_global(&user, &Lane::Private), Some(gp2));
+
+    // Clear is idempotent and lane-scoped.
+    t.client.clear_global(&user, &Lane::Private);
+    assert_eq!(t.client.get_global(&user, &Lane::Private), None);
+    t.client.clear_global(&user, &Lane::Private); // no-op, no panic
+    assert_eq!(t.client.get_global(&user, &Lane::Public), Some(gpub));
+}
+
+#[test]
+fn test_global_rule_rejects_zero() {
+    let t = setup_test();
+    t.client.init(&t.admin, &t.usdc_sac);
+    let user = Address::generate(&t.env);
+    let zero = BytesN::from_array(&t.env, &[0u8; 32]);
+    let res = t.client.try_set_global(&user, &Lane::Private, &zero);
+    assert!(res == Err(Ok(VaultError::InvalidCommitment)));
+}
+
+#[test]
+fn test_set_policy_verifier_is_admin_mutable() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    assert_eq!(s.client.get_policy_verifier(), Some(s.verifier_id.clone()));
+
+    // Admin may replace the verifier at any time (matches set_dispute_resolver).
+    let v2 = s.env.register(MockVerifier, ());
+    s.client.set_policy_verifier(&s.admin, &v2);
+    assert_eq!(s.client.get_policy_verifier(), Some(v2));
+}
+
+#[test]
+fn test_committed_task_rejects_plain_release_payment() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 2);
+    let task_id = committed_task(&s, 1_000, &c);
+
+    // The plain path must refuse a committed task even though the verifier
+    // would accept anything — mutual exclusion is structural.
+    let res = s
+        .client
+        .try_release_payment(&s.orchestrator, &task_id, &1, &s.usdc_sac, &100);
+    assert!(res == Err(Ok(VaultError::PolicyProofRequired)));
+    assert_eq!(s.token_client.balance(&s.orchestrator), 0);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 0);
+    assert_eq!(s.verifier.calls(), 0);
+}
+
+#[test]
+fn test_uncommitted_task_rejects_release_payment_proved() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let task_id = s.client.create_task(&s.orchestrator, &s.usdc_sac, &1_000);
+
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &100,
+        &s.orchestrator,
+        &nullifier_of(&s.env, 1),
+        &dummy_proof(&s.env),
+    );
+    assert!(res == Err(Ok(VaultError::NoPolicyCommitment)));
+    assert_eq!(s.token_client.balance(&s.orchestrator), 0);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 0);
+    assert_eq!(s.verifier.calls(), 0);
+}
+
+// ── Phase 2: proof-gated release ──────────────────────────────────────
+
+#[test]
+fn test_release_payment_proved_happy_path() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 3);
+    let task_id = committed_task(&s, 1_000, &c);
+    let payee = Address::generate(&s.env);
+    let nf = nullifier_of(&s.env, 10);
+    let proof = dummy_proof(&s.env);
+
+    let ok = s.client.release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &400,
+        &payee,
+        &nf,
+        &proof,
+    );
+    assert!(ok);
+
+    // Funds went to the proof-bound payee, not the orchestrator.
+    assert_eq!(s.token_client.balance(&payee), 400);
+    assert_eq!(s.token_client.balance(&s.orchestrator), 0);
+    // State written before the transfer (CEI): spent bumped, nullifier consumed.
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 400);
+    assert_eq!(s.verifier.calls(), 1);
+
+    // The emitted event is `ReleaseProvedEvent`, whose fields are
+    // `{user, orchestrator, task_id, asset, amount, nullifier}` — there is no
+    // `proof` field, so proof bytes cannot ride in it, and the `log!` line in
+    // `release_payment_proved` logs neither the proof nor the nullifier.
+    // (The Soroban test host drops a frame's post-cross-contract-call events
+    // from `env.events()`, so the release event's contents cannot be asserted
+    // here directly; `test_create_task_with_policy_emits_extra_commitment_event`
+    // covers the reliably-capturable policy event.)
+}
+
+/// `create_task_with_policy` performs no cross-contract call, so its events are
+/// captured intact. It emits everything `create_task` does (one `TaskNewEvent`)
+/// PLUS a `PolicyCommittedEvent` — and the commitment it carries is exactly the
+/// opaque 32 bytes the caller passed, nothing more.
+#[test]
+fn test_create_task_with_policy_emits_extra_commitment_event() {
+    let s = setup_policy();
+
+    // Plain create_task: exactly one contract event.
+    s.client.create_task(&s.orchestrator, &s.usdc_sac, &500);
+    assert_eq!(
+        s.env
+            .events()
+            .all()
+            .filter_by_contract(&s.contract_id)
+            .events()
+            .len(),
+        1
+    );
+
+    // create_task_with_policy: that one PLUS a PolicyCommittedEvent.
+    let c = commitment_of(&s.env, 31);
+    let task_id = s
+        .client
+        .create_task_with_policy(&s.orchestrator, &s.usdc_sac, &500, &c);
+    assert_eq!(
+        s.env
+            .events()
+            .all()
+            .filter_by_contract(&s.contract_id)
+            .events()
+            .len(),
+        2
+    );
+    // The commitment is retained verbatim — exactly the opaque bytes passed in.
+    assert_eq!(s.client.get_task_policy(&task_id), Some(c));
+}
+
+#[test]
+fn test_release_payment_proved_rejects_mismatched_binding() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    // The verifier only accepts a proof bound to (bound_payee, 400).
+    s.verifier.configure(&VerifyMode::ExpectBinding);
+    let bound_payee = Address::generate(&s.env);
+    s.verifier.set_expected(&bound_payee, &400);
+
+    let c = commitment_of(&s.env, 4);
+    let task_id = committed_task(&s, 1_000, &c);
+    let nf = nullifier_of(&s.env, 20);
+    let proof = dummy_proof(&s.env);
+
+    // Wrong payee for the proof binding.
+    let other_payee = Address::generate(&s.env);
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &400,
+        &other_payee,
+        &nf,
+        &proof,
+    );
+    assert!(res == Err(Ok(VaultError::PolicyProofRejected)));
+
+    // Wrong amount for the proof binding.
+    let res2 = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &2,
+        &s.usdc_sac,
+        &399,
+        &bound_payee,
+        &nf,
+        &proof,
+    );
+    assert!(res2 == Err(Ok(VaultError::PolicyProofRejected)));
+
+    // Nothing moved; the nullifier was not consumed by either rejected try.
+    assert_eq!(s.token_client.balance(&other_payee), 0);
+    assert_eq!(s.token_client.balance(&bound_payee), 0);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 0);
+
+    // The correctly-bound release now succeeds with that same nullifier.
+    let ok = s.client.release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &3,
+        &s.usdc_sac,
+        &400,
+        &bound_payee,
+        &nf,
+        &proof,
+    );
+    assert!(ok);
+    assert_eq!(s.token_client.balance(&bound_payee), 400);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 400);
+}
+
+#[test]
+fn test_release_payment_proved_nullifier_replay_rejected() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 5);
+    let task_id = committed_task(&s, 1_000, &c);
+    let payee = Address::generate(&s.env);
+    let nf = nullifier_of(&s.env, 30);
+    let proof = dummy_proof(&s.env);
+
+    let ok = s.client.release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &300,
+        &payee,
+        &nf,
+        &proof,
+    );
+    assert!(ok);
+    assert_eq!(s.token_client.balance(&payee), 300);
+    let calls_after_first = s.verifier.calls();
+
+    // Same nullifier, a NEW step_id → replay, rejected before the verifier is
+    // consulted, and no second transfer occurs.
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &2,
+        &s.usdc_sac,
+        &300,
+        &payee,
+        &nf,
+        &proof,
+    );
+    assert!(res == Err(Ok(VaultError::NullifierAlreadyUsed)));
+    assert_eq!(s.token_client.balance(&payee), 300);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 300);
+    assert_eq!(s.verifier.calls(), calls_after_first);
+}
+
+#[test]
+fn test_release_payment_proved_fails_closed_when_verifier_unset() {
+    let s = setup_policy();
+    // Deliberately DO NOT call set_policy_verifier.
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 6);
+    let task_id = committed_task(&s, 1_000, &c);
+    let payee = Address::generate(&s.env);
+
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &100,
+        &payee,
+        &nullifier_of(&s.env, 40),
+        &dummy_proof(&s.env),
+    );
+    assert!(res == Err(Ok(VaultError::PolicyVerifierNotSet)));
+    // Fail closed: no funds, no state change, and no verifier call attempted.
+    assert_eq!(s.token_client.balance(&payee), 0);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 0);
+    assert_eq!(s.verifier.calls(), 0);
+    assert_eq!(s.client.get_policy_verifier(), None);
+}
+
+#[test]
+fn test_release_payment_proved_verifier_failure_does_not_burn_nullifier() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::RejectAll);
+
+    let c = commitment_of(&s.env, 7);
+    let task_id = committed_task(&s, 1_000, &c);
+    let payee = Address::generate(&s.env);
+    let nf = nullifier_of(&s.env, 50);
+    let proof = dummy_proof(&s.env);
+
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &500,
+        &payee,
+        &nf,
+        &proof,
+    );
+    assert!(res == Err(Ok(VaultError::PolicyProofRejected)));
+    assert_eq!(s.token_client.balance(&payee), 0);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 0);
+
+    // Flip the verifier to accept: the SAME nullifier must still be spendable.
+    // A rejected proof must not let anyone grief a later legitimate proof for
+    // the same nullifier.
+    s.verifier.configure(&VerifyMode::AcceptAll);
+    let ok = s.client.release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &500,
+        &payee,
+        &nf,
+        &proof,
+    );
+    assert!(ok);
+    assert_eq!(s.token_client.balance(&payee), 500);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 500);
+}
+
+#[test]
+fn test_release_payment_proved_budget_check_precedes_verifier() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 8);
+    let task_id = committed_task(&s, 1_000, &c);
+    let payee = Address::generate(&s.env);
+
+    // amount exceeds the remaining budget → rejected BEFORE the verifier call.
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &1_001,
+        &payee,
+        &nullifier_of(&s.env, 60),
+        &dummy_proof(&s.env),
+    );
+    assert!(res == Err(Ok(VaultError::ExceedsPlanCost)));
+    // The mock verifier was never invoked for an over-budget request.
+    assert_eq!(s.verifier.calls(), 0);
+    assert_eq!(s.token_client.balance(&payee), 0);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 0);
+}
+
+#[test]
+fn test_release_payment_proved_blocked_on_disputed_task() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 9);
+    let task_id = committed_task(&s, 1_000, &c);
+    s.client.raise_dispute(&s.user, &task_id);
+
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &100,
+        &Address::generate(&s.env),
+        &nullifier_of(&s.env, 70),
+        &dummy_proof(&s.env),
+    );
+    // Same rejection an uncommitted task would get from the plain path.
+    assert!(res == Err(Ok(VaultError::TaskDisputed)));
+    assert_eq!(s.verifier.calls(), 0);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 0);
+}
+
+#[test]
+fn test_release_payment_proved_blocked_on_stale_forced_task() {
+    let s = setup_policy();
+    s.env.ledger().set_timestamp(1_000);
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 11);
+    let task_id = committed_task(&s, 1_000, &c);
+
+    // Advance past the 1800s stale threshold and force-complete the task.
+    s.env.ledger().set_timestamp(1_000 + 1_801);
+    s.client.force_complete_stale_task(&task_id);
+
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &100,
+        &Address::generate(&s.env),
+        &nullifier_of(&s.env, 80),
+        &dummy_proof(&s.env),
+    );
+    assert!(res == Err(Ok(VaultError::TaskAlreadyCompleted)));
+    assert_eq!(s.verifier.calls(), 0);
+}
+
+#[test]
+fn test_release_payment_proved_blocked_when_paused() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 12);
+    let task_id = committed_task(&s, 1_000, &c);
+    s.client.pause(&s.admin);
+
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &100,
+        &Address::generate(&s.env),
+        &nullifier_of(&s.env, 90),
+        &dummy_proof(&s.env),
+    );
+    assert!(res == Err(Ok(VaultError::ContractPaused)));
+    assert_eq!(s.verifier.calls(), 0);
+}
+
+#[test]
+fn test_release_payment_proved_wrong_orchestrator_rejected() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 13);
+    let task_id = committed_task(&s, 1_000, &c);
+    let stranger = Address::generate(&s.env);
+
+    let res = s.client.try_release_payment_proved(
+        &stranger,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &100,
+        &stranger,
+        &nullifier_of(&s.env, 100),
+        &dummy_proof(&s.env),
+    );
+    assert!(res == Err(Ok(VaultError::NotYourOrchestrator)));
+    assert_eq!(s.verifier.calls(), 0);
+}
+
+#[test]
+fn test_release_payment_proved_asset_mismatch_rejected() {
+    let s = setup_policy();
+    let other_asset = s
+        .env
+        .register_stellar_asset_contract_v2(s.admin.clone())
+        .address();
+    s.client.add_asset(&s.admin, &other_asset);
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 14);
+    let task_id = committed_task(&s, 1_000, &c);
+
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &other_asset,
+        &100,
+        &s.orchestrator,
+        &nullifier_of(&s.env, 110),
+        &dummy_proof(&s.env),
+    );
+    assert!(res == Err(Ok(VaultError::AssetMismatch)));
+    assert_eq!(s.verifier.calls(), 0);
+}
+
+#[test]
+fn test_release_payment_proved_reverts_on_verifier_trap() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::Trap);
+
+    let c = commitment_of(&s.env, 15);
+    let task_id = committed_task(&s, 1_000, &c);
+    let payee = Address::generate(&s.env);
+    let nf = nullifier_of(&s.env, 120);
+    let proof = dummy_proof(&s.env);
+
+    // A verifier that traps must fail closed: the whole release reverts, no
+    // funds move, no state changes. (`try_` surfaces the revert as an Err
+    // rather than unwinding the test.)
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &100,
+        &payee,
+        &nf,
+        &proof,
+    );
+    assert!(res.is_err());
+    assert!(res != Ok(Ok(true)));
+    assert_eq!(s.token_client.balance(&payee), 0);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 0);
+
+    // ...and it did not burn the nullifier.
+    s.verifier.configure(&VerifyMode::AcceptAll);
+    let ok = s.client.release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &100,
+        &payee,
+        &nf,
+        &proof,
+    );
+    assert!(ok);
+    assert_eq!(s.token_client.balance(&payee), 100);
+}
+
+#[test]
+fn test_release_payment_proved_fee_split() {
+    let s = setup_policy();
+    let fee_recipient = Address::generate(&s.env);
+    s.client
+        .set_fee(&s.admin, &100, &Some(fee_recipient.clone())); // 1%
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 18);
+    let task_id = committed_task(&s, 10_000, &c);
+    let payee = Address::generate(&s.env);
+
+    s.client.release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &1_000,
+        &payee,
+        &nullifier_of(&s.env, 130),
+        &dummy_proof(&s.env),
+    );
+
+    // fee = floor(1000 * 100 / 10_000) = 10; payee receives the remainder.
+    assert_eq!(s.token_client.balance(&payee), 990);
+    assert_eq!(s.client.get_accrued_fees(&s.usdc_sac), 10);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 1_000);
+}
+
+// ── Phase 3: invariant & lifecycle ───────────────────────────────────
+
+#[test]
+fn test_release_payment_proved_total_never_exceeds_budget() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 16);
+    let task_id = committed_task(&s, 1_000, &c);
+    let payee = Address::generate(&s.env);
+    let proof = dummy_proof(&s.env);
+
+    // Four proved releases of 250 each == exactly the 1000 budget.
+    for i in 0..4u8 {
+        let ok = s.client.release_payment_proved(
+            &s.orchestrator,
+            &task_id,
+            &(i as u64 + 1),
+            &s.usdc_sac,
+            &250,
+            &payee,
+            &nullifier_of(&s.env, 200 + i),
+            &proof,
+        );
+        assert!(ok);
+    }
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 1_000);
+    assert_eq!(s.token_client.balance(&payee), 1_000);
+
+    // One more unit must be rejected — the cap holds across many proved calls,
+    // with a fresh, valid nullifier and the verifier accepting.
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &99,
+        &s.usdc_sac,
+        &1,
+        &payee,
+        &nullifier_of(&s.env, 240),
+        &proof,
+    );
+    assert!(res == Err(Ok(VaultError::ExceedsPlanCost)));
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 1_000);
+
+    // Vault accounting stays consistent: the task finalizes cleanly.
+    s.client.complete_task(&s.orchestrator, &task_id);
+    let acct = s.client.get_account(&s.user, &s.usdc_sac).unwrap();
+    assert_eq!(acct.locked, 0);
+    assert_eq!(acct.total_spent, 1_000);
+    assert_eq!(acct.active_tasks_count, 0);
+}
+
+#[test]
+fn test_release_payment_proved_idempotent_replay_same_step() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 17);
+    let task_id = committed_task(&s, 1_000, &c);
+    let payee = Address::generate(&s.env);
+    let nf = nullifier_of(&s.env, 210);
+    let proof = dummy_proof(&s.env);
+
+    let ok1 = s.client.release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &300,
+        &payee,
+        &nf,
+        &proof,
+    );
+    assert!(ok1);
+    let calls1 = s.verifier.calls();
+
+    // Exact replay of the same (step_id, amount): idempotent success, no
+    // second transfer, verifier not re-run.
+    let ok2 = s.client.release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &300,
+        &payee,
+        &nf,
+        &proof,
+    );
+    assert!(ok2);
+    assert_eq!(s.token_client.balance(&payee), 300);
+    assert_eq!(s.client.get_task(&task_id).unwrap().spent, 300);
+    assert_eq!(s.verifier.calls(), calls1);
+
+    // Same step_id, different amount → conflict.
+    let res = s.client.try_release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &301,
+        &payee,
+        &nf,
+        &proof,
+    );
+    assert!(res == Err(Ok(VaultError::ReleaseConflict)));
+}
+
+#[test]
+fn test_release_payment_proved_nullifiers_pruned_on_finalize() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 19);
+    let task_id = committed_task(&s, 1_000, &c);
+    let payee = Address::generate(&s.env);
+    let nf = nullifier_of(&s.env, 220);
+
+    s.client.release_payment_proved(
+        &s.orchestrator,
+        &task_id,
+        &1,
+        &s.usdc_sac,
+        &400,
+        &payee,
+        &nf,
+        &dummy_proof(&s.env),
+    );
+
+    // The consumed-nullifier marker exists while the task is live.
+    let live = s.env.as_contract(&s.contract_id, || {
+        s.env
+            .storage()
+            .persistent()
+            .has(&DataKey::TaskNullifier(task_id, nf.clone()))
+    });
+    assert!(live);
+
+    s.client.complete_task(&s.orchestrator, &task_id);
+
+    // After finalization the marker and its index are pruned (rent reclaimed);
+    // the commitment stays on the completed task record as an audit trail.
+    let after = s.env.as_contract(&s.contract_id, || {
+        let m = s
+            .env
+            .storage()
+            .persistent()
+            .has(&DataKey::TaskNullifier(task_id, nf.clone()));
+        let idx = s
+            .env
+            .storage()
+            .persistent()
+            .has(&DataKey::TaskNullifierIds(task_id));
+        (m, idx)
+    });
+    assert_eq!(after, (false, false));
+    assert_eq!(s.client.get_task_policy(&task_id), Some(c));
+}
+
+// Session keys: the Fast / public lane.
+//
+// mock_all_auths() stands in for both the user's wallet signature (register /
+// revoke) and the session key's own signature (release), so these tests exercise
+// the ON-CHAIN SCOPE ENFORCEMENT - expiry, allowlist, budget, available balance -
+// not the Ed25519 signing itself (the live harness covers real session signing).
+
+fn fund_user(test_env: &TestEnv, amount: i128) -> Address {
+    let user = Address::generate(&test_env.env);
+    test_env.token_admin_client.mint(&user, &(amount * 2));
+    test_env.client.deposit(&user, &test_env.usdc_sac, &amount);
+    user
+}
+
+// A public rule with every clause disabled (0 / empty); tests set the ones they need.
+fn empty_public_rule(env: &Env) -> crate::PublicRule {
+    crate::PublicRule {
+        per_payment_max: 0,
+        per_payment_min: 0,
+        rolling_cap: 0,
+        rolling_window_secs: 0,
+        velocity_max: 0,
+        velocity_window_secs: 0,
+        allowlist: soroban_sdk::vec![env],
+        denylist: soroban_sdk::vec![env],
+        denylist_threshold: 0,
+        calendar_start: 0,
+        calendar_end: 0,
+    }
+}
+
+fn rid(env: &Env, seed: u8) -> BytesN<32> {
+    BytesN::from_array(env, &[seed; 32])
+}
+
+#[test]
+fn test_session_cap_register_and_release() {
+    // A server-held key bounded by a total spend cap + expiry (no allowlist/rule).
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+
+    let info = test_env.client.get_session(&session);
+    assert_eq!(info.user, user);
+    assert_eq!(info.spend_cap, 500);
+    assert_eq!(info.spent, 0);
+    assert_eq!(info.release_count, 0);
+    assert!(info.server_held);
+
+    // A cap-only key can pay ANY payee up to the cap.
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &200, &None);
+    assert_eq!(test_env.token_client.balance(&payee), 200);
+    let info = test_env.client.get_session(&session);
+    assert_eq!(info.spent, 200);
+    assert_eq!(info.release_count, 1);
+
+    // Cumulative cap: 200 + 301 > 500 is rejected; nothing moves.
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &301, &None);
+    assert!(r == Err(Ok(VaultError::SessionBudgetExceeded)));
+    assert_eq!(test_env.token_client.balance(&payee), 200);
+    assert_eq!(test_env.client.get_session(&session).spent, 200);
+}
+
+#[test]
+fn test_session_pause_unpause() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+
+    test_env.client.set_session_paused(&user, &session, &true);
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &10, &None);
+    assert!(r == Err(Ok(VaultError::SessionPaused)));
+
+    // Unpause and it spends again.
+    test_env.client.set_session_paused(&user, &session, &false);
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &10, &None);
+    assert_eq!(test_env.token_client.balance(&payee), 10);
+}
+
+#[test]
+fn test_session_update_extends_cap_and_expiry() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &100i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &100, &None);
+    // Over the old cap now.
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &1, &None);
+    assert!(r == Err(Ok(VaultError::SessionBudgetExceeded)));
+
+    // Raise the cap to 300 and extend expiry.
+    test_env
+        .client
+        .update_session(&user, &session, &2_000u64, &300i128);
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &150, &None);
+    assert_eq!(test_env.client.get_session(&session).spent, 250);
+    // Cannot lower the cap below what's already spent.
+    let r = test_env
+        .client
+        .try_update_session(&user, &session, &0u64, &200i128);
+    assert!(r == Err(Ok(VaultError::InvalidPublicParams)));
+}
+
+#[test]
+fn test_session_rule_bound_allowlist() {
+    // A local (owner-held) key runs under a named public rule with an allowlist.
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let payee = Address::generate(&test_env.env);
+    let stranger = Address::generate(&test_env.env);
+
+    let r_id = rid(&test_env.env, 7);
+    let mut rule = empty_public_rule(&test_env.env);
+    rule.per_payment_max = 300;
+    rule.allowlist = soroban_sdk::vec![
+        &test_env.env,
+        crate::PublicPayee {
+            addr: payee.clone(),
+            cap: 0
+        }
+    ];
+    test_env.client.set_public_rule(&user, &r_id, &rule);
+
+    let session = Address::generate(&test_env.env);
+    // Local key: no expiry, no cap, bounded by the rule.
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &0u64,
+        &0i128,
+        &Some(r_id.clone()),
+        &false,
+    );
+
+    // Allowlisted payee within the per-payment max works.
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &250, &None);
+    assert_eq!(test_env.token_client.balance(&payee), 250);
+
+    // Off-allowlist payee is rejected.
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &stranger, &10, &None);
+    assert!(r == Err(Ok(VaultError::PayeeNotAllowed)));
+    // Over the per-payment max is rejected.
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &301, &None);
+    assert!(r == Err(Ok(VaultError::GlobalCapExceeded)));
+}
+
+#[test]
+fn test_session_rule_rolling_cap_and_velocity() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 10_000);
+    let payee = Address::generate(&test_env.env);
+
+    let r_id = rid(&test_env.env, 8);
+    let mut rule = empty_public_rule(&test_env.env);
+    rule.rolling_cap = 500; // 500 per 1000s window
+    rule.rolling_window_secs = 1000;
+    rule.velocity_max = 2; // at most 2 per 1000s
+    rule.velocity_window_secs = 1000;
+    test_env.client.set_public_rule(&user, &r_id, &rule);
+
+    let session = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &0u64,
+        &0i128,
+        &Some(r_id.clone()),
+        &false,
+    );
+
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &200, &None);
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &200, &None);
+    // Third release hits the velocity cap (2 per window).
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &50, &None);
+    assert!(r == Err(Ok(VaultError::VelocityExceeded)));
+
+    // Usage is observable.
+    let usage = test_env.client.get_public_usage(&user, &r_id).unwrap();
+    assert_eq!(usage.window_spent, 400);
+    assert_eq!(usage.window_count, 2);
+    assert_eq!(usage.lifetime_count, 2);
+
+    // After the window elapses, it resets; but a single 600 still trips the rolling cap.
+    test_env.env.ledger().set_timestamp(2_000);
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &600, &None);
+    assert!(r == Err(Ok(VaultError::RollingCapExceeded)));
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &400, &None);
+    assert_eq!(
+        test_env
+            .client
+            .get_public_usage(&user, &r_id)
+            .unwrap()
+            .window_spent,
+        400
+    );
+}
+
+#[test]
+fn test_session_per_call_rule_selection() {
+    // A cap-only server key (no rule bound at registration). A public rule is SELECTED
+    // per release - like a private rule is picked per task - and enforced on top of the
+    // key's own cap. This is the dapp's public lane: session cap + per-task rule.
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let payee = Address::generate(&test_env.env);
+
+    let rid_a = rid(&test_env.env, 11);
+    let mut a = empty_public_rule(&test_env.env);
+    a.per_payment_max = 100;
+    test_env.client.set_public_rule(&user, &rid_a, &a);
+
+    let session = Address::generate(&test_env.env);
+    // A server-held key needs a future expiry + positive cap (rule_id = None here).
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000_000u64,
+        &500i128,
+        &None,
+        &true,
+    );
+
+    // Picking rule A per call: within its per-payment max -> OK; over it -> rejected.
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &100, &Some(rid_a.clone()));
+    let r =
+        test_env
+            .client
+            .try_release_payment_session(&session, &payee, &101, &Some(rid_a.clone()));
+    assert!(r == Err(Ok(VaultError::GlobalCapExceeded)));
+
+    // A non-existent rule id is rejected (a garbage rule cannot bypass enforcement).
+    let missing = rid(&test_env.env, 99);
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &10, &Some(missing));
+    assert!(r == Err(Ok(VaultError::PublicRuleNotFound)));
+
+    // No per-call rule -> only the key's own cap governs (a valid cap-only spend).
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &200, &None);
+
+    // Only the rule-A release is tracked under rule A; the cap-only spend is not.
+    let usage = test_env.client.get_public_usage(&user, &rid_a).unwrap();
+    assert_eq!(usage.lifetime_count, 1);
+    assert_eq!(usage.lifetime_spent, 100);
+}
+
+#[test]
+fn test_session_global_public_and_filter() {
+    // A cap-only key, plus an account global-public rule that AND-tightens: a deny.
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let good = Address::generate(&test_env.env);
+    let bad = Address::generate(&test_env.env);
+
+    let g_id = rid(&test_env.env, 9);
+    let mut g = empty_public_rule(&test_env.env);
+    g.denylist = soroban_sdk::vec![&test_env.env, bad.clone()];
+    test_env.client.set_public_rule(&user, &g_id, &g);
+    test_env.client.set_global_public(&user, &g_id);
+    assert_eq!(test_env.client.get_global_public(&user), Some(g_id.clone()));
+
+    let session = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+
+    // The denied payee is blocked by the global even though the key itself allows any.
+    let r = test_env
+        .client
+        .try_release_payment_session(&session, &bad, &10, &None);
+    assert!(r == Err(Ok(VaultError::GlobalPayeeDenied)));
+    // A non-denied payee works.
+    test_env
+        .client
+        .release_payment_session(&session, &good, &10, &None);
+    assert_eq!(test_env.token_client.balance(&good), 10);
+}
+
+#[test]
+fn test_session_expired() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+    test_env.env.ledger().set_timestamp(1_001);
+    let result = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &10, &None);
+    assert!(result == Err(Ok(VaultError::SessionExpired)));
+}
+
+#[test]
+fn test_session_revoke_blocks_release() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+    test_env.client.revoke_session(&user, &session);
+    let result = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &10, &None);
+    assert!(result == Err(Ok(VaultError::SessionNotFound)));
+    let view = test_env.client.try_get_session(&session);
+    assert!(matches!(view, Err(Ok(VaultError::SessionNotFound))));
+}
+
+#[test]
+fn test_session_revoke_only_owner() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let other = Address::generate(&test_env.env);
+    let session = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+    let result = test_env.client.try_revoke_session(&other, &session);
+    assert!(result == Err(Ok(VaultError::NotYourSession)));
+}
+
+#[test]
+fn test_session_register_invalid_params() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+
+    // Unbounded: neither a cap nor a rule.
+    let r = test_env.client.try_register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &0i128,
+        &None::<BytesN<32>>,
+        &false,
+    );
+    assert!(r == Err(Ok(VaultError::SessionUnbounded)));
+
+    // Server-held key with no future expiry (ledger time is 0).
+    let r = test_env.client.try_register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &0u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+    assert!(r == Err(Ok(VaultError::InvalidPublicParams)));
+
+    // Local key naming a rule that does not exist.
+    let r = test_env.client.try_register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &0u64,
+        &0i128,
+        &Some(rid(&test_env.env, 3)),
+        &false,
+    );
+    assert!(r == Err(Ok(VaultError::PublicRuleNotFound)));
+}
+
+#[test]
+fn test_session_register_duplicate() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let session = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+    let r = test_env.client.try_register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &2_000u64,
+        &100i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+    assert!(r == Err(Ok(VaultError::SessionAlreadyExists)));
+}
+
+#[test]
+fn test_session_respects_locked_balance() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let orchestrator = Address::generate(&test_env.env);
+    test_env.client.register_orchestrator(
+        &user,
+        &orchestrator,
+        &soroban_sdk::String::from_str(&test_env.env, "orch"),
+    );
+    // Lock 900 in an active task → only 100 unlocked.
+    test_env
+        .client
+        .create_task(&orchestrator, &test_env.usdc_sac, &900);
+
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &500i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+    let result = test_env
+        .client
+        .try_release_payment_session(&session, &payee, &101, &None);
+    assert!(result == Err(Ok(VaultError::InsufficientAvailable)));
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &100, &None);
+    assert_eq!(test_env.token_client.balance(&payee), 100);
+}
+
+#[test]
+fn test_session_release_applies_fee() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let recipient = Address::generate(&test_env.env);
+    test_env
+        .client
+        .set_fee(&test_env.admin, &1000, &Some(recipient.clone()));
+
+    let user = fund_user(&test_env, 2000);
+    let session = Address::generate(&test_env.env);
+    let payee = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &1000i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+    test_env
+        .client
+        .release_payment_session(&session, &payee, &1000, &None);
+    assert_eq!(test_env.token_client.balance(&payee), 900);
+    assert_eq!(test_env.client.get_accrued_fees(&test_env.usdc_sac), 100);
+    assert_eq!(test_env.client.get_balance(&user, &test_env.usdc_sac), 1000);
+}
+
+#[test]
+fn test_get_session_not_found() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let session = Address::generate(&test_env.env);
+    let result = test_env.client.try_get_session(&session);
+    assert!(matches!(result, Err(Ok(VaultError::SessionNotFound))));
+}
+
+// ── Keyless (proof-authorized) release: the Sovereign private path ──────────────
+
+#[test]
+fn test_release_proved_keyless_happy_path() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    // The user pins the rule once; thereafter NO key authorizes a spend.
+    let c = commitment_of(&s.env, 70);
+    s.client.set_policy_commitment(&s.user, &c);
+
+    let p1 = Address::generate(&s.env);
+    let p2 = Address::generate(&s.env);
+    let payees = soroban_sdk::vec![&s.env, p1.clone(), p2.clone()];
+    let amounts = soroban_sdk::vec![&s.env, 400i128, 300i128];
+    let nullifiers = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 70), nullifier_of(&s.env, 71)];
+    let proof = dummy_groth16_proof(&s.env);
+
+    // Authorized purely by the pinned commitment + proof + fresh nullifiers.
+    let ok = s.client.release_proved_keyless(
+        &s.user,
+        &s.usdc_sac,
+        &c,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+        &None::<crate::GlobalProof>,
+    );
+    assert!(ok);
+    assert_eq!(s.token_client.balance(&p1), 400);
+    assert_eq!(s.token_client.balance(&p2), 300);
+    // Drawn from the user's own vault balance (50_000 deposited in setup).
+    assert_eq!(s.client.get_balance(&s.user, &s.usdc_sac), 49_300);
+    assert_eq!(s.verifier.calls(), 1);
+
+    // Replay of consumed nullifiers is rejected; no double spend.
+    let res = s.client.try_release_proved_keyless(
+        &s.user,
+        &s.usdc_sac,
+        &c,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+        &None::<crate::GlobalProof>,
+    );
+    assert!(res == Err(Ok(VaultError::NullifierAlreadyUsed)));
+}
+
+#[test]
+fn test_release_proved_keyless_rejects_unpinned_commitment() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    // A commitment the user never pinned is rejected before the verifier is called.
+    let c = commitment_of(&s.env, 80);
+    let payees = soroban_sdk::vec![&s.env, Address::generate(&s.env)];
+    let amounts = soroban_sdk::vec![&s.env, 100i128];
+    let nullifiers = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 80)];
+    let proof = dummy_groth16_proof(&s.env);
+
+    let res = s.client.try_release_proved_keyless(
+        &s.user,
+        &s.usdc_sac,
+        &c,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+        &None::<crate::GlobalProof>,
+    );
+    assert!(res == Err(Ok(VaultError::CommitmentNotAuthorized)));
+    assert_eq!(s.verifier.calls(), 0);
+}
+
+#[test]
+fn test_release_proved_keyless_global_private_enforced() {
+    let s = setup_policy();
+    s.client.set_policy_verifier(&s.admin, &s.verifier_id);
+    s.verifier.configure(&VerifyMode::AcceptAll);
+
+    let c = commitment_of(&s.env, 90);
+    let g = commitment_of(&s.env, 91);
+    s.client.set_policy_commitment(&s.user, &c);
+    s.client.set_global(&s.user, &Lane::Private, &g);
+
+    let payee = Address::generate(&s.env);
+    let payees = soroban_sdk::vec![&s.env, payee.clone()];
+    let amounts = soroban_sdk::vec![&s.env, 200i128];
+    let nullifiers = soroban_sdk::vec![&s.env, nullifier_of(&s.env, 90)];
+    let proof = dummy_groth16_proof(&s.env);
+
+    // With a global-private set, omitting the second proof is rejected.
+    let res = s.client.try_release_proved_keyless(
+        &s.user,
+        &s.usdc_sac,
+        &c,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+        &None::<crate::GlobalProof>,
+    );
+    assert!(res == Err(Ok(VaultError::GlobalProofRequired)));
+
+    // A second proof against the WRONG commitment is rejected.
+    let wrong = crate::GlobalProof {
+        commitment: commitment_of(&s.env, 99),
+        nullifiers: soroban_sdk::vec![&s.env, nullifier_of(&s.env, 95)],
+        reset_r2: false,
+        reset_r7: false,
+        proof: dummy_groth16_proof(&s.env),
+    };
+    let res = s.client.try_release_proved_keyless(
+        &s.user,
+        &s.usdc_sac,
+        &c,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+        &Some(wrong),
+    );
+    assert!(res == Err(Ok(VaultError::GlobalCommitmentMismatch)));
+
+    // The matching second proof satisfies the AND filter and the release succeeds.
+    let gp = crate::GlobalProof {
+        commitment: g.clone(),
+        nullifiers: soroban_sdk::vec![&s.env, nullifier_of(&s.env, 96)],
+        reset_r2: false,
+        reset_r7: false,
+        proof: dummy_groth16_proof(&s.env),
+    };
+    let ok = s.client.release_proved_keyless(
+        &s.user,
+        &s.usdc_sac,
+        &c,
+        &payees,
+        &amounts,
+        &nullifiers,
+        &0u64,
+        &86_400u64,
+        &false,
+        &false,
+        &proof,
+        &Some(gp),
+    );
+    assert!(ok);
+    assert_eq!(s.token_client.balance(&payee), 200);
+}
+
+// ── Global-public: cleartext AND-filter on the public (session) path ────────────
+
+#[test]
+fn test_global_public_denies_and_caps() {
+    let test_env = setup_test();
+    test_env.client.init(&test_env.admin, &test_env.usdc_sac);
+    let user = fund_user(&test_env, 1000);
+    let good = Address::generate(&test_env.env);
+    let bad = Address::generate(&test_env.env);
+
+    // A cap-only server key (would pay anyone up to 900).
+    let session = Address::generate(&test_env.env);
+    test_env.client.register_session(
+        &user,
+        &session,
+        &test_env.usdc_sac,
+        &1_000u64,
+        &900i128,
+        &None::<BytesN<32>>,
+        &true,
+    );
+
+    // The user marks a public rule global: deny `bad`, cap 100 per payment.
+    let g_id = rid(&test_env.env, 11);
+    let mut g = empty_public_rule(&test_env.env);
+    g.per_payment_max = 100;
+    g.denylist = soroban_sdk::vec![&test_env.env, bad.clone()];
+    test_env.client.set_public_rule(&user, &g_id, &g);
+    test_env.client.set_global_public(&user, &g_id);
+
+    // A denied payee is rejected even though the key itself allows any.
+    let res = test_env
+        .client
+        .try_release_payment_session(&session, &bad, &10, &None);
+    assert!(res == Err(Ok(VaultError::GlobalPayeeDenied)));
+    // Over the global's per-payment cap is rejected.
+    let res = test_env
+        .client
+        .try_release_payment_session(&session, &good, &101, &None);
+    assert!(res == Err(Ok(VaultError::GlobalCapExceeded)));
+    // Within cap, non-denied payee: succeeds.
+    test_env
+        .client
+        .release_payment_session(&session, &good, &100, &None);
+    assert_eq!(test_env.token_client.balance(&good), 100);
+
+    // Clearing the global removes the constraint (the key's cap alone governs again).
+    test_env.client.clear_global_public(&user);
+    test_env
+        .client
+        .release_payment_session(&session, &bad, &50, &None);
+    assert_eq!(test_env.token_client.balance(&bad), 50);
 }

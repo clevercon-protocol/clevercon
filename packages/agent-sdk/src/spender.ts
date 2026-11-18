@@ -1,0 +1,485 @@
+/**
+ * The CleverCon spender SDK: give any app or agent a bounded, non-custodial
+ * Stellar spending account in a few calls. Zero runtime dependencies (global
+ * fetch only), keyed by a scoped API key, so importing it does not pull in x402
+ * or express. It drives the same public API the console and MCP use.
+ *
+ *   const cc = createSpender({ apiKey: process.env.CLEVERCON_API_KEY! });
+ *   await cc.pay('G...', 5, { reason: 'design work' });
+ *   await cc.disburse([{ payee: 'G...', amount: 2 }, { payee: 'G...', amount: 3 }]);
+ *   const { available } = await cc.getBudget();
+ *
+ * Every spend is bounded by a policy and released from the vault; the agent
+ * never holds funds.
+ */
+
+// Type-only imports: erased at compile, so importing createSpender never pulls in
+// the prover (snarkjs/stellar) chain. The prover is loaded lazily in disbursePrivate.
+import type { PolicyBundle } from './payments/policy-bundle.js';
+import type { PoseidonArtifacts } from './payments/poseidon.js';
+// Token decode is tiny + dependency-free (no snarkjs/stellar), so a value import is fine.
+import { unpackPolicyKey } from './config-tokens.js';
+
+export interface SpenderOptions {
+  /** Scoped API key (cc_...). */
+  apiKey: string;
+  /** API base URL. Defaults to CLEVERCON_API_URL, or the live CleverCon API. */
+  apiUrl?: string;
+  /** Override fetch (for tests or a custom agent). Defaults to global fetch. */
+  fetchImpl?: typeof fetch;
+  /** Request timeout in ms (default 15000). */
+  timeoutMs?: number;
+  /**
+   * Self-custody PRIVATE disbursement (custody:self + mode:private): the owner's
+   * policy bundle `{ rules, salt }`. Required to call {@link CleverConClient.disbursePrivate}
+   * unless `CLEVERCON_POLICY_JSON` is set. It never leaves this process; only the
+   * proof is relayed, so the server can neither read nor forge the rule.
+   */
+  policyBundle?: PolicyBundle;
+  /**
+   * The owner's global-private rule bundle `{ rules, salt }`, if one is set on-chain.
+   * When present, disbursePrivate proves a SECOND proof against it (the vault requires
+   * it when a global-private is pinned) and relays both. Falls back to
+   * `CLEVERCON_GLOBAL_POLICY_JSON`. Omit when no global-private is set. This is the
+   * "global salt" an SDK/MCP agent needs to spend while a global rule is active.
+   */
+  globalBundle?: PolicyBundle;
+  /**
+   * OPTIONAL override for the circuit artifacts. By default disbursePrivate downloads
+   * `policy_batch.wasm` + the proving `.zkey` once from the hosted bucket and caches
+   * them on disk, so a user never has to set a path. Set this (or `CLEVERCON_PP2_WASM`
+   * / `CLEVERCON_PP2_ZKEY`) only to pin local files. Poseidon artifacts default to the
+   * hosted set when a policy needs them (allowlist/deny/calendar/category).
+   */
+  proverArtifacts?: { wasmPath?: string; zkeyPath?: string; poseidon?: PoseidonArtifacts };
+}
+
+export interface PaymentLine {
+  payee: string;
+  amount: number;
+  reason?: string;
+}
+
+export interface SpendLimit {
+  perPaymentCeilingUsdc?: number;
+  rollingCapUsdc?: number;
+  rollingWindowSecs?: number;
+  allowlist?: string[];
+  isPrivate?: boolean;
+  /**
+   * Soft marketplace eligibility (service allow/deny, allowed tiers) the app enforces
+   * at hire. Non-sensitive, so it is stored in cleartext in both lanes; the on-chain
+   * payee allowlist remains the hard backstop.
+   */
+  eligibility?: {
+    allowedTiers?: ('T1' | 'T2' | 'T3')[];
+    serviceAllow?: string[];
+    serviceDeny?: string[];
+  };
+}
+
+export interface Budget {
+  balance: number;
+  available: number;
+  locked: number;
+}
+
+export interface Spend {
+  id: string;
+  title: string;
+  mode: string;
+  status: string;
+  budget: number;
+  spent: number;
+  createdAt: string;
+}
+
+export interface SavedLimit {
+  id: string;
+  commitment: string;
+  isPrivate: boolean;
+  rules: unknown;
+  createdAt: string;
+}
+
+/** An API call that failed; carries the HTTP status so callers can branch on it. */
+export class CleverConError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'CleverConError';
+  }
+}
+
+/**
+ * The managed server-path spend (pp/1 binding proof) is retired. Throw a clear,
+ * typed error pointing callers at the client-proven self-custody path.
+ */
+function retiredServerPath(): never {
+  throw new CleverConError(
+    410,
+    'The managed server-path spend (pay/disburse) is retired: the policy verifier now ' +
+      'carries only the pp/2 batch verifying key, so server-built binding proofs no longer ' +
+      'verify on-chain. Use disbursePrivate for self-custody private spend (your policy is ' +
+      'proven locally; only the proof is relayed). Managed/session-key spend is coming.',
+  );
+}
+
+export interface CleverConClient {
+  /**
+   * @deprecated The managed server-path spend (pp/1) is retired: the policy verifier
+   * now carries only the pp/2 batch verifying key, so server-built binding proofs no
+   * longer verify on-chain. Use {@link CleverConClient.disbursePrivate} for self-custody
+   * private spend (your policy is proven locally; only the proof is relayed). Managed /
+   * session-key spend returns in a later release. Calling this throws immediately.
+   */
+  pay(
+    payee: string,
+    amount: number,
+    opts?: { reason?: string; policyId?: string; idempotencyKey?: string },
+  ): Promise<Spend>;
+  /**
+   * @deprecated See {@link CleverConClient.pay} - the managed server-path is retired.
+   * Use {@link CleverConClient.disbursePrivate} instead. Calling this throws immediately.
+   */
+  disburse(
+    lines: PaymentLine[],
+    opts?: { policyId?: string; idempotencyKey?: string },
+  ): Promise<Spend>;
+  /**
+   * Self-custody PRIVATE disburse (custody:self + mode:private), KEYLESS: prove the
+   * owner's policy bundle LOCALLY (Groth16, up to 4 payees) and relay ONLY the proof.
+   * The vault's release_proved_keyless takes no signature - the proof + the owner's
+   * pinned commitment + a fresh nullifier authorize it - so there is no delegate and
+   * no per-payment key; a fee-payer relayer only pays the network fee and can neither
+   * read nor forge the rule. Synchronous: returns the on-chain tx hash. When a
+   * global-private rule is set, pass `globalBundle` (or `CLEVERCON_GLOBAL_POLICY_JSON`)
+   * and a second proof is relayed automatically. Requires `policyBundle` + artifacts
+   * (options or env); fail-closed otherwise.
+   */
+  disbursePrivate(
+    lines: PaymentLine[],
+  ): Promise<{ txHash: string; totalUsdc: number; legs: number; commitment: string }>;
+  /**
+   * Public server-custody spend (custody:platform + mode:public): pay a payee via the
+   * owner's Managed Session - a server-held key the OWNER authorized once in the dapp
+   * (a total cap + expiry, plus an optional global public rule the vault AND-enforces).
+   * Hands-off: no per-payment signature and no local key; the platform signs within
+   * the on-chain scope, so it can never exceed the cap, break the global rule, or spend
+   * past expiry. Returns the tx hash. Fails if no Managed Session is enabled.
+   */
+  sessionPay(payee: string, amount: number, ruleId?: string): Promise<{ txHash: string }>;
+  /** The owner's live Managed Session (cap/spent/remaining/expiry/paused), or null. */
+  getSession(): Promise<unknown>;
+  /** Hire a registered service (DIRECT pays a chosen serviceId). `idempotencyKey`
+   *  makes a retry return the original hire rather than hiring twice. `input`
+   *  carries the structured job input (and `input.attachments`, an ArtifactRef[],
+   *  for services that need files). */
+  hire(opts: {
+    title: string;
+    budget: number;
+    serviceId?: string;
+    mode?: 'DIRECT' | 'SEARCH' | 'COMPOSE';
+    policyId?: string;
+    input?: Record<string, unknown>;
+    idempotencyKey?: string;
+  }): Promise<Spend>;
+  /** Full state of one of the agent's tasks: its steps, each step's status and
+   *  (for an async/needs-input step) its progress and pending inputRequest. Poll
+   *  this to drive a long-running or needs-input hire to completion. */
+  getTask(taskId: string): Promise<unknown>;
+  /** Answer a step a provider parked as INPUT_REQUIRED (an elicitation), resuming
+   *  the job. `response` is validated against the question's schema server-side. */
+  answer(
+    taskId: string,
+    stepId: string,
+    response: Record<string, unknown>,
+  ): Promise<{ ok: boolean; stepId: string }>;
+  /** The vault position the agent can spend (balance, available, locked). */
+  getBudget(): Promise<Budget>;
+  /** The recent activity ledger (jobs and payments), newest first. */
+  getActivity(): Promise<unknown>;
+  /** Create a reusable spending limit; returns its policyId. */
+  setLimit(limit: SpendLimit): Promise<SavedLimit>;
+  /** List saved spending limits. */
+  listLimits(): Promise<{ items: SavedLimit[]; total: number }>;
+}
+
+// Spend calls (pay/disburse/hire) lock budget on-chain in the request path, which
+// can take several seconds on a busy RPC, so the default is generous.
+const DEFAULT_TIMEOUT = 60_000;
+
+export function createSpender(options: SpenderOptions): CleverConClient {
+  const apiUrl = (
+    options.apiUrl ??
+    (typeof process !== 'undefined' ? process.env?.CLEVERCON_API_URL : undefined) ??
+    'https://cleverconapi-production.up.railway.app'
+  ).replace(/\/+$/, '');
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT;
+  if (!options.apiKey) throw new Error('createSpender: apiKey is required');
+
+  async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const res = await fetchImpl(apiUrl + path, {
+      method,
+      headers: { 'content-type': 'application/json', 'x-api-key': options.apiKey },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const j = (await res.json()) as { message?: unknown };
+        detail = typeof j?.message === 'string' ? j.message : JSON.stringify(j);
+      } catch {
+        detail = await res.text().catch(() => '');
+      }
+      if (res.status === 401) throw new CleverConError(401, 'Unauthorized: check your API key');
+      if (res.status === 429)
+        throw new CleverConError(429, `Daily API quota exceeded${detail ? `: ${detail}` : ''}`);
+      throw new CleverConError(res.status, detail || `HTTP ${res.status}`);
+    }
+    if (res.status === 204) return undefined as T;
+    return (await res.json()) as T;
+  }
+
+  const env = (k: string): string | undefined =>
+    typeof process !== 'undefined' ? process.env?.[k] : undefined;
+
+  // Resolve the owner's private policy bundle (fail-closed): the option wins, else the
+  // single CLEVERCON_POLICY_KEY token (from the Rules tab), else a legacy raw
+  // CLEVERCON_POLICY_JSON. Never a silent fallback to a server path.
+  function resolveBundle(): PolicyBundle {
+    if (options.policyBundle) return options.policyBundle;
+    const token = env('CLEVERCON_POLICY_KEY');
+    if (token) return unpackPolicyKey(token) as unknown as PolicyBundle;
+    const raw = env('CLEVERCON_POLICY_JSON');
+    if (raw) {
+      const b = JSON.parse(raw) as PolicyBundle;
+      if (!b?.rules || !b?.salt) throw new Error('policy bundle needs { rules, salt }');
+      return b;
+    }
+    throw new Error(
+      'disbursePrivate: no private policy (set options.policyBundle, or CLEVERCON_POLICY_KEY to the key you copied from the Rules tab)',
+    );
+  }
+
+  // Resolve, once per process, the policyId a hire should bind to: an explicit
+  // CLEVERCON_POLICY_ID, else the commitment of the configured private rule matched to
+  // one of the owner's pinned rules. Undefined when nothing is configured (the API then
+  // derives a tight public policy from the payee + budget). Throws when a private rule
+  // is configured but is not pinned on-chain, so a hire never runs under the wrong rule.
+  let cachedHirePolicyId: string | null | undefined;
+  async function resolveHirePolicyId(): Promise<string | undefined> {
+    if (cachedHirePolicyId !== undefined) return cachedHirePolicyId ?? undefined;
+    const explicit = env('CLEVERCON_POLICY_ID')?.trim();
+    if (explicit) {
+      cachedHirePolicyId = explicit;
+      return explicit;
+    }
+    let bundle: PolicyBundle | null = null;
+    try {
+      bundle = resolveBundle();
+    } catch {
+      bundle = null; // no private rule configured: let the API derive the safety net
+    }
+    if (!bundle) {
+      cachedHirePolicyId = null;
+      return undefined;
+    }
+    const { commitmentForBundle } = await import('./payments/private-disburse.js');
+    const { resolveArtifacts } = await import('./payments/artifacts.js');
+    const resolved = await resolveArtifacts({
+      wasmPath: options.proverArtifacts?.wasmPath,
+      zkeyPath: options.proverArtifacts?.zkeyPath,
+    });
+    const commitment = (
+      await commitmentForBundle(bundle, {
+        ...resolved,
+        poseidon: options.proverArtifacts?.poseidon,
+      })
+    ).toLowerCase();
+    const { items } = await request<{
+      items: { id: string; commitment: string; status: string }[];
+    }>('GET', '/policies');
+    const match = items.find(
+      (p) => p.commitment?.toLowerCase() === commitment && p.status !== 'archived',
+    );
+    if (!match) {
+      throw new CleverConError(
+        400,
+        'Your configured private rule is not pinned on-chain for this account, so a hire cannot bind to it. Pin it on the Rules tab, then hire again.',
+      );
+    }
+    cachedHirePolicyId = match.id;
+    return match.id;
+  }
+
+  // Resolve the owner's global-private bundle, if any: option, else the single
+  // CLEVERCON_GLOBAL_KEY token, else a legacy CLEVERCON_GLOBAL_POLICY_JSON. Null when
+  // no global-private is set on the account.
+  function resolveGlobalBundle(): PolicyBundle | null {
+    if (options.globalBundle) return options.globalBundle;
+    const token = env('CLEVERCON_GLOBAL_KEY');
+    if (token) return unpackPolicyKey(token) as unknown as PolicyBundle;
+    const raw = env('CLEVERCON_GLOBAL_POLICY_JSON');
+    if (raw) {
+      const b = JSON.parse(raw) as PolicyBundle;
+      if (!b.rules || !b.salt) throw new Error('global bundle needs { rules, salt }');
+      return b;
+    }
+    return null;
+  }
+
+  return {
+    // pp/1 (managed server-path) is RETIRED - the verifier only carries the pp/2 batch
+    // VK, so server-built binding proofs no longer verify. Fail fast with guidance
+    // rather than round-tripping to a 410. Self-custody private spend -> disbursePrivate.
+    pay: async () => retiredServerPath(),
+    disburse: async () => retiredServerPath(),
+    disbursePrivate: async (lines) => {
+      const bundle = resolveBundle();
+      const globalBundle = resolveGlobalBundle();
+      // Lazily pull in the prover (snarkjs/stellar) + artifact resolver only when
+      // actually proving, so importing createSpender stays dependency-free.
+      const { buildPrivateDisbursement, commitmentForBundle } =
+        await import('./payments/private-disburse.js');
+      const { resolveArtifacts } = await import('./payments/artifacts.js');
+      // Resolve the circuit artifacts: by default they are downloaded once from the
+      // hosted bucket and cached on disk, so a user never has to set a wasm/zkey path.
+      // options.proverArtifacts / CLEVERCON_PP2_WASM+_ZKEY only override that.
+      const resolved = await resolveArtifacts({
+        wasmPath: options.proverArtifacts?.wasmPath,
+        zkeyPath: options.proverArtifacts?.zkeyPath,
+      });
+      const artifacts = { ...resolved, poseidon: options.proverArtifacts?.poseidon };
+      type Accum = {
+        runningSpend: string;
+        priorCount: string;
+        anchorR2: string;
+        anchorR7: string;
+      };
+      const payLines = lines.map((l) => ({ payee: l.payee, amount: l.amount }));
+      const readAccum = (c: string) => request<Accum>('GET', `/vault/accumulator/${c}`);
+
+      const commitment = await commitmentForBundle(bundle, artifacts);
+
+      // Fail fast if this rule is not pinned on-chain for the account, BEFORE the
+      // expensive proof. The vault rejects an unpinned commitment anyway, but only
+      // after the proof is built; checking here saves the proving work on the single
+      // most common misconfiguration (a policy key copied before the rule was pinned).
+      // A read failure does not block: the vault stays the authoritative check.
+      try {
+        const { commitments } = await request<{ commitments: string[] }>(
+          'GET',
+          '/vault/pinned-commitments',
+        );
+        if (!commitments.map((c) => c.toLowerCase()).includes(commitment.toLowerCase())) {
+          throw new CleverConError(
+            400,
+            'This rule is not pinned on-chain for your account, so it cannot authorize a spend. Pin it on the Rules tab, then try again.',
+          );
+        }
+      } catch (e) {
+        if (e instanceof CleverConError) throw e;
+        // network/read error: proceed and let the vault be authoritative
+      }
+
+      // Read the vault's per-commitment R2/R7 accumulator so the proof binds to the
+      // window state the vault re-derives at settlement (cumulative across tasks).
+      const {
+        request: batchRequest,
+        totalUsdc,
+        commitmentHex,
+      } = await buildPrivateDisbursement(bundle, payLines, artifacts, await readAccum(commitment));
+
+      // A global-private rule means the vault requires a SECOND proof over the same
+      // payees/amounts against the global commitment (its own window + nullifiers).
+      let global:
+        | {
+            commitment: string;
+            nullifiers: string[];
+            resetR2: boolean;
+            resetR7: boolean;
+            proof: { a: string; b: string; c: string };
+          }
+        | undefined;
+      if (globalBundle) {
+        const gCommitment = await commitmentForBundle(globalBundle, artifacts);
+        const g = await buildPrivateDisbursement(
+          globalBundle,
+          payLines,
+          artifacts,
+          await readAccum(gCommitment),
+          // Share the main release's validity window so the global proof's public
+          // signals match what the vault reconstructs.
+          { validAfter: batchRequest.validAfter, validBefore: batchRequest.validBefore },
+        );
+        global = {
+          commitment: g.request.commitment,
+          nullifiers: g.request.nullifiers,
+          resetR2: g.request.resetR2,
+          resetR7: g.request.resetR7,
+          proof: g.request.proof,
+        };
+      }
+
+      const resp = await request<{ txHash: string }>('POST', '/vault/batch-release-keyless', {
+        ...batchRequest,
+        ...(global ? { global } : {}),
+      });
+      return { txHash: resp.txHash, totalUsdc, legs: lines.length, commitment: commitmentHex };
+    },
+    sessionPay: (payee, amount, ruleId) =>
+      request<{ txHash: string }>('POST', '/vault/session/pay', {
+        payee,
+        amount,
+        ...(ruleId ? { ruleId } : {}),
+      }),
+    getSession: () => request<unknown>('GET', '/vault/session'),
+    hire: async (opts) => {
+      // Bind the hire to a policy the same way the dapp binds the rule you pick: an
+      // explicit opts.policyId wins, else your configured rule (CLEVERCON_POLICY_ID, or
+      // the commitment of CLEVERCON_POLICY_KEY matched to a pinned rule).
+      const policyId = opts.policyId ?? (await resolveHirePolicyId());
+      // Fail closed: a hire must run under a rule you set, never a throwaway. Block when
+      // none is passed or configured, exactly like the dapp refuses to spend with no rule.
+      if (!policyId) {
+        throw new CleverConError(
+          400,
+          'No spending rule configured, so this hire is blocked. Pass policyId, or set CLEVERCON_POLICY_ID (or CLEVERCON_POLICY_KEY for a private rule) to a rule you created in the app.',
+        );
+      }
+      return request<Spend>('POST', '/tasks', {
+        title: opts.title,
+        mode: opts.mode ?? 'DIRECT',
+        budget: opts.budget,
+        ...(opts.serviceId ? { serviceId: opts.serviceId } : {}),
+        policyId,
+        ...(opts.input ? { input: opts.input } : {}),
+        ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
+      });
+    },
+    getTask: (taskId) => request<unknown>('GET', `/tasks/${encodeURIComponent(taskId)}`),
+    answer: (taskId, stepId, response) =>
+      request<{ ok: boolean; stepId: string }>(
+        'POST',
+        `/tasks/${encodeURIComponent(taskId)}/steps/${encodeURIComponent(stepId)}/answer`,
+        { response },
+      ),
+    getBudget: () => request<Budget>('GET', '/vault'),
+    getActivity: () => request<unknown>('GET', '/activity'),
+    setLimit: (limit) => {
+      // Eligibility is a sibling of the spend rules on the wire, not a spend clause.
+      const { isPrivate, eligibility, ...rules } = limit;
+      return request<SavedLimit>('POST', '/policies', {
+        rules,
+        isPrivate: isPrivate === true,
+        ...(eligibility ? { eligibility } : {}),
+      });
+    },
+    listLimits: () => request<{ items: SavedLimit[]; total: number }>('GET', '/policies'),
+  };
+}

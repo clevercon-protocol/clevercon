@@ -1,0 +1,596 @@
+import { useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  ArrowLeft,
+  ListChecks,
+  Receipt as ReceiptIcon,
+  Flag,
+  ShieldCheck,
+  ExternalLink,
+  Clock,
+  CheckCircle2,
+  Sparkles,
+  Download,
+  AlertTriangle,
+  Loader2,
+  MessageCircleQuestion,
+} from 'lucide-react';
+import {
+  getTask,
+  raiseDispute,
+  approveTask,
+  answerStep,
+  getDisputes,
+  type TaskDetail as TaskDetailData,
+  type TaskStepView,
+} from '../lib/tasks';
+import { getDelegate } from '../lib/vault';
+import { PrivacyReveal } from '../components/PrivacyReveal';
+import { config } from '../config';
+
+const NON_TERMINAL = (status: string) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(status);
+
+const EXPLORER_NET = config.network === 'mainnet' ? 'public' : 'testnet';
+const explorerTx = (hash: string) => `https://stellar.expert/explorer/${EXPLORER_NET}/tx/${hash}`;
+const shortHash = (h: string) => (h.length > 16 ? `${h.slice(0, 8)}…${h.slice(-6)}` : h);
+
+function DisputeButton({ taskId }: { taskId: string }) {
+  const qc = useQueryClient();
+  const raise = useMutation({
+    mutationFn: () => raiseDispute(taskId, 'Buyer disputes the outcome'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['task', taskId] }),
+  });
+  if (raise.isSuccess) {
+    return <span className="text-xs text-amber-300">Dispute raised (under review)</span>;
+  }
+  return (
+    <button
+      onClick={() => raise.mutate()}
+      disabled={raise.isPending}
+      className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2.5 py-1 text-xs text-slate-300 hover:bg-white/10 disabled:opacity-50"
+      title="Raise a dispute for an operator to review"
+    >
+      <Flag size={12} /> {raise.isPending ? 'Raising…' : 'Raise dispute'}
+    </button>
+  );
+}
+
+/** A coarse, non-ticking "time until" label for the dispute-window countdown. */
+function until(target: number): string {
+  const diff = target - Date.now();
+  if (diff <= 0) return 'shortly';
+  const mins = Math.round(diff / 60000);
+  if (mins < 60) return `in ~${mins} min`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return `in ~${hrs}h`;
+  return `in ~${Math.round(hrs / 24)}d`;
+}
+
+/**
+ * Shown while a T2 delivery is in its dispute window: the funds sit in escrow
+ * (the on-chain lock) until the window ends. The buyer can approve early to pay
+ * the provider now, or dispute (the header button) to freeze it for a resolver.
+ */
+function ReviewBanner({ task }: { task: TaskDetailData }) {
+  const qc = useQueryClient();
+  const approve = useMutation({
+    mutationFn: () => approveTask(task.id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['task', task.id] }),
+  });
+  const releaseAt = task.steps
+    .filter((s) => s.status === 'AWAITING_APPROVAL' && s.releaseAt)
+    .map((s) => Date.parse(s.releaseAt as string))
+    .filter((t) => !Number.isNaN(t))
+    .sort((a, b) => a - b)[0];
+  return (
+    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <Clock size={18} className="shrink-0 text-amber-300" />
+        <div className="min-w-0">
+          <div className="font-medium text-amber-200">
+            {releaseAt ? 'In review (dispute window)' : 'Awaiting your approval'}
+          </div>
+          <p className="text-xs text-slate-400">
+            {releaseAt ? (
+              <>
+                The delivery is held in escrow and releases to the provider {until(releaseAt)}{' '}
+                unless you dispute it. Approve now to pay immediately.
+              </>
+            ) : (
+              <>
+                The delivery is held in escrow and waits for your approval before the provider is
+                paid. Approve to release, or dispute if it is not acceptable.
+              </>
+            )}
+          </p>
+        </div>
+        <div className="ml-auto">
+          <button
+            onClick={() => approve.mutate()}
+            disabled={approve.isPending}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+          >
+            <CheckCircle2 size={13} /> {approve.isPending ? 'Releasing…' : 'Approve & release now'}
+          </button>
+        </div>
+      </div>
+      {approve.error && (
+        <p className="mt-2 text-xs text-amber-300">
+          {(approve.error as Error).message || 'Could not approve right now.'}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Shown when a job finished running but no payment settled on-chain (spent is 0).
+ * The usual cause is the settlement relayer not being registered, so the server
+ * can't submit the release, or an unfunded vault. We say so plainly rather than
+ * letting a "COMPLETED" badge imply money moved.
+ */
+function UnpaidBanner({ task }: { task: TaskDetailData }) {
+  const { data: delegate } = useQuery({ queryKey: ['delegate'], queryFn: getDelegate });
+  const ranUnpaid = task.status === 'COMPLETED' && task.spent === 0 && task.budget > 0;
+  if (!ranUnpaid) return null;
+  const relayerMissing = delegate ? !delegate.registered : false;
+  return (
+    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-4">
+      <div className="flex items-start gap-2">
+        <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-300" />
+        <div className="text-sm text-slate-300">
+          <div className="font-medium text-amber-200">Completed, but no payment settled</div>
+          {relayerMissing ? (
+            <p className="mt-1 text-xs text-slate-400">
+              The job ran, but your{' '}
+              <span className="text-slate-300">settlement relayer isn&apos;t registered</span>, so
+              the release couldn&apos;t be submitted. No funds moved and no receipt was created.{' '}
+              <Link to="/app/vault" className="text-violet-300 hover:text-violet-200">
+                Register the relayer
+              </Link>{' '}
+              so future releases settle.
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-slate-400">
+              The job ran, but nothing settled on-chain yet. If your vault is funded and the relayer
+              is registered, settlement may still be processing; otherwise check your{' '}
+              <Link to="/app/vault" className="text-violet-300 hover:text-violet-200">
+                vault balance
+              </Link>
+              .
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Coerce a text field to the JSON type the question's schema declares. */
+function coerce(value: string, type: unknown): unknown {
+  if (type === 'number' || type === 'integer') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : value;
+  }
+  if (type === 'boolean') return value === 'true' || value === 'yes';
+  return value;
+}
+
+/**
+ * Inline form to answer a step a provider parked as INPUT_REQUIRED. If the
+ * question carries a JSON Schema with named properties, render one field each;
+ * otherwise a single free-text box (parsed as JSON when it looks like an object).
+ */
+function AnswerForm({ taskId, step }: { taskId: string; step: TaskStepView }) {
+  const qc = useQueryClient();
+  const ir = step.inputRequest;
+  const schemaProps =
+    ir?.schema && typeof ir.schema === 'object'
+      ? ((ir.schema as { properties?: Record<string, { type?: unknown }> }).properties ?? null)
+      : null;
+  const fieldNames = schemaProps ? Object.keys(schemaProps) : [];
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [raw, setRaw] = useState('');
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const submit = useMutation({
+    mutationFn: () => {
+      let response: Record<string, unknown>;
+      if (fieldNames.length) {
+        response = {};
+        for (const k of fieldNames) {
+          const v = values[k];
+          if (v !== undefined && v !== '') response[k] = coerce(v, schemaProps?.[k]?.type);
+        }
+      } else {
+        const t = raw.trim();
+        if (t.startsWith('{')) {
+          response = JSON.parse(t) as Record<string, unknown>;
+        } else {
+          response = { answer: t };
+        }
+      }
+      return answerStep(taskId, step.id ?? '', response);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['task', taskId] }),
+  });
+
+  const onSubmit = () => {
+    setLocalError(null);
+    if (!step.id) {
+      setLocalError('This step cannot be answered (missing id).');
+      return;
+    }
+    if (!fieldNames.length) {
+      const t = raw.trim();
+      if (t.startsWith('{')) {
+        try {
+          JSON.parse(t);
+        } catch {
+          setLocalError('Enter valid JSON, or plain text (sent as { answer }).');
+          return;
+        }
+      }
+    }
+    submit.mutate();
+  };
+
+  return (
+    <div className="mt-3 rounded-xl border border-violet-500/30 bg-violet-500/[0.06] p-3">
+      <div className="flex items-start gap-1.5 text-violet-200">
+        <MessageCircleQuestion size={14} className="mt-0.5 shrink-0" />
+        <span className="text-sm font-medium">{ir?.prompt ?? 'The provider needs more input'}</span>
+      </div>
+      <div className="mt-3 space-y-2">
+        {fieldNames.length ? (
+          fieldNames.map((k) => (
+            <label key={k} className="block text-xs text-slate-400">
+              {k}
+              <input
+                value={values[k] ?? ''}
+                onChange={(e) => setValues((v) => ({ ...v, [k]: e.target.value }))}
+                className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-2.5 py-1.5 text-sm text-slate-200 outline-none focus:border-violet-500/50"
+                placeholder={String(schemaProps?.[k]?.type ?? 'text')}
+              />
+            </label>
+          ))
+        ) : (
+          <textarea
+            value={raw}
+            onChange={(e) => setRaw(e.target.value)}
+            rows={3}
+            className="w-full rounded-lg border border-white/10 bg-black/30 px-2.5 py-1.5 text-sm text-slate-200 outline-none focus:border-violet-500/50"
+            placeholder='Your answer (plain text, or a JSON object like {"format":"png"})'
+          />
+        )}
+      </div>
+      <div className="mt-2 flex items-center gap-3">
+        <button
+          onClick={onSubmit}
+          disabled={submit.isPending}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
+        >
+          {submit.isPending ? 'Sending…' : 'Send answer'}
+        </button>
+        {(localError || submit.error) && (
+          <span className="text-xs text-amber-300">
+            {localError || (submit.error as Error).message || 'Could not send the answer.'}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * This task's dispute history with a clear timeline (raised -> resolved), shown on
+ * both the buyer's Job view and (via the provider inbox) the provider's. Visible
+ * only when a dispute exists, so a clean task stays uncluttered.
+ */
+function DisputePanel({ taskId }: { taskId: string }) {
+  const { data: disputes = [] } = useQuery({ queryKey: ['disputes'], queryFn: getDisputes });
+  const mine = disputes.filter((d) => d.taskId === taskId);
+  if (mine.length === 0) return null;
+  return (
+    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-4">
+      <div className="flex items-center gap-2 text-amber-200">
+        <Flag size={16} />
+        <span className="font-medium">Dispute{mine.length > 1 ? 's' : ''}</span>
+      </div>
+      <div className="mt-3 space-y-3">
+        {mine.map((d) => (
+          <div key={d.id} className="text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`text-xs font-medium ${
+                  d.status === 'OPEN'
+                    ? 'text-amber-300'
+                    : d.status === 'RESOLVED'
+                      ? 'text-emerald-300'
+                      : 'text-slate-400'
+                }`}
+              >
+                {d.status}
+              </span>
+              <span className="text-xs text-slate-500">raised {fmt(d.createdAt)}</span>
+              {d.resolvedAt && (
+                <span className="text-xs text-slate-500">· resolved {fmt(d.resolvedAt)}</span>
+              )}
+            </div>
+            {d.reason && <p className="mt-1 text-slate-400">Reason: {d.reason}</p>}
+            {d.resolution && <p className="mt-1 text-emerald-300/90">Resolution: {d.resolution}</p>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const STATUS_TINT: Record<string, string> = {
+  RUNNING: 'text-sky-300',
+  RELEASED: 'text-emerald-300',
+  CONFIRMED: 'text-emerald-300',
+  COMPLETED: 'text-emerald-300',
+  PENDING: 'text-amber-300',
+  SUBMITTED: 'text-sky-300',
+  INPUT_REQUIRED: 'text-violet-300',
+  AWAITING_APPROVAL: 'text-amber-300',
+  DRAFT: 'text-slate-400',
+  CANCELLED: 'text-slate-500',
+  SKIPPED: 'text-slate-500',
+  DISPUTED: 'text-red-300',
+  FAILED: 'text-red-400',
+};
+
+function tint(s: string): string {
+  return STATUS_TINT[s] ?? 'text-slate-400';
+}
+
+function fmt(v: string): string {
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? v : new Date(t).toLocaleString();
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Public-bucket artifacts carry an absolute URL; a relative one resolves via the API. */
+function resolveArtifactUrl(url: string): string {
+  return /^https?:\/\//.test(url) ? url : `${config.apiUrl}${url}`;
+}
+
+export function TaskDetail() {
+  const { id = '' } = useParams();
+  const {
+    data: task,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['task', id],
+    queryFn: () => getTask(id),
+    // While a job is running, waiting on an answer, or in its dispute window, poll
+    // so live progress and a pending question appear without a manual refresh.
+    refetchInterval: (query) =>
+      query.state.data && NON_TERMINAL(query.state.data.status) ? 4000 : false,
+  });
+
+  return (
+    <section className="space-y-6">
+      <Link
+        to="/app/jobs"
+        className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-white"
+      >
+        <ArrowLeft size={14} /> Back to jobs
+      </Link>
+
+      {isLoading && <p className="text-sm text-slate-500">Loading job…</p>}
+      {error && <p className="text-sm text-red-400">Could not load this job.</p>}
+
+      {task && (
+        <>
+          <div>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-bold">{task.title}</h1>
+              <span className={`text-sm ${tint(task.status)}`}>{task.status}</span>
+              <div className="ml-auto">
+                <DisputeButton taskId={task.id} />
+              </div>
+            </div>
+            {task.description && <p className="mt-1 text-slate-400">{task.description}</p>}
+            <p className="mt-1 text-sm text-slate-500">
+              {task.mode} · created {fmt(task.createdAt)}
+            </p>
+          </div>
+
+          {task.awaitingInput && (
+            <div className="rounded-2xl border border-violet-500/30 bg-violet-500/[0.06] p-4">
+              <div className="flex items-start gap-2">
+                <MessageCircleQuestion size={18} className="mt-0.5 shrink-0 text-violet-300" />
+                <div className="text-sm text-slate-300">
+                  <div className="font-medium text-violet-200">A provider needs your input</div>
+                  <p className="mt-1 text-xs text-slate-400">
+                    One of this job&apos;s steps is waiting on an answer from you. Scroll to the
+                    highlighted step below to respond; the job resumes as soon as you send it.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+          {task.awaitingApproval && <ReviewBanner task={task} />}
+          <DisputePanel taskId={task.id} />
+          <UnpaidBanner task={task} />
+
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              ['Budget', `$${task.budget.toFixed(2)}`],
+              ['Spent', `$${task.spent.toFixed(2)}`],
+              ['Steps', `${task.completedSteps}/${task.stepCount}`],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-2xl bg-white/[0.04] p-4">
+                <div className="text-xl font-bold">{value}</div>
+                <div className="text-xs text-slate-500">{label}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="rounded-2xl bg-white/[0.04] p-6">
+            <div className="flex items-center gap-2 text-slate-300">
+              <ListChecks size={18} className="text-violet-300" />
+              <h2 className="font-semibold">Steps</h2>
+            </div>
+            {task.steps.length === 0 ? (
+              <p className="mt-4 text-sm text-slate-500">
+                No steps yet. Search and compose jobs plan their steps when they run.
+              </p>
+            ) : (
+              <div className="mt-4 space-y-2">
+                {task.steps.map((s) => (
+                  <div
+                    key={s.index}
+                    className={`rounded-xl p-3 text-sm ${
+                      s.status === 'INPUT_REQUIRED'
+                        ? 'border border-violet-500/30 bg-violet-500/[0.05]'
+                        : 'bg-white/[0.04]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="min-w-0">
+                        <div className="truncate font-medium">
+                          {s.index + 1}. {s.action}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {s.service ?? 'unassigned'}
+                          {s.latencyMs != null && ` · ${s.latencyMs}ms`}
+                          {s.error && ` · ${s.error}`}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-slate-300">${s.estimatedCost.toFixed(2)}</div>
+                        <div className={`inline-flex items-center gap-1 text-xs ${tint(s.status)}`}>
+                          {s.status === 'RUNNING' && <Loader2 size={11} className="animate-spin" />}
+                          {s.status}
+                        </div>
+                      </div>
+                    </div>
+                    {s.status === 'RUNNING' && s.progress && (
+                      <div className="mt-2">
+                        {typeof s.progress.pct === 'number' && (
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                            <div
+                              className="h-full rounded-full bg-sky-400/70 transition-all"
+                              style={{ width: `${Math.max(0, Math.min(100, s.progress.pct))}%` }}
+                            />
+                          </div>
+                        )}
+                        {s.progress.message && (
+                          <div className="mt-1 text-[11px] text-sky-300">{s.progress.message}</div>
+                        )}
+                      </div>
+                    )}
+                    {s.status === 'INPUT_REQUIRED' && s.inputRequest && (
+                      <AnswerForm taskId={task.id} step={s} />
+                    )}
+                    {s.verified && (
+                      <div className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-emerald-300">
+                        <ShieldCheck size={12} className="shrink-0" />
+                        Trustlessly verified before payment — the result was re-checked on-chain,
+                        not just accepted.
+                      </div>
+                    )}
+                    {s.qualityRating != null && (
+                      <div className="mt-2 flex items-start gap-1.5 text-[11px] text-sky-300">
+                        <Sparkles size={12} className="mt-0.5 shrink-0" />
+                        <span>
+                          Quality check: {s.qualityRating.toFixed(1)}/5
+                          {s.qualityNote ? ` · ${s.qualityNote}` : ''}
+                          <span className="text-slate-500"> (advisory, not a payment gate)</span>
+                        </span>
+                      </div>
+                    )}
+                    {s.artifact && (
+                      <a
+                        href={resolveArtifactUrl(s.artifact.url)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2.5 py-1 text-[11px] text-violet-300 hover:bg-white/10"
+                        title={s.artifact.hash ?? undefined}
+                      >
+                        <Download size={12} /> Download file · {s.artifact.contentType} ·{' '}
+                        {fmtBytes(s.artifact.size)}
+                        {s.artifact.hash && (
+                          <span className="text-slate-500"> · {s.artifact.hash.slice(0, 20)}…</span>
+                        )}
+                      </a>
+                    )}
+                    {s.output && (
+                      <pre className="mt-2 overflow-x-auto rounded-lg bg-black/30 p-2 text-[11px] text-slate-400">
+                        {s.output}
+                      </pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-2xl bg-white/[0.04] p-6">
+            <div className="flex items-center gap-2 text-slate-300">
+              <ReceiptIcon size={18} className="text-violet-300" />
+              <h2 className="font-semibold">Receipts</h2>
+            </div>
+            {task.receipts.length === 0 ? (
+              <p className="mt-4 text-sm text-slate-500">
+                No payments yet. Receipts appear here once the job runs.
+              </p>
+            ) : (
+              <div className="mt-4 space-y-2">
+                {task.receipts.map((r) => (
+                  <div key={r.id} className="rounded-xl bg-white/[0.04] p-3 text-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="min-w-0">
+                        <div className="font-medium">
+                          ${r.amount.toFixed(2)} {r.asset} · {r.method}
+                        </div>
+                        <div className="truncate font-mono text-xs text-slate-500">
+                          to {r.toAddress}
+                          {r.txHash && (
+                            <>
+                              {' · '}
+                              <a
+                                href={explorerTx(r.txHash)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-violet-300 hover:text-violet-200"
+                              >
+                                {shortHash(r.txHash)} <ExternalLink size={11} />
+                              </a>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className={`text-xs ${tint(r.status)}`}>{r.status}</div>
+                        <div className="text-xs text-slate-500">{fmt(r.createdAt)}</div>
+                      </div>
+                    </div>
+                    {r.method === 'VAULT_RELEASE' && (
+                      <div className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-violet-300">
+                        <ShieldCheck size={12} className="shrink-0" />
+                        Proof-gated release (your rule stayed private)
+                      </div>
+                    )}
+                    <PrivacyReveal method={r.method} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}

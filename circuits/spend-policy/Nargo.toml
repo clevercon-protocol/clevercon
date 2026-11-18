@@ -1,0 +1,6 @@
+[package]
+name = "spend_policy"
+type = "bin"
+authors = ["CleverCon"]
+
+[dependencies]

@@ -1,0 +1,756 @@
+import { Injectable, Logger } from '@nestjs/common';
+import Anthropic from '@anthropic-ai/sdk';
+import type { ServiceFunction } from '@clevercon/common';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { VaultService } from '../vault/vault.service.js';
+
+export interface PlanLine {
+  payee: string;
+  amount: number;
+  reason?: string;
+}
+
+export interface AgentPlan {
+  kind: 'pay' | 'disburse' | 'hire' | 'none';
+  lines: PlanLine[];
+  service: { id: string; name: string; pricePerCall: number } | null;
+  // For a multi-function service: the chosen function to hire (its key) + a label.
+  functionKey?: string;
+  functionLabel?: string;
+  budget: number;
+  rationale: string;
+  warnings: string[];
+  source: 'llm' | 'fallback';
+  // For a hire: structured input parameters extracted from the instruction (e.g.
+  // { operation, width, format } for an image tool), matching the service's schema.
+  input?: Record<string, unknown>;
+}
+
+/** The unit price of a function (0 when free). */
+function fnPrice(fn: ServiceFunction): number {
+  return fn.pricing.model === 'free' ? 0 : (fn.pricing.amount ?? 0);
+}
+/** Pick the function the model chose (by key, else label), else the first. */
+function pickFunction(fns: ServiceFunction[], want: string): ServiceFunction {
+  const w = want.trim().toLowerCase();
+  return (
+    fns.find((f) => f.key.toLowerCase() === w) ??
+    fns.find((f) => w && (f.label.toLowerCase().includes(w) || w.includes(f.key.toLowerCase()))) ??
+    fns[0]
+  );
+}
+function asFunctions(v: unknown): ServiceFunction[] {
+  return Array.isArray(v) ? (v as ServiceFunction[]) : [];
+}
+/** Render a service's functions for the planner so it can pick one + extract params. */
+function functionsBlurb(functions: unknown): string {
+  const fns = asFunctions(functions);
+  if (!fns.length) return '';
+  const lines = fns.map((f) => {
+    const price = f.pricing.model === 'free' ? 'free' : `$${fnPrice(f)}`;
+    const io = f.input ? ` input: ${JSON.stringify(f.input)}` : '';
+    return `    - ${f.key} (${price})${f.description ? `: ${f.description}` : ''}${io}`;
+  });
+  return `\n  functions (pick the best one, return its key in functionKey):\n${lines.join('\n')}`;
+}
+
+const STELLAR_ADDR = /^G[A-Z2-7]{55}$/;
+
+// The structured shape the model must return. All fields required + no extras so
+// the tool call is well-formed; the model fills empties where a field is N/A.
+const PLAN_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kind: {
+      type: 'string',
+      enum: ['pay', 'disburse', 'hire', 'none'],
+      description:
+        'pay = one address; disburse = many addresses; hire = pay a service; none = not a spend / unclear',
+    },
+    lines: {
+      type: 'array',
+      description: 'the payments (for pay/disburse). Empty for hire/none.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          payee: {
+            type: 'string',
+            description:
+              'Stellar address (G...). Leave empty if the user gave a name, not an address.',
+          },
+          amount: { type: 'number', description: 'USDC amount, > 0' },
+          reason: { type: 'string', description: 'what this payment is for (may be empty)' },
+        },
+        required: ['payee', 'amount', 'reason'],
+      },
+    },
+    serviceQuery: {
+      type: 'string',
+      description: 'for hire: a few words describing the service to find; else empty',
+    },
+    functionKey: {
+      type: 'string',
+      description:
+        'for a hire of a service that lists functions: the key of the single best function ' +
+        'for the instruction (e.g. "github.search_repos"); else empty',
+    },
+    budget: { type: 'number', description: 'for hire: max USDC to spend; else 0' },
+    serviceParams: {
+      type: 'object',
+      description:
+        'for a hire when a specific service + its input schema are given: the input ' +
+        'parameters extracted from the instruction to match that schema (e.g. ' +
+        '{"operation":"resize","width":400,"format":"jpeg"}); else {}',
+    },
+    rationale: {
+      type: 'string',
+      description: 'one short sentence explaining the plan to the user',
+    },
+  },
+  required: [
+    'kind',
+    'lines',
+    'serviceQuery',
+    'functionKey',
+    'budget',
+    'serviceParams',
+    'rationale',
+  ],
+};
+
+const SYSTEM_PROMPT =
+  'You turn a user instruction into a spending plan for a non-custodial Stellar agent. ' +
+  'The agent can pay one address, disburse to many, or hire a listed service. ' +
+  'Only propose what the user actually asked for; never invent Stellar addresses. ' +
+  'If the user names a person without an address, leave payee empty and put the name in reason. ' +
+  'If the instruction is not a spend or is unclear, use kind "none" and explain in rationale. ' +
+  'Amounts are USDC; use the available budget to stay realistic. ' +
+  'You NEVER choose, read, or infer a spending rule: the human selects the rule the vault enforces, ' +
+  'and private rules are not visible to you. Plan ONLY the actions (who/how much/which service). ' +
+  'For ANY hire, extract the chosen service’s input parameters from the instruction into ' +
+  'serviceParams, matching that service’s input schema (given with each service). ' +
+  'If the chosen service lists FUNCTIONS, you MUST pick the single best function for the ' +
+  'instruction and return its key in functionKey, and extract serviceParams against THAT ' +
+  'function’s input schema. Choose the function yourself; do not ask the user to pick.';
+const TOOL_DESC = 'Return the structured spending plan for the user to review.';
+
+type Provider = 'anthropic' | 'openai' | 'none';
+
+/** A service the user allowed in the composer. One = force it; several = the agent
+ *  must pick the best of these for the task (an allow-list boundary). */
+type PlanService = {
+  id: string;
+  name: string;
+  pricePerCall: unknown;
+  inputSchema: unknown;
+  description?: string;
+  functions?: unknown;
+};
+
+interface RawPlan {
+  kind: AgentPlan['kind'];
+  lines: PlanLine[];
+  serviceQuery: string;
+  functionKey: string;
+  budget: number;
+  rationale: string;
+  serviceParams?: Record<string, unknown>;
+}
+
+@Injectable()
+export class AgentService {
+  private readonly logger = new Logger(AgentService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly vault: VaultService,
+  ) {}
+
+  /**
+   * Which LLM backs the planner. CleverCon is provider-agnostic: keep native
+   * Anthropic as the default, but a single OpenAI-compatible adapter covers
+   * OpenAI, Gemini (its OpenAI-compat endpoint), OpenRouter, and local models
+   * (Ollama/vLLM) via OPENAI_BASE_URL. AGENT_PROVIDER forces one; 'auto' picks
+   * whichever key is set; 'none' (or no key) uses the deterministic fallback.
+   */
+  private provider(): Provider {
+    const pref = (process.env.AGENT_PROVIDER ?? 'auto').toLowerCase();
+    if (pref === 'none') return 'none';
+    if (pref === 'anthropic') return process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'none';
+    if (pref === 'openai') return process.env.OPENAI_API_KEY ? 'openai' : 'none';
+    if (process.env.ANTHROPIC_API_KEY) return 'anthropic';
+    if (process.env.OPENAI_API_KEY) return 'openai';
+    return 'none';
+  }
+
+  /**
+   * Parse a natural-language instruction into a structured, re-validated plan.
+   * The model only PROPOSES; the human approves and the vault enforces limits,
+   * so a bad or adversarial plan cannot move funds outside the caps. Falls back
+   * to a deterministic parser when no API key is configured.
+   */
+  async plan(
+    userId: string,
+    instruction: string,
+    opts: { hasAttachment?: boolean; serviceId?: string; serviceIds?: string[] } = {},
+  ): Promise<AgentPlan> {
+    const hasAttachment = !!opts.hasAttachment;
+    const text = (instruction ?? '').trim();
+    if (!text) {
+      return {
+        kind: 'none',
+        lines: [],
+        service: null,
+        budget: 0,
+        rationale: 'Tell me what to do with your budget.',
+        warnings: [],
+        source: 'fallback',
+      };
+    }
+
+    // The user's allow-list: one service forces a hire of it; several constrain the
+    // agent to pick the best of them for the task. Params are extracted against the
+    // chosen service's input schema.
+    const ids = (opts.serviceIds?.length ? opts.serviceIds : opts.serviceId ? [opts.serviceId] : [])
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 20);
+    const allowed: PlanService[] = ids.length
+      ? await this.prisma.service.findMany({
+          where: { id: { in: ids }, status: 'ACTIVE' },
+          select: {
+            id: true,
+            name: true,
+            pricePerCall: true,
+            inputSchema: true,
+            description: true,
+            functions: true,
+          },
+        })
+      : [];
+
+    const provider = this.provider();
+    const raw =
+      provider === 'none'
+        ? fallbackParse(text)
+        : await this.parseWithLlm(userId, text, provider, hasAttachment, allowed);
+    const available = await this.vault
+      .getForUser(userId)
+      .then((v) => v.available)
+      .catch(() => 0);
+    return this.validate(raw.plan, raw.source, available, hasAttachment, allowed);
+  }
+
+  /**
+   * Turn a service's result into a plain-language answer to the user's original
+   * request. The agent reads the result and responds in its own words instead of
+   * dumping raw JSON. Returns '' when no LLM is configured (the client shows the raw
+   * result as a fallback).
+   */
+  async interpret(instruction: string, result: unknown): Promise<string> {
+    if (this.provider() === 'none') return '';
+    const system =
+      'You are a spending agent reporting the result of a service you hired for the user. ' +
+      "Answer the user's request directly and concisely in plain language, using the result. " +
+      'Summarize lists readably. Do not mention JSON, APIs, or that a service was called; just ' +
+      'answer. If the result is empty or an error, say so plainly and suggest the next step.';
+    const user = `User request: "${instruction}"\n\nResult:\n${JSON.stringify(result).slice(0, 8000)}`;
+    try {
+      return (await this.complete(system, user)).trim();
+    } catch (err) {
+      this.logger.warn(`interpret failed: ${(err as Error).message}`);
+      return '';
+    }
+  }
+
+  /** A plain text completion (no tool-use), for interpreting results conversationally. */
+  private async complete(system: string, user: string): Promise<string> {
+    if (this.provider() === 'anthropic') {
+      const client = new Anthropic({
+        apiKey: process.env.ANTHROPIC_API_KEY ?? '',
+        timeout: 30_000,
+        maxRetries: 1,
+      });
+      const res = await client.messages.create({
+        model: process.env.ANTHROPIC_MODEL ?? 'claude-opus-4-8',
+        max_tokens: 600,
+        system,
+        messages: [{ role: 'user', content: user }],
+      });
+      return res.content
+        .filter((b) => b.type === 'text')
+        .map((b) => (b as { text: string }).text)
+        .join('\n');
+    }
+    const baseUrl = (process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(
+      /\/+$/,
+      '',
+    );
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${process.env.OPENAI_API_KEY ?? ''}`,
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
+        max_tokens: 600,
+        temperature: 0.2,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) throw new Error(`llm ${res.status}`);
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    return data.choices?.[0]?.message?.content ?? '';
+  }
+
+  private async parseWithLlm(
+    userId: string,
+    instruction: string,
+    provider: Provider,
+    hasAttachment: boolean,
+    allowed: PlanService[],
+  ): Promise<{ plan: RawPlan; source: AgentPlan['source'] }> {
+    try {
+      const context = await this.buildContext(userId, hasAttachment, allowed);
+      const input =
+        provider === 'anthropic'
+          ? await this.callAnthropic(instruction, context)
+          : await this.callOpenAiCompatible(instruction, context);
+      return { plan: normalizeRaw(input), source: 'llm' };
+    } catch (err) {
+      this.logger.warn(
+        `LLM planning failed (${provider}), using fallback: ${(err as Error).message}`,
+      );
+      return fallbackParse(instruction);
+    }
+  }
+
+  /** Native Anthropic (default). Forced tool-use gives a validated structured plan. */
+  private async callAnthropic(instruction: string, context: string): Promise<unknown> {
+    const client = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY ?? '',
+      timeout: 30_000,
+      maxRetries: 1,
+    });
+    const model = process.env.ANTHROPIC_MODEL ?? 'claude-opus-4-8';
+    const res = await client.messages.create({
+      model,
+      max_tokens: 1024,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: `Instruction: ${instruction}\n\n${context}` }],
+      tools: [
+        {
+          name: 'propose_plan',
+          description: TOOL_DESC,
+          input_schema: PLAN_SCHEMA as unknown as Anthropic.Tool.InputSchema,
+        },
+      ],
+      tool_choice: { type: 'tool', name: 'propose_plan' },
+    });
+    const block = res.content.find((b) => b.type === 'tool_use');
+    if (!block || block.type !== 'tool_use') throw new Error('no tool_use in response');
+    return block.input;
+  }
+
+  /**
+   * OpenAI-compatible chat completions with a forced function call. One adapter
+   * for OpenAI, Gemini (OpenAI-compat), OpenRouter, and local servers: point
+   * OPENAI_BASE_URL at the endpoint and set OPENAI_MODEL.
+   */
+  private async callOpenAiCompatible(instruction: string, context: string): Promise<unknown> {
+    const baseUrl = (process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(
+      /\/+$/,
+      '',
+    );
+    const model = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${process.env.OPENAI_API_KEY ?? ''}`,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1024,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: `Instruction: ${instruction}\n\n${context}` },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'propose_plan', description: TOOL_DESC, parameters: PLAN_SCHEMA },
+          },
+        ],
+        tool_choice: { type: 'function', function: { name: 'propose_plan' } },
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) throw new Error(`llm ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const data = (await res.json()) as {
+      choices?: { message?: { tool_calls?: { function?: { arguments?: string } }[] } }[];
+    };
+    const args = data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+    if (!args) throw new Error('no function call in response');
+    return JSON.parse(args);
+  }
+
+  private async buildContext(
+    userId: string,
+    hasAttachment = false,
+    allowed: PlanService[] = [],
+  ): Promise<string> {
+    // The planner is deliberately NOT told about the user's rules. It only needs
+    // the available budget (for realism) and the hireable services. The human
+    // selects the rule the vault enforces; private rules never reach the model.
+    const [vault, services] = await Promise.all([
+      this.vault.getForUser(userId).catch(() => ({ available: 0 })),
+      this.prisma.service.findMany({
+        // Only healthy, listable services (same gate as the public directory), and NOT
+        // metered: an x402/MPP/subscription service is paid per-call from the agent
+        // wallet, not hireable via escrow, so the agent must never pick one for a hire.
+        where: {
+          status: 'ACTIVE',
+          healthy: true,
+          NOT: {
+            OR: [
+              { interaction: 'metered' },
+              { paymentModel: { in: ['x402', 'mpp-session', 'subscription'] } },
+            ],
+          },
+        },
+        // Include the input schema + functions so the model can extract parameters and
+        // pick a function for whichever service it chooses (not only a pre-selected one).
+        select: {
+          name: true,
+          pricePerCall: true,
+          attachmentsIn: true,
+          inputSchema: true,
+          functions: true,
+        },
+        take: 8,
+      }),
+    ]);
+    const svc = services
+      .map(
+        (s) =>
+          `- ${s.name} ($${Number(s.pricePerCall)}/call)${s.attachmentsIn ? ' [accepts a file]' : ''}` +
+          functionsBlurb(s.functions) +
+          (s.inputSchema && !functionsBlurb(s.functions)
+            ? `\n  input schema: ${JSON.stringify(s.inputSchema)}`
+            : ''),
+      )
+      .join('\n');
+    const parts = [
+      `Available budget: ${(vault as { available: number }).available} USDC.`,
+      svc ? `Services you can hire:\n${svc}` : 'No services available.',
+      'For a hire, set serviceQuery to the chosen service name and extract its input ' +
+        'parameters from the instruction into serviceParams, matching THAT service’s input ' +
+        'schema above (e.g. {"operation":"resize","width":400,"format":"jpeg"}).',
+    ];
+    if (hasAttachment) {
+      parts.push(
+        'The user attached a file. If the task needs it, prefer a service marked [accepts a file]; if none fits, still plan the best service and note the file may be unused.',
+      );
+    }
+    if (allowed.length === 1) {
+      const a = allowed[0];
+      const fnsText = functionsBlurb(a.functions);
+      parts.push(
+        `The user CHOSE the service "${a.name}". Set kind="hire" and put "${a.name}" in serviceQuery. ` +
+          (fnsText
+            ? `It lists functions, so pick the best one for the instruction, return its key in ` +
+              `functionKey, and extract serviceParams against THAT function's input schema:${fnsText}`
+            : `Extract its input parameters into serviceParams, matching this input schema:\n${JSON.stringify(a.inputSchema ?? {})}`),
+      );
+    } else if (allowed.length > 1) {
+      const list = allowed
+        .map(
+          (a) =>
+            `- ${a.name}${a.description ? `: ${a.description}` : ''}` +
+            (functionsBlurb(a.functions) ||
+              `\n  input schema: ${JSON.stringify(a.inputSchema ?? {})}`),
+        )
+        .join('\n');
+      parts.push(
+        `The user restricted you to ONLY these services (an allow-list). Set kind="hire", pick the ` +
+          `single best service for the instruction, put its exact name in serviceQuery, pick a ` +
+          `function (functionKey) when it lists them, and extract serviceParams against the chosen ` +
+          `schema:\n${list}`,
+      );
+    }
+    return parts.join('\n\n');
+  }
+
+  /** Re-validate the proposed plan server-side (the model is never trusted). */
+  private async validate(
+    raw: RawPlan,
+    source: AgentPlan['source'],
+    available: number,
+    hasAttachment = false,
+    allowed: PlanService[] = [],
+  ): Promise<AgentPlan> {
+    const warnings: string[] = [];
+    const lines = (raw.lines ?? [])
+      .map((l) => ({
+        payee: String(l.payee ?? '').trim(),
+        amount: Number(l.amount),
+        reason: String(l.reason ?? '').trim() || undefined,
+      }))
+      .filter((l) => {
+        if (!(l.amount > 0)) return false;
+        if (!STELLAR_ADDR.test(l.payee)) {
+          warnings.push(
+            `Could not resolve a Stellar address${l.reason ? ` for "${l.reason}"` : ''}. Add the G... address.`,
+          );
+          return false;
+        }
+        return true;
+      });
+
+    if (!allowed.length && (raw.kind === 'pay' || raw.kind === 'disburse')) {
+      if (lines.length === 0) {
+        return this.none(
+          source,
+          raw.rationale ||
+            'I could not build a valid payment. Give me an amount and a G... address.',
+          warnings,
+        );
+      }
+      const kind = lines.length === 1 ? 'pay' : 'disburse';
+      const total = lines.reduce((s, l) => s + l.amount, 0);
+      if (available > 0 && total > available) {
+        warnings.push(
+          `This totals $${total.toFixed(2)} but only $${available.toFixed(2)} is available.`,
+        );
+      }
+      return {
+        kind,
+        lines,
+        service: null,
+        budget: total,
+        rationale: raw.rationale || `Send $${total.toFixed(2)} across ${lines.length} payment(s).`,
+        warnings,
+        source,
+      };
+    }
+
+    if (raw.kind === 'hire' || allowed.length) {
+      // The allow-list wins: one service forces it; several -> pick the one the model
+      // chose (by name in serviceQuery), else the best word overlap, else the first.
+      let svc: { id: string; name: string; pricePerCall: unknown; functions: unknown } | null =
+        null;
+      const asSvc = (a: PlanService) => ({
+        id: a.id,
+        name: a.name,
+        pricePerCall: a.pricePerCall,
+        functions: a.functions,
+      });
+      if (allowed.length === 1) {
+        svc = asSvc(allowed[0]);
+      } else if (allowed.length > 1) {
+        const q = (raw.serviceQuery ?? '').trim().toLowerCase();
+        const pick =
+          allowed.find(
+            (a) => q && (a.name.toLowerCase().includes(q) || q.includes(a.name.toLowerCase())),
+          ) ??
+          allowed.find((a) =>
+            q.split(/\s+/).some((w) => w.length > 2 && a.name.toLowerCase().includes(w)),
+          ) ??
+          allowed[0];
+        svc = asSvc(pick);
+      }
+      if (!svc) {
+        const q = (raw.serviceQuery ?? '').trim();
+        const words = q.split(/\s+/).filter((w) => w.length > 2);
+        const terms = words.length ? words : q ? [q] : [];
+        const matches = terms.length
+          ? await this.prisma.service.findMany({
+              where: {
+                status: 'ACTIVE',
+                healthy: true,
+                // Exclude metered (x402/MPP/subscription): not escrow-hireable.
+                NOT: {
+                  OR: [
+                    { interaction: 'metered' },
+                    { paymentModel: { in: ['x402', 'mpp-session', 'subscription'] } },
+                  ],
+                },
+                OR: terms.flatMap((w) => [
+                  { name: { contains: w, mode: 'insensitive' as const } },
+                  { description: { contains: w, mode: 'insensitive' as const } },
+                  { category: { contains: w, mode: 'insensitive' as const } },
+                ]),
+              },
+              select: {
+                id: true,
+                name: true,
+                pricePerCall: true,
+                attachmentsIn: true,
+                functions: true,
+              },
+              take: 5,
+            })
+          : [];
+        // When the user attached a file, prefer a service that declares it accepts one.
+        svc =
+          (hasAttachment ? matches.find((m) => m.attachmentsIn != null) : undefined) ??
+          matches[0] ??
+          null;
+      }
+      if (!svc) {
+        warnings.push(
+          'No matching service found. Pick one from Services, or name it more specifically.',
+        );
+        return this.none(source, raw.rationale || 'I could not find a matching service.', warnings);
+      }
+
+      // Multi-function service: the agent picks the function itself (never asking the
+      // user). Price + the dispatched functionKey come from the chosen function so the
+      // hire is well-formed and the budget is grounded.
+      const fns = asFunctions(svc.functions);
+      let functionKey: string | undefined;
+      let functionLabel: string | undefined;
+      let displayName = svc.name;
+      let budget: number;
+      if (fns.length) {
+        const fn = pickFunction(fns, raw.functionKey ?? '');
+        functionKey = fn.key;
+        functionLabel = fn.label;
+        displayName = `${svc.name}: ${fn.label}`;
+        // Budget is the cap: a paid function's exact price (so a $0.005 call is capped at
+        // $0.005, not rounded up); a free one needs a nominal positive cap to escrow-hire.
+        const price = fnPrice(fn);
+        budget = price > 0 ? price : 0.01;
+      } else {
+        budget = Math.max(Number(raw.budget) || 0, Number(svc.pricePerCall));
+      }
+      if (available > 0 && budget > available) {
+        warnings.push(
+          `Budget $${budget.toFixed(2)} exceeds the $${available.toFixed(2)} available.`,
+        );
+      }
+      // Structured params the model extracted for this service (e.g. {width,format}).
+      const input =
+        raw.serviceParams && Object.keys(raw.serviceParams).length ? raw.serviceParams : undefined;
+      return {
+        kind: 'hire',
+        lines: [],
+        service: { id: svc.id, name: displayName, pricePerCall: budget },
+        budget,
+        rationale: raw.rationale || `Hire ${displayName} with a $${budget.toFixed(2)} budget.`,
+        warnings,
+        source,
+        ...(functionKey ? { functionKey, functionLabel } : {}),
+        ...(input ? { input } : {}),
+      };
+    }
+
+    return this.none(
+      source,
+      raw.rationale || 'That does not look like a spending instruction.',
+      warnings,
+    );
+  }
+
+  private none(source: AgentPlan['source'], rationale: string, warnings: string[]): AgentPlan {
+    return {
+      kind: 'none',
+      lines: [],
+      service: null,
+      budget: 0,
+      rationale,
+      warnings,
+      source,
+    };
+  }
+}
+
+// ── Deterministic fallback (no API key) ───────────────────────────────────────
+// A small, safe grammar so the agent still works without an LLM provider. The full
+// natural-language planner (any phrasing) kicks in once ANTHROPIC_API_KEY or
+// OPENAI_API_KEY is set on the API.
+const PAY_RE =
+  /(?:pay|send)\s+\$?([0-9]+(?:\.[0-9]+)?)\s*(?:usdc)?\s+to\s+(G[A-Z2-7]{55})(?:\s+for\s+(.+))?/i;
+/** "...<amount> each..." for an equal-amount disbursement. */
+const EACH_RE = /(?:pay|send|disburse|give)\s+\$?([0-9]+(?:\.[0-9]+)?)\s*(?:usdc)?\s+each/i;
+/** Every Stellar address mentioned. */
+const ADDR_RE = /G[A-Z2-7]{55}/g;
+
+function fallbackParse(instruction: string): { plan: RawPlan; source: AgentPlan['source'] } {
+  // "pay 5 to G… for X" — a single direct payment.
+  const m = PAY_RE.exec(instruction);
+  if (m) {
+    return {
+      source: 'fallback',
+      plan: {
+        kind: 'pay',
+        lines: [{ payee: m[2], amount: Number(m[1]), reason: (m[3] ?? '').trim() }],
+        serviceQuery: '',
+        functionKey: '',
+        budget: 0,
+        rationale: 'Parsed a direct payment.',
+      },
+    };
+  }
+
+  // "send 1 usdc each to these wallets: G…, G…, G…" — equal-amount disbursement.
+  const each = EACH_RE.exec(instruction);
+  const addrs = [...new Set(instruction.match(ADDR_RE) ?? [])];
+  if (each && addrs.length >= 1) {
+    const amount = Number(each[1]);
+    return {
+      source: 'fallback',
+      plan: {
+        kind: 'disburse',
+        lines: addrs.map((payee) => ({ payee, amount, reason: '' })),
+        serviceQuery: '',
+        functionKey: '',
+        budget: 0,
+        rationale: `Parsed a disbursement of ${amount} USDC each to ${addrs.length} recipient${addrs.length > 1 ? 's' : ''}.`,
+      },
+    };
+  }
+
+  return {
+    source: 'fallback',
+    plan: {
+      kind: 'none',
+      lines: [],
+      serviceQuery: '',
+      functionKey: '',
+      budget: 0,
+      rationale:
+        'I couldn’t read that. Use the Pay, Disburse, or Hire buttons below, or phrase it simply, like "pay 5 to G… for data" or "send 1 each to G…, G…, G…".',
+    },
+  };
+}
+
+/** Coerce an unknown tool_use.input into the RawPlan shape defensively. */
+function normalizeRaw(input: unknown): RawPlan {
+  const o = (input ?? {}) as Record<string, unknown>;
+  const lines = Array.isArray(o.lines) ? (o.lines as PlanLine[]) : [];
+  const kind = ['pay', 'disburse', 'hire', 'none'].includes(String(o.kind))
+    ? (o.kind as RawPlan['kind'])
+    : 'none';
+  return {
+    kind,
+    lines,
+    serviceQuery: typeof o.serviceQuery === 'string' ? o.serviceQuery : '',
+    functionKey: typeof o.functionKey === 'string' ? o.functionKey : '',
+    budget: typeof o.budget === 'number' ? o.budget : 0,
+    rationale: typeof o.rationale === 'string' ? o.rationale : '',
+    serviceParams:
+      o.serviceParams && typeof o.serviceParams === 'object' && !Array.isArray(o.serviceParams)
+        ? (o.serviceParams as Record<string, unknown>)
+        : {},
+  };
+}

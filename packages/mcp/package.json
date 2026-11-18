@@ -1,0 +1,43 @@
+{
+  "name": "@clevercon/mcp",
+  "version": "0.5.0",
+  "description": "Stellar MCP server: give an AI agent a bounded, non-custodial spending account (spend within a policy, hire, set limits, read budget and activity)",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "clevercon-mcp": "dist/bin.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "npx tsx src/server.ts",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json --noEmit && node build.mjs",
+    "prepublishOnly": "npm run build",
+    "start": "node dist/server.js",
+    "test": "node test-server.mjs"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "^14.6.1",
+    "circom_runtime": "^0.1.28",
+    "snarkjs": "^0.7.5"
+  },
+  "devDependencies": {
+    "@clevercon/agent-sdk": "^0.4.2",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@types/node": "^20.0.0",
+    "dotenv": "^16.4.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

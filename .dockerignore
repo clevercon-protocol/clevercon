@@ -1,0 +1,21 @@
+# Keep the build context small and secret-free.
+node_modules
+**/node_modules
+**/dist
+apps/web/dist
+.git
+.github
+.local
+logs
+data
+*.log
+# Secrets and local env, never ship these into an image
+.env
+.env.*
+wallets.json
+# Rust build artifacts (huge)
+contracts/*/target
+circuits/*/target
+# Note: apps/web sources are kept in the context because npm workspaces need every
+# package.json present for `npm ci`. It is not run by the backend image; the
+# frontend deploys separately (Cloudflare Pages).

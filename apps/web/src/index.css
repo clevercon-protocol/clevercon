@@ -1,0 +1,474 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  /* Ink ground + layered panels. One place to retune the app's depth. */
+  --cc-bg: #090a11;
+  --cc-surface: rgba(255, 255, 255, 0.05);
+  --cc-surface-2: rgba(255, 255, 255, 0.08);
+  --cc-line: rgba(255, 255, 255, 0.1);
+  --cc-line-strong: rgba(255, 255, 255, 0.16);
+
+  /* Premium design system (ported from the product concept). The cc-* component
+     classes below build the whole app's look from these, so retuning here
+     retunes everything. */
+  --ink: #090a11;
+  --panel: #171a24;
+  --panel-2: #1e2230;
+  --line-soft: rgba(255, 255, 255, 0.1);
+  --line-hard: rgba(255, 255, 255, 0.17);
+  --txt: #e9eaf2;
+  --txt-2: #a3a7bb;
+  --txt-3: #6a6f85;
+  --violet: #8b7cff;
+  --violet-2: #6d5ef0;
+  --violet-soft: rgba(139, 124, 255, 0.12);
+  --violet-line: rgba(139, 124, 255, 0.28);
+  --good: #34d399;
+  --good-soft: rgba(52, 211, 153, 0.12);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.12);
+  --rd: 14px;
+  --rd-lg: 20px;
+}
+body {
+  margin: 0;
+  background: var(--cc-bg);
+  color: #e6e9ef;
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* A calm ambient wash behind the app content, so the page is not flat black.
+   Fixed and non-interactive; two soft violet/indigo pools near the top. */
+.app-ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(60rem 32rem at 12% -6%, rgba(124, 58, 237, 0.13), transparent 60%),
+    radial-gradient(52rem 30rem at 92% 2%, rgba(56, 100, 240, 0.1), transparent 62%);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+/* ── Landing animations ──────────────────────────────────────────────────── */
+@keyframes cc-float {
+  0%,
+  100% {
+    transform: translateY(0) translateX(0);
+  }
+  50% {
+    transform: translateY(-26px) translateX(14px);
+  }
+}
+@keyframes cc-gradient {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+.cc-reveal {
+  opacity: 0;
+  transform: translateY(26px);
+  transition:
+    opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.cc-reveal.cc-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+.cc-gradient-text {
+  background: linear-gradient(90deg, #a78bfa, #22d3ee, #a78bfa);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: cc-gradient 7s ease infinite;
+}
+.cc-orb {
+  animation: cc-float 16s ease-in-out infinite;
+  will-change: transform;
+}
+.cc-grid {
+  background-image:
+    linear-gradient(to right, rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 40%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 40%, transparent 100%);
+}
+/* A gentle entrance for in-app page content, replayed on each route change so
+   the app feels as alive as the landing. Fades + rises once, then settles. */
+@keyframes cc-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.cc-page {
+  animation: cc-rise 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ───────────────────────────── Premium component system ───────────────────
+   The cc-* classes build the whole app's look from the tokens above, so pages
+   compose a consistent, designed surface instead of ad-hoc utilities. */
+
+.cc-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--violet);
+}
+.cc-title {
+  font-size: clamp(22px, 3.2vw, 28px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #fff;
+}
+.cc-num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.015em;
+}
+.cc-hero-num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  font-weight: 700;
+  line-height: 1;
+  font-size: clamp(32px, 5vw, 46px);
+}
+
+/* Card / panel */
+.cc-card {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--rd);
+  background: linear-gradient(180deg, var(--panel), #121520);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    0 24px 52px -28px rgba(0, 0, 0, 0.9);
+}
+.cc-card-lg {
+  border-radius: var(--rd-lg);
+}
+.cc-hover {
+  transition:
+    transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.2s,
+    box-shadow 0.2s;
+}
+.cc-hover:hover {
+  transform: translateY(-2px);
+  border-color: var(--line-hard);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 30px 64px -32px rgba(0, 0, 0, 0.9);
+}
+.cc-glow {
+  background:
+    radial-gradient(30rem 16rem at 85% -30%, rgba(109, 94, 240, 0.18), transparent 60%),
+    var(--panel-2);
+}
+
+/* Icon tile */
+.cc-ic {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  background: var(--violet-soft);
+  color: var(--violet);
+  box-shadow: inset 0 0 0 1px var(--violet-line);
+  flex: 0 0 auto;
+}
+.cc-ic-good {
+  background: var(--good-soft);
+  color: var(--good);
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.25);
+}
+.cc-ic-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.25);
+}
+
+/* Buttons */
+.cc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  font-weight: 600;
+  border: 0;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(180deg, var(--violet), var(--violet-2));
+  box-shadow:
+    0 12px 26px -14px var(--violet-2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  transition:
+    filter 0.15s,
+    transform 0.15s;
+}
+.cc-btn:hover {
+  filter: brightness(1.08);
+}
+.cc-btn:active {
+  transform: scale(0.98);
+}
+.cc-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+  transform: none;
+}
+.cc-btn-ghost {
+  background: var(--panel-2);
+  color: var(--txt);
+  border: 1px solid var(--line-hard);
+  box-shadow: none;
+}
+.cc-btn-ghost:hover {
+  filter: none;
+  background: #20232f;
+}
+
+/* Input */
+.cc-input {
+  width: 100%;
+  border: 1px solid var(--line-hard);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  padding: 10px 13px;
+  color: var(--txt);
+  font-size: 14px;
+  outline: none;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.cc-input::placeholder {
+  color: var(--txt-3);
+}
+.cc-input:focus {
+  border-color: var(--violet-line);
+  box-shadow: 0 0 0 3px var(--violet-soft);
+}
+
+/* Native <select> option popup. A custom (semi-transparent) select background makes
+   Chromium draw the option list white and ignore color-scheme, so force the options
+   opaque-dark to match the theme. */
+option,
+optgroup {
+  background-color: #141620;
+  color: #e7e9ee;
+}
+
+/* Pills */
+.cc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.cc-pill .cc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.cc-pill-good {
+  background: var(--good-soft);
+  color: var(--good);
+}
+.cc-pill-violet {
+  background: var(--violet-soft);
+  color: var(--violet);
+}
+.cc-pill-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.cc-pill-slate {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--txt-2);
+}
+
+/* Meter */
+.cc-meter {
+  display: flex;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+.cc-meter i {
+  height: 100%;
+  display: block;
+  transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.cc-meter .locked {
+  background: linear-gradient(90deg, var(--violet-2), var(--violet));
+}
+.cc-meter .avail {
+  background: var(--good);
+  opacity: 0.85;
+}
+
+/* Toggle */
+.cc-toggle {
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--violet-2);
+  position: relative;
+  flex: 0 0 auto;
+  transition: background 0.15s;
+}
+.cc-toggle::after {
+  content: '';
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: all 0.15s;
+}
+.cc-toggle.off {
+  background: rgba(255, 255, 255, 0.12);
+}
+.cc-toggle.off::after {
+  left: 2px;
+  right: auto;
+}
+
+/* Motion */
+@keyframes cc-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.cc-pop {
+  animation: cc-pop 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.cc-stagger > * {
+  animation: cc-pop 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.cc-stagger > *:nth-child(2) {
+  animation-delay: 0.05s;
+}
+.cc-stagger > *:nth-child(3) {
+  animation-delay: 0.1s;
+}
+.cc-stagger > *:nth-child(4) {
+  animation-delay: 0.15s;
+}
+.cc-stagger > *:nth-child(5) {
+  animation-delay: 0.2s;
+}
+.cc-stagger > *:nth-child(6) {
+  animation-delay: 0.25s;
+}
+.cc-seal {
+  animation: cc-float 7s ease-in-out infinite;
+  will-change: transform;
+}
+@keyframes cc-shimmer {
+  100% {
+    background-position: 200% 0;
+  }
+}
+.cc-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.09) 40%,
+    rgba(255, 255, 255, 0.04) 80%
+  );
+  background-size: 200% 100%;
+  animation: cc-shimmer 1.4s linear infinite;
+}
+@keyframes cc-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.cc-breathe {
+  animation: cc-breathe 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .cc-orb,
+  .cc-gradient-text,
+  .cc-seal,
+  .cc-shimmer,
+  .cc-breathe {
+    animation: none;
+  }
+  .cc-page,
+  .cc-pop,
+  .cc-stagger > * {
+    animation: none;
+  }
+  .cc-hover:hover {
+    transform: none;
+  }
+}

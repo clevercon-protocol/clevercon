@@ -1,0 +1,47 @@
+language: en-US
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+
+  path_filters:
+    - "!**/*.lock"
+    - "!**/*.snap"
+
+  path_instructions:
+    - path: "contracts/agent-vault/src/**"
+      instructions: |
+        This is a Soroban smart contract holding user funds. Review with that in mind:
+        - Flag any function that moves funds without checking active_tasks_count or auth
+        - All persistent storage entries should have TTL extended; flag any that don't
+        - Use #[contractevent] for events, not the deprecated Events::publish / symbol_short!
+        - cargo clippy warnings should not be introduced
+
+    - path: "packages/orchestrator/src/**"
+      instructions: |
+        - Vault payment releases should only fire after a valid agent response is received
+        - No secrets or private keys should be logged
+        - New env vars must be added to .env.example with a default
+
+    - path: "packages/registry/src/**"
+      instructions: |
+        - POST /register should validate field values, not just check for field presence
+        - Concurrent writes to JSON store files are a known risk; flag new write paths that don't serialize access
+
+    - path: "packages/*/src/**/*.ts"
+      instructions: |
+        - ESM/NodeNext module resolution is in use; imports must include .js extensions
+        - No console.log in library code; use the task-scoped logger
+        - New dependencies should be justified in the PR description
+
+chat:
+  auto_reply: true

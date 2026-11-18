@@ -1,0 +1,50 @@
+import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { z } from 'zod';
+import { AgentService } from './agent.service.js';
+import { ApiAuthGuard } from '../auth/api-auth.guard.js';
+import { CurrentUser } from '../auth/current-user.decorator.js';
+import { parseBody } from '../auth/validate.js';
+import type { AuthUser } from '../auth/types.js';
+
+const planSchema = z.object({
+  instruction: z.string().min(1).max(2000),
+  // Whether the user attached a file to the instruction, so the planner can prefer
+  // a service that accepts files. The file itself is attached to the hire later.
+  hasAttachment: z.boolean().optional(),
+  // A service the user explicitly chose in the composer: forces a hire of it and
+  // extracts its input params from the instruction.
+  serviceId: z.string().optional(),
+  // The user's allow-list of services (the agent picks the best of these for the
+  // task). One = force it; several = constrain the choice.
+  serviceIds: z.array(z.string().min(1)).max(20).optional(),
+});
+
+const interpretSchema = z.object({
+  instruction: z.string().min(1).max(2000),
+  // The delivered result(s) to explain in plain language.
+  result: z.unknown(),
+});
+
+/**
+ * The chat agent's brain: parse a natural-language instruction into a structured
+ * spending plan. It only PROPOSES; the human approves and the vault enforces the
+ * limits, so nothing here can move funds on its own. Works with a JWT or a key.
+ */
+@Controller('agent')
+@UseGuards(ApiAuthGuard)
+export class AgentController {
+  constructor(private readonly agent: AgentService) {}
+
+  @Post('plan')
+  plan(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { instruction, hasAttachment, serviceId, serviceIds } = parseBody(planSchema, body);
+    return this.agent.plan(user.userId, instruction, { hasAttachment, serviceId, serviceIds });
+  }
+
+  /** Explain a delivered result in plain language, answering the original request. */
+  @Post('interpret')
+  async interpret(@Body() body: unknown) {
+    const { instruction, result } = parseBody(interpretSchema, body);
+    return { answer: await this.agent.interpret(instruction, result) };
+  }
+}

@@ -1,0 +1,117 @@
+{
+  "name": "@clevercon/agent-sdk",
+  "version": "0.4.3",
+  "description": "Give an AI agent a private, non-custodial spending account on Stellar: pay, disburse, hire and pay services (x402/MPP), or be a paid service, all within policy.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./provider": {
+      "types": "./dist/provider.d.ts",
+      "default": "./dist/provider.js"
+    },
+    "./spender": {
+      "types": "./dist/spender.d.ts",
+      "default": "./dist/spender.js"
+    },
+    "./sessions": {
+      "types": "./dist/sessions.d.ts",
+      "default": "./dist/sessions.js"
+    },
+    "./config-tokens": {
+      "types": "./dist/config-tokens.d.ts",
+      "default": "./dist/config-tokens.js"
+    },
+    "./receipts": {
+      "types": "./dist/receipts.d.ts",
+      "default": "./dist/receipts.js"
+    },
+    "./prover": {
+      "types": "./dist/prover.d.ts",
+      "default": "./dist/prover.js"
+    },
+    "./artifacts": {
+      "types": "./dist/payments/artifacts.d.ts",
+      "default": "./dist/payments/artifacts.js"
+    },
+    "./verifier": {
+      "types": "./dist/verifier.d.ts",
+      "default": "./dist/verifier.js"
+    },
+    "./discovery": {
+      "types": "./dist/discovery.d.ts",
+      "default": "./dist/discovery.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "prover": [
+        "./dist/prover.d.ts"
+      ],
+      "artifacts": [
+        "./dist/payments/artifacts.d.ts"
+      ],
+      "provider": [
+        "./dist/provider.d.ts"
+      ],
+      "spender": [
+        "./dist/spender.d.ts"
+      ],
+      "sessions": [
+        "./dist/sessions.d.ts"
+      ],
+      "config-tokens": [
+        "./dist/config-tokens.d.ts"
+      ],
+      "receipts": [
+        "./dist/receipts.d.ts"
+      ],
+      "verifier": [
+        "./dist/verifier.d.ts"
+      ],
+      "discovery": [
+        "./dist/discovery.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build",
+    "example:oracle": "npx tsx examples/stellar-oracle/agent.ts",
+    "example:mpp": "npx tsx examples/minimal-mpp/agent.ts",
+    "example:providers": "npx tsx examples/reference-services/providers.ts"
+  },
+  "dependencies": {
+    "@stellar/mpp": "^0.3.0",
+    "@stellar/stellar-sdk": "^14.6.1",
+    "@x402/core": "^2.8.0",
+    "@x402/express": "^2.8.0",
+    "@x402/fetch": "^2.8.0",
+    "@x402/stellar": "^2.8.0",
+    "circom_runtime": "^0.1.28",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.0",
+    "express": "^4.18.0",
+    "mppx": "^0.5.5",
+    "snarkjs": "^0.7.5"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

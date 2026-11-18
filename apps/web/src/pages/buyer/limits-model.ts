@@ -1,0 +1,494 @@
+import type { PolicyRules } from '../../lib/policies';
+import type { PublicRule } from '../../lib/vault';
+import type { PolicyBundleRules } from '@clevercon/agent-sdk/prover';
+import { type Rule, type ClauseType, CLAUSE_ENFORCEMENT } from '@clevercon/common/rule-model';
+import { decryptRuleBundle, type RuleBundle } from '../../lib/rule-backup';
+
+// Non-component helpers for the limits UI, kept out of the component module so
+// React Fast Refresh can hot-update the components cleanly.
+
+export const WINDOWS: Record<string, { label: string; secs?: number }> = {
+  none: { label: 'no time window' },
+  day: { label: 'per day', secs: 86_400 },
+  week: { label: 'per week', secs: 604_800 },
+  month: { label: 'per 30 days', secs: 2_592_000 },
+};
+
+export type Draft = {
+  isPrivate: boolean;
+  perPaymentCeiling: string;
+  // R1 floor (optional): a minimum per payment, enabling exact (floor == ceiling)
+  // and range [floor, ceiling]. On-chain enforcement is pending (badged as such),
+  // so for now it lives only in the device-local draft.
+  perPaymentFloor?: string;
+  rollingCap: string;
+  rollingWindow: keyof typeof WINDOWS;
+  allowlist: string[];
+  // R5 per-payee cap: an optional max-per-payment for a specific approved payee,
+  // keyed by address (blank/absent = only the global ceiling applies to them).
+  allowlistCaps: Record<string, string>;
+  // R7 velocity: at most this many payments per velocity window. Kept on the
+  // device only (like the rest of the private rule), proven alongside the caps.
+  velocityCount: string;
+  velocityWindow: keyof typeof WINDOWS;
+  // R4 deny-list: payees that may NOT be paid (above an optional threshold). Up to 4.
+  // Enforced in the PRIVATE lane by the ZK circuit (proven per payment); in the
+  // PUBLIC lane the vault checks it in the clear. Available in both forms.
+  denylist?: string[];
+  denylistThresholdUsdc?: string;
+  // R6 calendar window: a release's validity must sit inside [start, end]. Stored as
+  // `datetime-local` strings on the device; mapped to unix seconds for the vault
+  // (public: calendarStart/End) and the circuit (private: calendarWindows[0]). Both
+  // blank = no calendar constraint. Enforced on-chain in both lanes.
+  calendarStart?: string;
+  calendarEnd?: string;
+  // Soft marketplace eligibility: only services whose verification tier is in this
+  // set may be hired under this rule (empty/absent = any). App-enforced at hire; the
+  // on-chain payee allowlist stays the hard backstop. Cleartext in both lanes.
+  allowedTiers?: ('T1' | 'T2' | 'T3')[];
+};
+
+/** A local datetime string ("YYYY-MM-DDTHH:mm") to unix seconds; 0 when blank/invalid. */
+export function localToUnix(s?: string): number {
+  if (!s) return 0;
+  const t = Date.parse(s);
+  return Number.isNaN(t) ? 0 : Math.floor(t / 1000);
+}
+
+/** Unix seconds back to a `datetime-local` value ("YYYY-MM-DDTHH:mm"); '' when 0. */
+export function unixToLocal(secs: number): string {
+  if (!secs) return '';
+  const d = new Date(secs * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export const emptyDraft = (): Draft => ({
+  isPrivate: true,
+  perPaymentCeiling: '',
+  rollingCap: '',
+  rollingWindow: 'week',
+  allowlist: [],
+  allowlistCaps: {},
+  velocityCount: '',
+  velocityWindow: 'week',
+});
+
+// Application presets: the real jobs people use CleverCon for. Each is a ready
+// starting policy the owner adjusts (amounts are examples; add payees below).
+export type PolicyTemplate = { key: string; label: string; description: string; make: () => Draft };
+
+export const TEMPLATES: PolicyTemplate[] = [
+  {
+    key: 'bounty',
+    label: 'Bounty / disbursement',
+    description:
+      'Pay approved recipients for bounties, grants, or paid work, capped per payout and per month. Add the recipient addresses below.',
+    make: () => ({
+      isPrivate: true,
+      perPaymentCeiling: '500',
+      rollingCap: '5000',
+      rollingWindow: 'month',
+      allowlist: [],
+      allowlistCaps: {},
+      velocityCount: '',
+      velocityWindow: 'week',
+    }),
+  },
+  {
+    key: 'payroll',
+    label: 'Payroll / vendors',
+    description:
+      'Recurring payments to an approved list of people or vendors, capped per payment and per month.',
+    make: () => ({
+      isPrivate: true,
+      perPaymentCeiling: '2000',
+      rollingCap: '20000',
+      rollingWindow: 'month',
+      allowlist: [],
+      allowlistCaps: {},
+      velocityCount: '',
+      velocityWindow: 'week',
+    }),
+  },
+  {
+    key: 'grant',
+    label: 'Grant / gift',
+    description: 'One-off or batch gifts and grants to approved recipients, capped per payment.',
+    make: () => ({
+      isPrivate: true,
+      perPaymentCeiling: '1000',
+      rollingCap: '',
+      rollingWindow: 'month',
+      allowlist: [],
+      allowlistCaps: {},
+      velocityCount: '',
+      velocityWindow: 'week',
+    }),
+  },
+  {
+    key: 'allowance',
+    label: 'Agent allowance',
+    description:
+      'A bounded wallet for an agent: a small cap per payment and per week, to any payee within the caps.',
+    make: () => ({
+      isPrivate: true,
+      perPaymentCeiling: '50',
+      rollingCap: '200',
+      rollingWindow: 'week',
+      allowlist: [],
+      allowlistCaps: {},
+      velocityCount: '',
+      velocityWindow: 'week',
+    }),
+  },
+];
+
+export const isStellarAddr = (a: string) => /^G[A-Z2-7]{55}$/.test(a.trim());
+
+export function draftToRules(d: Draft): { rules: PolicyRules; isPrivate: boolean } {
+  const secs = WINDOWS[d.rollingWindow].secs;
+  return {
+    isPrivate: d.isPrivate,
+    rules: {
+      perPaymentCeilingUsdc: d.perPaymentCeiling ? Number(d.perPaymentCeiling) : undefined,
+      rollingCapUsdc: d.rollingCap ? Number(d.rollingCap) : undefined,
+      rollingWindowSecs: d.rollingCap && secs ? secs : undefined,
+      allowlist: d.allowlist.length ? d.allowlist : undefined,
+    },
+  };
+}
+
+/**
+ * Map the device-local {@link Draft} onto the shared, clause-based {@link Rule}
+ * model from `@clevercon/common`. This is the canonical representation the API
+ * and SDK also consume; here it drives the honest per-clause enforcement badges
+ * so the builder never implies a pending rule is enforced on-chain today.
+ */
+export function draftToRule(d: Draft, name = ''): Rule {
+  const clauses: Rule['clauses'] = [];
+  if (d.perPaymentCeiling) {
+    clauses.push({ type: 'perPaymentMax', usdc: Number(d.perPaymentCeiling) });
+  }
+  if (d.perPaymentFloor) {
+    clauses.push({ type: 'perPaymentMin', usdc: Number(d.perPaymentFloor) });
+  }
+  const rollSecs = WINDOWS[d.rollingWindow].secs;
+  if (d.rollingCap && rollSecs) {
+    clauses.push({ type: 'rollingCap', usdc: Number(d.rollingCap), windowSecs: rollSecs });
+  }
+  const velSecs = WINDOWS[d.velocityWindow].secs;
+  if (d.velocityCount && velSecs) {
+    clauses.push({ type: 'velocity', maxCount: Number(d.velocityCount), windowSecs: velSecs });
+  }
+  if (d.allowlist.length) {
+    clauses.push({
+      type: 'allowlist',
+      payees: d.allowlist.map((a) => {
+        const cap = d.allowlistCaps[a];
+        return cap ? { address: a, perPayeeCapUsdc: Number(cap) } : { address: a };
+      }),
+    });
+  }
+  if (d.denylist && d.denylist.length) {
+    clauses.push({
+      type: 'denylist',
+      addresses: d.denylist.slice(0, 4),
+      thresholdUsdc: d.denylistThresholdUsdc ? Number(d.denylistThresholdUsdc) : undefined,
+    });
+  }
+  const calStart = localToUnix(d.calendarStart);
+  const calEnd = localToUnix(d.calendarEnd);
+  if (calStart && calEnd) {
+    clauses.push({ type: 'calendar', windows: [{ startUnix: calStart, endUnix: calEnd }] });
+  }
+  return { name, form: d.isPrivate ? 'private' : 'public', status: 'active', version: 1, clauses };
+}
+
+/** A short human label for a clause's enforcement status, for the builder badge. */
+export function enforcementText(status: string): string {
+  if (status === 'enforced-now') return 'on-chain now';
+  if (status === 'committed-pending') return 'pending';
+  return 'app-enforced';
+}
+
+/**
+ * The per-active-clause enforcement badges for the builder, read from the shared
+ * `CLAUSE_ENFORCEMENT` map so the dapp, API, and SDK agree on what is actually
+ * enforced on-chain versus committed-but-pending versus app-enforced.
+ */
+export function draftClauseBadges(d: Draft): { label: string; status: string }[] {
+  return draftToRule(d).clauses.map((c) => {
+    const e = CLAUSE_ENFORCEMENT[c.type as ClauseType];
+    return { label: e.label, status: e.status };
+  });
+}
+
+export function describeDraft(d: Draft): string {
+  const parts: string[] = [];
+  if (d.perPaymentCeiling && d.perPaymentFloor)
+    parts.push(`$${d.perPaymentFloor}-$${d.perPaymentCeiling}/payment`);
+  else if (d.perPaymentCeiling) parts.push(`max $${d.perPaymentCeiling}/payment`);
+  else if (d.perPaymentFloor) parts.push(`min $${d.perPaymentFloor}/payment`);
+  if (d.rollingCap) parts.push(`max $${d.rollingCap} ${WINDOWS[d.rollingWindow].label}`);
+  if (d.velocityCount)
+    parts.push(`max ${d.velocityCount} payment(s) ${WINDOWS[d.velocityWindow].label}`);
+  if (localToUnix(d.calendarStart) && localToUnix(d.calendarEnd))
+    parts.push('within a date window');
+  parts.push(
+    d.allowlist.length ? `only ${d.allowlist.length} allowed payee(s)` : 'any payee within caps',
+  );
+  parts.push(d.isPrivate ? 'rule private' : 'transparent');
+  return parts.join(' · ');
+}
+
+/** A short, human summary of a saved rule (used on Home and in the limits list). */
+export function describeRules(r: PolicyRules): string {
+  const parts: string[] = [];
+  if (r.perPaymentCeilingUsdc != null) parts.push(`max $${r.perPaymentCeilingUsdc}/payment`);
+  if (r.rollingCapUsdc != null) parts.push(`max $${r.rollingCapUsdc}/window`);
+  if (r.allowlist?.length) parts.push(`only ${r.allowlist.length} allowed payee(s)`);
+  return parts.length ? parts.join(' · ') : 'no caps';
+}
+
+// The owner's private rules are never kept by the server (only a commitment is),
+// so we cache the plaintext locally on the device that created the limit. This is
+// the key both the builder and the picker read/write.
+export const LIMIT_CACHE_PREFIX = 'cc:limit:';
+
+// The device salt that pins a private rule's commitment, cached alongside the
+// draft (keyed by commitment) so the CREATING device can re-prove with no wallet
+// prompt. The cross-device source of truth is the server's wallet-encrypted
+// backup; this is only the fast local path.
+export const SALT_CACHE_PREFIX = 'cc:limit-salt:';
+
+export function cacheLocalSalt(commitment: string, salt: string): void {
+  try {
+    localStorage.setItem(SALT_CACHE_PREFIX + commitment, salt);
+  } catch {
+    // ignore
+  }
+}
+
+export function getLocalSalt(commitment: string): string | null {
+  try {
+    return localStorage.getItem(SALT_CACHE_PREFIX + commitment);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the exact {rules, salt} a private limit's pinned commitment was built
+ * from, so a disburse proves the SAME bundle and the proof reproduces the pinned
+ * commitment. Prefers the fast local path (this device's cached draft + salt);
+ * otherwise decrypts the server's wallet-encrypted backup (one wallet prompt,
+ * cached for the session). Null when neither is available (a private rule created
+ * on another device with no backup) — such a rule cannot be proven here.
+ */
+export async function resolvePinnedBundle(p: {
+  commitment: string;
+  rules?: PolicyRules | null;
+  encryptedBackup?: string | null;
+}): Promise<RuleBundle | null> {
+  const salt = getLocalSalt(p.commitment);
+  const rules = savedLimitBundleRules(p);
+  if (salt && rules) return { rules, salt };
+  if (p.encryptedBackup) return decryptRuleBundle(p.encryptedBackup);
+  return null;
+}
+
+/**
+ * Resolve the bundle (rules + salt) for the account's global-private rule, so a
+ * private spend can emit the SECOND proof the vault requires against it. Returns
+ * null when no global-private is set, or (importantly) when it is set but its bundle
+ * cannot be proven on this device, so the caller can surface a clear error rather
+ * than proving-then-failing with GlobalProofRequired.
+ */
+export async function resolveGlobalPrivateBundle(
+  policies: Array<{
+    commitment: string;
+    rules?: PolicyRules | null;
+    encryptedBackup?: string | null;
+  }>,
+  globalPrivateCommitment: string | null,
+): Promise<RuleBundle | null> {
+  if (!globalPrivateCommitment) return null;
+  const p = policies.find(
+    (x) => x.commitment.toLowerCase() === globalPrivateCommitment.toLowerCase(),
+  );
+  return p ? resolvePinnedBundle(p) : null;
+}
+
+/**
+ * A readable summary of a saved limit for lists and pickers. Transparent limits
+ * describe their server-held rule; private limits fall back to this device's
+ * local copy, and only to "rule kept private" if there is none. Never a raw hash.
+ */
+export function describeSavedLimit(p: { rules?: PolicyRules | null; commitment: string }): string {
+  if (p.rules) return describeRules(p.rules);
+  try {
+    const cached = localStorage.getItem(LIMIT_CACHE_PREFIX + p.commitment);
+    if (cached) return describeRules(draftToRules(JSON.parse(cached) as Draft).rules);
+  } catch {
+    // ignore
+  }
+  return 'rule kept private';
+}
+
+// The owner's default limit is a local preference: the id of one saved limit that
+// pre-fills each new instruction. It is never a lock (every instruction can override
+// it), which matches the on-chain model where policy is bound per task. Scoped by the
+// connected account so a different wallet on the same device never inherits it.
+const defaultKey = (account: string) => `cc:defaultLimit:${account}`;
+
+export function getDefaultLimitId(account: string): string {
+  if (!account) return '';
+  try {
+    return localStorage.getItem(defaultKey(account)) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function setDefaultLimitId(account: string, id: string): void {
+  if (!account) return;
+  try {
+    if (id) localStorage.setItem(defaultKey(account), id);
+    else localStorage.removeItem(defaultKey(account));
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Map a device-local {@link Draft} onto the SDK prover's {@link PolicyBundleRules}.
+ * This is the lossless bridge (it carries velocity and, in future, per-payee caps
+ * and calendar windows that the server-side rule shape does not), so Disburse
+ * proves exactly what the owner built.
+ */
+export function draftToBundleRules(d: Draft): PolicyBundleRules {
+  const rollSecs = WINDOWS[d.rollingWindow].secs;
+  const velSecs = WINDOWS[d.velocityWindow].secs;
+  // R2 and R7 each need both their cap/count AND a real window, or neither.
+  const rollOn = !!(d.rollingCap && rollSecs);
+  const velOn = !!(d.velocityCount && velSecs);
+  return {
+    perPaymentCeilingUsdc: d.perPaymentCeiling ? Number(d.perPaymentCeiling) : 0,
+    rollingCapUsdc: rollOn ? Number(d.rollingCap) : undefined,
+    rollingWindowSecs: rollOn ? rollSecs : undefined,
+    allowlist: d.allowlist.length
+      ? d.allowlist.map((a) => {
+          const cap = d.allowlistCaps[a];
+          return cap ? { payeeAddress: a, perPayeeCapUsdc: Number(cap) } : { payeeAddress: a };
+        })
+      : undefined,
+    maxReleasesPerWindow: velOn ? Number(d.velocityCount) : undefined,
+    velocityWindowSecs: velOn ? velSecs : undefined,
+    denylist: d.denylist && d.denylist.length ? d.denylist.slice(0, 4) : undefined,
+    denylistThresholdUsdc:
+      d.denylist && d.denylist.length && d.denylistThresholdUsdc
+        ? Number(d.denylistThresholdUsdc)
+        : undefined,
+    calendarWindows:
+      localToUnix(d.calendarStart) && localToUnix(d.calendarEnd)
+        ? [{ startUnix: localToUnix(d.calendarStart), endUnix: localToUnix(d.calendarEnd) }]
+        : undefined,
+  };
+}
+
+/**
+ * Map a device-local {@link Draft} onto the cleartext PUBLIC rule the vault stores
+ * and enforces directly on each session spend (no proof). This is the full clause
+ * vocabulary in the clear: per-payment max/min, rolling cap + window, velocity +
+ * window, allowlist with per-payee caps, deny-list + threshold, and (reserved)
+ * calendar window. 0 / empty means "no constraint on that axis". A public rule is
+ * transparent by design, so unlike a private rule there is no salt or commitment to
+ * keep: the id is just a handle, and the clauses live on-chain in plain sight.
+ */
+export function draftToPublicRule(d: Draft): PublicRule {
+  const rollSecs = WINDOWS[d.rollingWindow].secs ?? 0;
+  const velSecs = WINDOWS[d.velocityWindow].secs ?? 0;
+  const rollOn = !!(d.rollingCap && rollSecs);
+  const velOn = !!(d.velocityCount && velSecs);
+  return {
+    perPaymentMaxUsdc: d.perPaymentCeiling ? Number(d.perPaymentCeiling) : 0,
+    perPaymentMinUsdc: d.perPaymentFloor ? Number(d.perPaymentFloor) : 0,
+    rollingCapUsdc: rollOn ? Number(d.rollingCap) : 0,
+    rollingWindowSecs: rollOn ? rollSecs : 0,
+    velocityMax: velOn ? Number(d.velocityCount) : 0,
+    velocityWindowSecs: velOn ? velSecs : 0,
+    allowlist: d.allowlist.map((a) => {
+      const cap = d.allowlistCaps[a];
+      return { addr: a, capUsdc: cap ? Number(cap) : 0 };
+    }),
+    denylist: d.denylist && d.denylist.length ? d.denylist.slice(0, 4) : [],
+    denylistThresholdUsdc:
+      d.denylist && d.denylist.length && d.denylistThresholdUsdc
+        ? Number(d.denylistThresholdUsdc)
+        : 0,
+    calendarStart: localToUnix(d.calendarStart),
+    calendarEnd: localToUnix(d.calendarEnd),
+  };
+}
+
+/** Map a stored cleartext {@link PublicRule} back onto a device {@link Draft} (for editing). */
+export function publicRuleToDraft(r: PublicRule): Draft {
+  const windowKey = (secs: number): keyof typeof WINDOWS => {
+    const hit = Object.entries(WINDOWS).find(([, w]) => w.secs === secs);
+    return (hit?.[0] as keyof typeof WINDOWS) ?? 'none';
+  };
+  const allowlistCaps: Record<string, string> = {};
+  for (const p of r.allowlist) if (p.capUsdc) allowlistCaps[p.addr] = String(p.capUsdc);
+  return {
+    isPrivate: false,
+    perPaymentCeiling: r.perPaymentMaxUsdc ? String(r.perPaymentMaxUsdc) : '',
+    perPaymentFloor: r.perPaymentMinUsdc ? String(r.perPaymentMinUsdc) : '',
+    rollingCap: r.rollingCapUsdc ? String(r.rollingCapUsdc) : '',
+    rollingWindow: r.rollingCapUsdc ? windowKey(r.rollingWindowSecs) : 'week',
+    allowlist: r.allowlist.map((p) => p.addr),
+    allowlistCaps,
+    velocityCount: r.velocityMax ? String(r.velocityMax) : '',
+    velocityWindow: r.velocityMax ? windowKey(r.velocityWindowSecs) : 'week',
+    denylist: r.denylist,
+    denylistThresholdUsdc: r.denylistThresholdUsdc ? String(r.denylistThresholdUsdc) : '',
+    calendarStart: unixToLocal(r.calendarStart),
+    calendarEnd: unixToLocal(r.calendarEnd),
+  };
+}
+
+/**
+ * Map the server-side saved-limit rule shape onto {@link PolicyBundleRules}. Used
+ * for transparent limits (and private limits created on another device) where only
+ * the server rule is available; it covers the ceiling, rolling cap, allowlist, and
+ * deny-list. The ceiling may be 0 here; Disburse supplies its own editable ceiling.
+ */
+export function rulesToBundleRules(r: PolicyRules): PolicyBundleRules {
+  return {
+    perPaymentCeilingUsdc: r.perPaymentCeilingUsdc ?? 0,
+    rollingCapUsdc: r.rollingCapUsdc,
+    rollingWindowSecs: r.rollingWindowSecs,
+    allowlist: r.allowlist?.length ? r.allowlist.map((a) => ({ payeeAddress: a })) : undefined,
+    denylist: r.denylist?.length ? r.denylist : undefined,
+    denylistThresholdUsdc: r.denylistThresholdUsdc,
+  };
+}
+
+/**
+ * The full prover rules behind a saved limit: this device's local {@link Draft}
+ * when present (lossless), else the server rule. Returns null when neither exists
+ * (a private limit created on another device). The caller supplies the ceiling.
+ */
+export function savedLimitBundleRules(p: {
+  rules?: PolicyRules | null;
+  commitment: string;
+}): PolicyBundleRules | null {
+  try {
+    const cached = localStorage.getItem(LIMIT_CACHE_PREFIX + p.commitment);
+    if (cached) return draftToBundleRules(JSON.parse(cached) as Draft);
+  } catch {
+    // ignore
+  }
+  if (p.rules) return rulesToBundleRules(p.rules);
+  return null;
+}

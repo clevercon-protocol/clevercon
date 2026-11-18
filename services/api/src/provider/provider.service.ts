@@ -1,0 +1,635 @@
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import { Prisma, PaymentStatus, PricingModel, Role, ServiceStatus } from '@clevercon/db';
+import type { Prerequisite, ServiceFunction, ContactLinks } from '@clevercon/common';
+import { OrgService } from '../org/org.service.js';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { RegistryContractService } from './registry-contract.service.js';
+import { issuePayoutChallenge, verifyPayoutOwnership } from './payout-proof.js';
+import { hasUsdcTrustline } from './trustline.js';
+
+const ZERO = new Prisma.Decimal(0);
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Tamper-evident hash of what a provider published. This is the value the
+ * on-chain registry anchors (contracts/registry): a client can hash a service's
+ * advertised fields and compare to the chain to confirm it was not altered.
+ * Keys are emitted in a fixed order so the hash is stable.
+ */
+export function manifestHash(m: {
+  name: string;
+  description: string;
+  category?: string | null;
+  capabilities: string[];
+  pricingModel: string;
+  pricePerCall: string | number;
+  endpoint: string;
+  stellarAddress: string;
+}): string {
+  const canonical = JSON.stringify({
+    v: 1,
+    name: m.name,
+    description: m.description,
+    category: m.category ?? null,
+    capabilities: [...m.capabilities].sort(),
+    pricingModel: m.pricingModel,
+    pricePerCall: String(m.pricePerCall),
+    endpoint: m.endpoint,
+    stellarAddress: m.stellarAddress,
+  });
+  return createHash('sha256').update(canonical).digest('hex');
+}
+
+export interface RegisterServiceParams {
+  name: string;
+  description: string;
+  category?: string;
+  capabilities?: string[];
+  pricingModel: PricingModel;
+  pricePerCall: number;
+  endpoint: string;
+  stellarAddress: string;
+  // Acceptance contract (optional; see MARKETPLACE-ECONOMY-SPEC.md).
+  tier?: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  verification?: { method: string; spec?: Record<string, unknown> };
+  // Interaction/payment shape (marketplace v2; absent = sync/escrow).
+  interaction?: string;
+  paymentModel?: string;
+  attachmentsIn?: {
+    required?: boolean;
+    accept?: string[];
+    maxSizeBytes?: number;
+    maxCount?: number;
+  };
+  /** Requirement catalog the service's functions reference by key. */
+  prerequisites?: Prerequisite[];
+  /** Callable functions, each with its own io, required requirement keys, and pricing. */
+  functions?: ServiceFunction[];
+  /** Public contact/identity links. */
+  contactLinks?: ContactLinks;
+  /** List under this organization (the caller must be a member) instead of themselves. */
+  ownerOrgId?: string;
+  /** Proof of control over a payout address that is not the caller's own wallet. */
+  payoutProof?: { challenge: string; signature: string };
+}
+
+/** Fields a provider may edit after registration. All optional (partial update). */
+export interface UpdateServiceParams {
+  name?: string;
+  description?: string;
+  category?: string;
+  capabilities?: string[];
+  pricePerCall?: number;
+  endpoint?: string;
+  stellarAddress?: string;
+  tier?: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  verification?: { method: string; spec?: Record<string, unknown> };
+  interaction?: string;
+  paymentModel?: string;
+  attachmentsIn?: {
+    required?: boolean;
+    accept?: string[];
+    maxSizeBytes?: number;
+    maxCount?: number;
+  };
+  prerequisites?: Prerequisite[];
+  functions?: ServiceFunction[];
+  contactLinks?: ContactLinks;
+  /** '' lists as yourself; an org id lists under that org (membership required). */
+  ownerOrgId?: string;
+}
+
+/** Stable, URL-safe id from a display name plus a short random suffix. */
+function toAgentId(name: string): string {
+  const slug =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'service';
+  return `${slug}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+type ServiceWithRep = Prisma.ServiceGetPayload<{ include: { reputation: true } }>;
+
+/** Same settlement-gated, anti-self-dealing tier the public directory uses. */
+function trustTier(
+  settlements: number,
+  score: number,
+  uniquePayers: number,
+  disputesUpheld: number,
+  totalJobs: number,
+): 'new' | 'active' | 'trusted' {
+  const disputeRate = totalJobs > 0 ? disputesUpheld / totalJobs : 0;
+  if (disputeRate > 0.2) return 'new';
+  if (settlements >= 10 && score >= 4 && uniquePayers >= 2 && disputeRate < 0.05) return 'trusted';
+  if (settlements >= 1) return 'active';
+  return 'new';
+}
+
+function serializeService(s: ServiceWithRep, uniquePayers = 0, payoutReady: boolean | null = null) {
+  const rep = s.reputation;
+  const settlements = rep?.successfulJobs ?? 0;
+  const score = rep?.score ?? 0;
+  const totalJobs = rep?.totalJobs ?? 0;
+  const disputesUpheld = rep?.disputesUpheld ?? 0;
+  return {
+    id: s.id,
+    agentId: s.agentId,
+    name: s.name,
+    // The owner's full editable manifest (this is the provider's own view, so the
+    // otherwise-private endpoint/payout/schemas are included for the edit form).
+    description: s.description,
+    category: s.category,
+    capabilities: s.capabilities ?? [],
+    endpoint: s.endpoint,
+    stellarAddress: s.stellarAddress,
+    inputSchema: s.inputSchema ?? null,
+    outputSchema: s.outputSchema ?? null,
+    pricePerCall: Number(s.pricePerCall),
+    currency: s.currency,
+    status: s.status,
+    tier: s.tier,
+    verification: s.verification ?? null,
+    // Interaction/payment shape (marketplace v2); null = sync/escrow.
+    interaction: s.interaction ?? null,
+    paymentModel: s.paymentModel ?? null,
+    attachmentsIn: s.attachmentsIn ?? null,
+    prerequisites: s.prerequisites ?? null,
+    functions: s.functions ?? null,
+    contactLinks: s.contactLinks ?? null,
+    ownerOrgId: s.ownerOrgId ?? null,
+    // The provider's own trust view: how they rank and why.
+    trust: trustTier(settlements, score, uniquePayers, disputesUpheld, totalJobs),
+    settlements,
+    uniquePayers,
+    disputes: rep?.disputes ?? 0,
+    disputesUpheld,
+    // Whether the payout wallet can receive USDC (has the trustline). null = unknown.
+    payoutReady,
+    // System-managed endpoint health (auto-recovering). An unhealthy service is
+    // hidden from the public directory until its /health check passes again.
+    healthy: s.healthy,
+    lastHealthyAt: s.lastHealthyAt,
+    reputation: rep
+      ? { score: rep.score, totalJobs: rep.totalJobs, avgLatencyMs: rep.avgLatencyMs }
+      : null,
+  };
+}
+
+@Injectable()
+export class ProviderService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly org: OrgService,
+    @Optional() private readonly registry?: RegistryContractService,
+  ) {}
+
+  /**
+   * Register a service under the current user and grant them the PROVIDER role,
+   * atomically (self-serve onboarding, mirrors API-key -> DEVELOPER). The
+   * service goes live immediately with a fresh (zeroed) reputation row.
+   */
+  /** Issue a payout-ownership challenge for the caller to sign with the payout key. */
+  payoutChallenge(userId: string): string {
+    return issuePayoutChallenge(userId);
+  }
+
+  async registerService(userId: string, params: RegisterServiceParams) {
+    // Ownership: the payout address must be the caller's own wallet, or proven via
+    // a signed challenge, so a service cannot list an address it does not control.
+    const owned = await this.prisma.wallet.findFirst({
+      where: { userId, address: params.stellarAddress },
+      select: { id: true },
+    });
+    if (!owned) {
+      if (!params.payoutProof) {
+        throw new BadRequestException(
+          'payout address is not your wallet; sign a GET /provider/payout-challenge and pass it as payoutProof',
+        );
+      }
+      const proof = verifyPayoutOwnership(params.stellarAddress, params.payoutProof, userId);
+      if (!proof.ok)
+        throw new BadRequestException(`payout ownership proof failed: ${proof.reason}`);
+    }
+
+    // Listing under an organization requires membership, so a service cannot claim an
+    // org's identity (and its verified tick) without belonging to it.
+    if (params.ownerOrgId && !(await this.org.isMember(userId, params.ownerOrgId))) {
+      throw new BadRequestException('You are not a member of that organization.');
+    }
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const service = await tx.service.create({
+        data: {
+          providerId: userId,
+          ownerOrgId: params.ownerOrgId ?? undefined,
+          agentId: toAgentId(params.name),
+          name: params.name,
+          description: params.description,
+          category: params.category,
+          capabilities: params.capabilities ?? [],
+          pricingModel: params.pricingModel,
+          pricePerCall: new Prisma.Decimal(params.pricePerCall),
+          endpoint: params.endpoint,
+          stellarAddress: params.stellarAddress,
+          status: ServiceStatus.ACTIVE,
+          tier: params.tier ?? 'T2',
+          inputSchema: (params.inputSchema ?? undefined) as Prisma.InputJsonValue | undefined,
+          outputSchema: (params.outputSchema ?? undefined) as Prisma.InputJsonValue | undefined,
+          verification: (params.verification ?? undefined) as Prisma.InputJsonValue | undefined,
+          interaction: params.interaction ?? undefined,
+          paymentModel: params.paymentModel ?? undefined,
+          attachmentsIn: (params.attachmentsIn ?? undefined) as Prisma.InputJsonValue | undefined,
+          prerequisites: (params.prerequisites ?? undefined) as unknown as
+            | Prisma.InputJsonValue
+            | undefined,
+          functions: (params.functions ?? undefined) as unknown as
+            | Prisma.InputJsonValue
+            | undefined,
+          contactLinks: (params.contactLinks ?? undefined) as unknown as
+            | Prisma.InputJsonValue
+            | undefined,
+          manifestHash: manifestHash({
+            name: params.name,
+            description: params.description,
+            category: params.category,
+            capabilities: params.capabilities ?? [],
+            pricingModel: params.pricingModel,
+            pricePerCall: params.pricePerCall,
+            endpoint: params.endpoint,
+            stellarAddress: params.stellarAddress,
+          }),
+          reputation: { create: {} },
+        },
+        include: { reputation: true },
+      });
+      await tx.userRole.upsert({
+        where: { userId_role: { userId, role: Role.PROVIDER } },
+        create: { userId, role: Role.PROVIDER },
+        update: {},
+      });
+      return service;
+    });
+    // Anchor the manifest hash on-chain (best-effort, background). The DB hash is
+    // already the cache; the chain anchor makes it publicly verifiable.
+    void this.registry?.anchorManifest(
+      created.agentId,
+      created.manifestHash ?? '',
+      created.stellarAddress,
+    );
+    // Flag immediately if the payout wallet can't receive USDC yet, so the
+    // provider adds a trustline before buyers hire and the hire silently refunds.
+    const payoutReady = await hasUsdcTrustline(created.stellarAddress);
+    return serializeService(created, 0, payoutReady);
+  }
+
+  /**
+   * Edit a service the caller owns. Ownership is enforced in the WHERE clause
+   * (id + providerId), so a provider can never mutate another provider's
+   * service. Only the provided fields change.
+   */
+  async updateService(userId: string, serviceId: string, params: UpdateServiceParams) {
+    // Ownership enforced here; also gives us the current values to merge so the
+    // manifest hash stays consistent with the stored fields.
+    const current = await this.prisma.service.findFirst({
+      where: { id: serviceId, providerId: userId },
+    });
+    if (!current) throw new NotFoundException('Service not found');
+
+    const merged = {
+      name: params.name ?? current.name,
+      description: params.description ?? current.description,
+      category: params.category ?? current.category,
+      capabilities: params.capabilities ?? current.capabilities,
+      pricingModel: current.pricingModel,
+      pricePerCall: params.pricePerCall ?? Number(current.pricePerCall),
+      endpoint: params.endpoint ?? current.endpoint,
+      stellarAddress: params.stellarAddress ?? current.stellarAddress,
+    };
+
+    const data: Prisma.ServiceUpdateInput = { manifestHash: manifestHash(merged) };
+    if (params.name !== undefined) data.name = params.name;
+    if (params.description !== undefined) data.description = params.description;
+    if (params.category !== undefined) data.category = params.category;
+    if (params.capabilities !== undefined) data.capabilities = params.capabilities;
+    if (params.pricePerCall !== undefined)
+      data.pricePerCall = new Prisma.Decimal(params.pricePerCall);
+    if (params.endpoint !== undefined) data.endpoint = params.endpoint;
+    if (params.stellarAddress !== undefined) data.stellarAddress = params.stellarAddress;
+    if (params.tier !== undefined) data.tier = params.tier;
+    if (params.inputSchema !== undefined)
+      data.inputSchema = params.inputSchema as Prisma.InputJsonValue;
+    if (params.outputSchema !== undefined)
+      data.outputSchema = params.outputSchema as Prisma.InputJsonValue;
+    if (params.verification !== undefined)
+      data.verification = params.verification as unknown as Prisma.InputJsonValue;
+    if (params.interaction !== undefined) data.interaction = params.interaction;
+    if (params.paymentModel !== undefined) data.paymentModel = params.paymentModel;
+    if (params.attachmentsIn !== undefined)
+      data.attachmentsIn = params.attachmentsIn as Prisma.InputJsonValue;
+    if (params.prerequisites !== undefined)
+      data.prerequisites = params.prerequisites as unknown as Prisma.InputJsonValue;
+    if (params.functions !== undefined)
+      data.functions = params.functions as unknown as Prisma.InputJsonValue;
+    if (params.contactLinks !== undefined)
+      data.contactLinks = params.contactLinks as unknown as Prisma.InputJsonValue;
+    if (params.ownerOrgId !== undefined) {
+      // '' detaches (list as yourself); a non-empty id requires membership.
+      if (params.ownerOrgId && !(await this.org.isMember(userId, params.ownerOrgId))) {
+        throw new BadRequestException('You are not a member of that organization.');
+      }
+      data.ownerOrg = params.ownerOrgId
+        ? { connect: { id: params.ownerOrgId } }
+        : { disconnect: true };
+    }
+
+    const updated = await this.prisma.service.update({
+      where: { id: serviceId },
+      data,
+      include: { reputation: true },
+    });
+    // Re-anchor the refreshed manifest hash on-chain (best-effort, background).
+    void this.registry?.anchorManifest(
+      updated.agentId,
+      updated.manifestHash ?? '',
+      updated.stellarAddress,
+    );
+    return serializeService(updated);
+  }
+
+  /**
+   * Pause (INACTIVE) or resume (ACTIVE) a service the caller owns. A paused
+   * service drops out of the public marketplace (which lists only ACTIVE/NEW)
+   * but is not deleted, so reputation and history are preserved.
+   */
+  async setServiceStatus(userId: string, serviceId: string, active: boolean) {
+    const status = active ? ServiceStatus.ACTIVE : ServiceStatus.INACTIVE;
+    const result = await this.prisma.service.updateMany({
+      where: { id: serviceId, providerId: userId },
+      data: { status },
+    });
+    if (result.count === 0) throw new NotFoundException('Service not found');
+
+    const updated = await this.prisma.service.findUniqueOrThrow({
+      where: { id: serviceId },
+      include: { reputation: true },
+    });
+    return serializeService(updated);
+  }
+
+  /** Services owned by the current provider. */
+  async listServices(userId: string) {
+    const rows = await this.prisma.service.findMany({
+      where: { providerId: userId },
+      include: { reputation: true },
+      orderBy: { registeredAt: 'desc' },
+    });
+    // Distinct paying counterparties per service (anti-self-dealing signal), from
+    // real CONFIRMED settlements. Best-effort: never fail the list over the stats.
+    const payers = new Map<string, number>();
+    const ids = rows.map((r) => r.id);
+    if (ids.length) {
+      try {
+        const stats = await this.prisma.$queryRaw<{ sid: string; payers: bigint }[]>`
+          SELECT ts."serviceId" AS sid, COUNT(DISTINCT t."buyerId") AS payers
+          FROM "payments" p
+          JOIN "task_steps" ts ON p."stepId" = ts.id
+          JOIN "tasks" t ON p."taskId" = t.id
+          WHERE p.status = 'CONFIRMED' AND ts."serviceId" IN (${Prisma.join(ids)})
+          GROUP BY ts."serviceId"
+        `;
+        for (const s of stats) payers.set(s.sid, Number(s.payers));
+      } catch {
+        // degrade to zero unique payers
+      }
+    }
+    // Payout readiness per DISTINCT address (one Horizon check each), so a provider
+    // sees which services can actually be paid. Best-effort; unknown on error.
+    const ready = new Map<string, boolean | null>();
+    await Promise.all(
+      [...new Set(rows.map((r) => r.stellarAddress))].map(async (addr) => {
+        ready.set(addr, await hasUsdcTrustline(addr));
+      }),
+    );
+    return {
+      items: rows.map((r) =>
+        serializeService(r, payers.get(r.id) ?? 0, ready.get(r.stellarAddress) ?? null),
+      ),
+      total: rows.length,
+    };
+  }
+
+  /**
+   * Incoming work for the current provider: the task steps routed to any service
+   * they own, newest first, with live status. This reflects real marketplace
+   * activity (buyers hiring the provider's services) independently of settlement,
+   * so it is honest even before any payment is recorded.
+   */
+  async jobs(userId: string, limit = 25) {
+    const steps = await this.prisma.taskStep.findMany({
+      where: { service: { providerId: userId } },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        service: { select: { name: true } },
+        task: { select: { title: true } },
+      },
+    });
+    return {
+      items: steps.map((s) => ({
+        id: s.id,
+        taskId: s.taskId,
+        taskTitle: s.task.title,
+        service: s.service?.name ?? null,
+        action: s.action,
+        status: s.status,
+        estimatedCost: Number(s.estimatedCost),
+        latencyMs: s.latencyMs,
+        createdAt: s.createdAt,
+      })),
+      total: steps.length,
+    };
+  }
+
+  /**
+   * Earnings + recent incoming jobs for the current provider. Earnings are the
+   * confirmed payments for REAL hires of this provider's services, attributed via
+   * the payment's step (payment -> step -> service), NOT by the payout address: the
+   * payout wallet may be the provider's own wallet that also received unrelated
+   * payments, which must never be counted as service earnings.
+   */
+  async earnings(userId: string) {
+    const services = await this.prisma.service.findMany({
+      where: { providerId: userId },
+      include: { reputation: true },
+    });
+    if (services.length === 0) {
+      return { totalEarned: 0, thisWeek: 0, jobs: 0, rating: 0, recent: [] };
+    }
+    const ids = services.map((s) => s.id);
+    const nameById = new Map(services.map((s) => [s.id, s.name]));
+
+    const payments = await this.prisma.payment.findMany({
+      where: { step: { serviceId: { in: ids } } },
+      include: { step: { select: { serviceId: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const weekAgo = Date.now() - WEEK_MS;
+    let total = ZERO;
+    let week = ZERO;
+    let jobs = 0;
+    for (const p of payments) {
+      if (p.status !== PaymentStatus.CONFIRMED) continue;
+      total = total.add(p.amount);
+      jobs += 1;
+      if (p.createdAt.getTime() >= weekAgo) week = week.add(p.amount);
+    }
+
+    const rated = services.filter((s) => s.reputation && s.reputation.totalJobs > 0);
+    const rating = rated.length
+      ? rated.reduce((acc, s) => acc + (s.reputation?.score ?? 0), 0) / rated.length
+      : 0;
+
+    return {
+      totalEarned: Number(total),
+      thisWeek: Number(week),
+      jobs,
+      rating: Math.round(rating * 10) / 10,
+      recent: payments.slice(0, 10).map((p) => ({
+        id: p.id,
+        service: nameById.get(p.step?.serviceId ?? '') ?? 'service',
+        from: p.fromAddress,
+        amount: Number(p.amount),
+        status: p.status,
+        createdAt: p.createdAt,
+      })),
+    };
+  }
+
+  /**
+   * Full payout ledger for the provider: every payment to any of their service
+   * addresses, newest first, with the tx hash so each is verifiable on-chain, plus
+   * settled vs pending totals. This is the accounting view (CSV is built client-
+   * side from these rows). Honest and real: amounts are the on-chain payments as
+   * recorded, not estimates. Capped so one call stays bounded; paginate later.
+   */
+  async payouts(userId: string, limit = 500) {
+    const services = await this.prisma.service.findMany({
+      where: { providerId: userId },
+      select: { id: true, name: true },
+    });
+    if (services.length === 0) {
+      return { items: [], settledTotal: 0, pendingTotal: 0, count: 0 };
+    }
+    const ids = services.map((s) => s.id);
+    const nameById = new Map(services.map((s) => [s.id, s.name]));
+
+    // Attributed by the payment's step (a real hire of this provider's service), NOT
+    // by the payout wallet, so an unrelated payment to a shared payout address never
+    // appears here.
+    const payments = await this.prisma.payment.findMany({
+      where: { step: { serviceId: { in: ids } } },
+      include: { step: { select: { serviceId: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(limit, 1000),
+    });
+
+    let settled = ZERO;
+    let pending = ZERO;
+    for (const p of payments) {
+      if (p.status === PaymentStatus.CONFIRMED) settled = settled.add(p.amount);
+      else if (p.status !== PaymentStatus.FAILED) pending = pending.add(p.amount);
+    }
+
+    return {
+      items: payments.map((p) => ({
+        id: p.id,
+        service: nameById.get(p.step?.serviceId ?? '') ?? 'service',
+        toAddress: p.toAddress,
+        from: p.fromAddress,
+        amount: Number(p.amount),
+        asset: p.asset,
+        status: p.status,
+        method: p.method,
+        txHash: p.txHash,
+        createdAt: p.createdAt,
+      })),
+      settledTotal: Number(settled),
+      pendingTotal: Number(pending),
+      count: payments.length,
+    };
+  }
+
+  /**
+   * Aggregate performance across the provider's services, from REAL reputation
+   * counts (incremented only on genuine execution; see workers/executor.ts). Rates
+   * are honest ratios over total jobs; avg latency is weighted by successful jobs.
+   * Unique payers is DISTINCT buyers across all the provider's services (one query),
+   * not the sum of per-service counts, so a buyer hiring two services is not double
+   * counted. Never fabricated: zero services -> all zeros.
+   */
+  async metrics(userId: string) {
+    const services = await this.prisma.service.findMany({
+      where: { providerId: userId },
+      select: { id: true, status: true, reputation: true },
+    });
+    const activeServices = services.filter((s) => s.status === ServiceStatus.ACTIVE).length;
+    let totalJobs = 0;
+    let successfulJobs = 0;
+    let failedJobs = 0;
+    let disputes = 0;
+    let disputesUpheld = 0;
+    let latencyWeighted = 0; // sum(avgLatencyMs * successfulJobs) for a weighted mean
+    for (const s of services) {
+      const r = s.reputation;
+      if (!r) continue;
+      totalJobs += r.totalJobs;
+      successfulJobs += r.successfulJobs;
+      failedJobs += r.failedJobs;
+      disputes += r.disputes;
+      disputesUpheld += r.disputesUpheld;
+      latencyWeighted += r.avgLatencyMs * r.successfulJobs;
+    }
+
+    // Distinct paying counterparties across ALL the provider's services (real
+    // CONFIRMED settlements). Best-effort: never fail metrics over the stats query.
+    let uniquePayers = 0;
+    const ids = services.map((s) => s.id);
+    if (ids.length) {
+      try {
+        const rows = await this.prisma.$queryRaw<{ payers: bigint }[]>`
+          SELECT COUNT(DISTINCT t."buyerId") AS payers
+          FROM "payments" p
+          JOIN "task_steps" ts ON p."stepId" = ts.id
+          JOIN "tasks" t ON p."taskId" = t.id
+          WHERE p.status = 'CONFIRMED' AND ts."serviceId" IN (${Prisma.join(ids)})
+        `;
+        uniquePayers = Number(rows[0]?.payers ?? 0);
+      } catch {
+        // degrade to zero rather than fail the panel
+      }
+    }
+
+    const pct = (num: number, den: number) => (den > 0 ? Math.round((num / den) * 1000) / 10 : 0);
+    return {
+      services: services.length,
+      activeServices,
+      totalJobs,
+      successfulJobs,
+      failedJobs,
+      successRate: pct(successfulJobs, totalJobs), // percent, 1 decimal
+      avgLatencyMs: successfulJobs > 0 ? Math.round(latencyWeighted / successfulJobs) : 0,
+      disputes,
+      disputesUpheld,
+      disputeRate: pct(disputesUpheld, totalJobs),
+      uniquePayers,
+    };
+  }
+}

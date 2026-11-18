@@ -1,0 +1,601 @@
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { StrKey } from '@stellar/stellar-sdk';
+import { Prisma, PaymentMethod, PaymentStatus, StepStatus } from '@clevercon/db';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { VaultContractService, type PublicRuleInput } from './vault-contract.service.js';
+import { DelegateService } from './delegate.service.js';
+
+const ZERO = new Prisma.Decimal(0);
+
+function n(d: Prisma.Decimal): number {
+  return Number(d);
+}
+
+@Injectable()
+export class VaultService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly contract: VaultContractService,
+    private readonly delegates: DelegateService,
+  ) {}
+
+  /** Deposit availability + the deployed contract + USDC SAC (for UI transparency and
+   *  for building self-custody agent-key tokens client-side). */
+  get status(): { depositsEnabled: boolean; contractAddress: string; usdcSac: string } {
+    return {
+      depositsEnabled: this.contract.active,
+      contractAddress: this.contract.contractAddress,
+      usdcSac: this.contract.usdcAsset,
+    };
+  }
+
+  private async primaryAddress(userId: string): Promise<string> {
+    const wallets = await this.prisma.wallet.findMany({
+      where: { userId },
+      orderBy: { isPrimary: 'desc' },
+      select: { address: true },
+    });
+    if (wallets.length === 0) throw new NotFoundException('No wallet on this account');
+    return wallets[0].address;
+  }
+
+  /** Build an unsigned deposit XDR for the caller's wallet to sign. */
+  async buildDeposit(userId: string, amountUsdc: number) {
+    if (amountUsdc <= 0) throw new BadRequestException('Amount must be positive');
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildDepositXdr(address, amountUsdc);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build an unsigned withdraw XDR for the caller's wallet to sign. */
+  async buildWithdraw(userId: string, amountUsdc: number) {
+    if (amountUsdc <= 0) throw new BadRequestException('Amount must be positive');
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildWithdrawXdr(address, amountUsdc);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Submit a wallet-signed vault XDR; returns the on-chain tx hash. */
+  async submit(signedXdr: string) {
+    const txHash = await this.contract.submitSignedXdr(signedXdr);
+    return { txHash };
+  }
+
+  /**
+   * The caller's spending delegate (provisioned on first read) plus whether
+   * settlement is enabled here and whether it has been authorized on-chain yet.
+   */
+  async getDelegate(userId: string) {
+    const settlementEnabled = this.contract.active && this.delegates.available;
+    if (!settlementEnabled) {
+      return { orchestrator: null, settlementEnabled: false, registered: false };
+    }
+    const d = await this.delegates.getOrProvision(userId);
+    return { orchestrator: d.publicKey, settlementEnabled: true, registered: d.registered };
+  }
+
+  /**
+   * Build the one-time register_orchestrator XDR authorizing the caller's own
+   * delegate. User-custodied (the user signs, the API submits via `submit`).
+   */
+  async buildRegisterOrchestrator(userId: string) {
+    const address = await this.primaryAddress(userId);
+    const { publicKey } = await this.delegates.getOrProvision(userId);
+    const xdr = await this.contract.buildRegisterOrchestratorXdr(address, publicKey);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /**
+   * Build the `set_policy_commitment` XDR pinning a rule's commitment to the
+   * caller's account. User-custodied: the wallet signs, the API submits via
+   * `submit`. Required before the proof-gated path will accept the rule.
+   */
+  async buildPinCommitment(userId: string, commitmentHex: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildPinCommitmentXdr(address, commitmentHex);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed unpin_policy_commitment XDR (removes it from the pinned set). */
+  async buildUnpinCommitment(userId: string, commitmentHex: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildUnpinCommitmentXdr(address, commitmentHex);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  // ── Global rules ─────────────────────────────────────────────────────────────
+
+  /** Build the wallet-signed set_global(Private, commitment) XDR (make a rule global). */
+  async buildSetGlobalPrivate(userId: string, commitmentHex: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildSetGlobalPrivateXdr(address, commitmentHex);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed clear_global(Private) XDR. */
+  async buildClearGlobalPrivate(userId: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildClearGlobalPrivateXdr(address);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed set_public_rule XDR (store a named cleartext public rule). */
+  async buildSetPublicRule(userId: string, ruleIdHex: string, rule: PublicRuleInput) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildSetPublicRuleXdr(address, ruleIdHex, rule);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed clear_public_rule XDR. */
+  async buildClearPublicRule(userId: string, ruleIdHex: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildClearPublicRuleXdr(address, ruleIdHex);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed set_global_public(rule_id) XDR (mark a public rule global). */
+  async buildSetGlobalPublic(userId: string, ruleIdHex: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildSetGlobalPublicXdr(address, ruleIdHex);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed clear_global_public XDR. */
+  async buildClearGlobalPublic(userId: string) {
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildClearGlobalPublicXdr(address);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** The user's current globals: the private commitment (hex) + the public rule id (hex). */
+  async getGlobals(userId: string) {
+    if (!this.contract.active) return { privateCommitment: null, publicRuleId: null };
+    const address = await this.primaryAddress(userId);
+    const [privateCommitment, publicRuleId] = await Promise.all([
+      this.contract.readGlobalPrivate(address),
+      this.contract.readGlobalPublic(address),
+    ]);
+    return { privateCommitment, publicRuleId };
+  }
+
+  /** Read a named public rule (USDC / seconds), or null. */
+  async getPublicRule(userId: string, ruleIdHex: string) {
+    if (!this.contract.active) return null;
+    const address = await this.primaryAddress(userId);
+    return this.contract.readPublicRule(address, ruleIdHex);
+  }
+
+  /** Read live usage for a public rule (window + lifetime spend/count), or null. */
+  async getPublicUsage(userId: string, ruleIdHex: string) {
+    if (!this.contract.active) return null;
+    const address = await this.primaryAddress(userId);
+    return this.contract.readPublicUsage(address, ruleIdHex);
+  }
+
+  /** The user's on-chain pinned-commitment set (hex), so the dapp can mark which rules are live. */
+  async getPinnedCommitments(userId: string): Promise<{ commitments: string[] }> {
+    if (!this.contract.active) return { commitments: [] };
+    const address = await this.primaryAddress(userId).catch(() => null);
+    if (!address) return { commitments: [] };
+    try {
+      return { commitments: await this.contract.readPolicyCommitments(address) };
+    } catch {
+      return { commitments: [] };
+    }
+  }
+
+  /**
+   * The per-commitment R2/R7 accumulator the client reads before proving a pp/2
+   * batch (so the proof binds to the window state the vault re-derives). Pure
+   * read; no auth needed beyond the API key (the commitment is already public).
+   */
+  async getCommitmentAccumulator(commitmentHex: string) {
+    return this.contract.readCommitmentAccum(commitmentHex);
+  }
+
+  /**
+   * Managed Sessions (server + public lane). The user's server-held delegate IS
+   * the session key: the owner signs register_session ONCE (wallet-signed, via
+   * `submit`) to authorize the on-chain scope (budget + payee allowlist + expiry),
+   * then `sessionPay` spends hands-off with the server signing as that delegate.
+   * The vault enforces the scope, so even the server cannot exceed it; revoke is
+   * wallet-signed and instant. This is the dapp's public option (a browser key
+   * could not sign hands-off), replacing the old server-logic Autopay.
+   */
+  async buildEnableSession(
+    userId: string,
+    spendCapUsdc: number,
+    expiresInSeconds: number,
+    ruleIdHex?: string | null,
+  ) {
+    if (spendCapUsdc <= 0) throw new BadRequestException('spendCapUsdc must be positive');
+    if (expiresInSeconds <= 0) throw new BadRequestException('expiresInSeconds must be positive');
+    if (!this.delegates.available) {
+      throw new BadRequestException('Managed Sessions are not configured on this deployment');
+    }
+    const address = await this.primaryAddress(userId);
+    const { publicKey } = await this.delegates.getOrProvision(userId);
+    const expiry = Math.floor(Date.now() / 1000) + expiresInSeconds;
+    // The dapp's Managed Session is a SERVER-HELD key bound to a cap + expiry, OPTIONALLY
+    // under a public rule (picked on the dapp) that the vault then enforces on every
+    // session spend. Cap-only is valid (a server key always has a cap). server_held=true.
+    const xdr = await this.contract.buildRegisterSessionXdr(
+      address,
+      publicKey,
+      expiry,
+      spendCapUsdc,
+      ruleIdHex || null,
+      true,
+    );
+    return {
+      xdr,
+      networkPassphrase: this.contract.passphrase,
+      sessionPublicKey: publicKey,
+      expiry,
+    };
+  }
+
+  /** Build the wallet-signed pause/unpause XDR for the caller's Managed Session key. */
+  async buildPauseSession(userId: string, paused: boolean) {
+    const address = await this.primaryAddress(userId);
+    const { publicKey } = await this.delegates.getOrProvision(userId);
+    const xdr = await this.contract.buildSetSessionPausedXdr(address, publicKey, paused);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed edit XDR (extend expiry / raise cap). 0 leaves a field. */
+  async buildUpdateSession(userId: string, newExpiresInSeconds: number, newSpendCapUsdc: number) {
+    const address = await this.primaryAddress(userId);
+    const { publicKey } = await this.delegates.getOrProvision(userId);
+    const newExpiry =
+      newExpiresInSeconds > 0 ? Math.floor(Date.now() / 1000) + newExpiresInSeconds : 0;
+    const xdr = await this.contract.buildUpdateSessionXdr(
+      address,
+      publicKey,
+      newExpiry,
+      newSpendCapUsdc,
+    );
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /**
+   * Link a hire's on-chain release to the step it paid, AFTER the release really
+   * happened (the caller holds a confirmed tx hash). This is how a hire settled via
+   * the rule's own path - keyless (private) or the Managed Session (public) - gets a
+   * Payment the provider's earnings attribute to (by step -> service). The server
+   * records it, never a client-reported hash, so earnings stay truthful.
+   *
+   * Idempotent (keyed per step), and defensive: it records only a step that belongs
+   * to THIS user, is RELEASED (delivered + accepted), and whose own payee matches
+   * the address that was actually paid - so a release can never be mis-attributed to
+   * an unrelated or unpaid step. A mismatch is skipped silently (the on-chain money
+   * already moved; the attribution is best-effort).
+   */
+  private async recordHireSettlements(
+    userId: string,
+    taskId: string,
+    stepIds: (string | null)[],
+    payees: string[],
+    txHash: string,
+  ): Promise<void> {
+    for (let i = 0; i < stepIds.length; i++) {
+      const stepId = stepIds[i];
+      if (!stepId) continue;
+      try {
+        const step = await this.prisma.taskStep.findFirst({
+          where: { id: stepId, taskId, task: { buyerId: userId } },
+          include: {
+            service: { select: { stellarAddress: true } },
+            task: { select: { asset: true } },
+          },
+        });
+        if (!step || step.status !== StepStatus.RELEASED) continue;
+        const expected = step.payee ?? step.service?.stellarAddress ?? null;
+        if (!expected || expected !== payees[i]) continue;
+        await this.prisma.payment.create({
+          data: {
+            taskId,
+            stepId,
+            fromAddress: this.contract.contractAddress || 'vault',
+            toAddress: payees[i],
+            asset: step.task?.asset ?? this.contract.usdcAsset,
+            amount: step.estimatedCost,
+            method: PaymentMethod.VAULT_RELEASE,
+            status: PaymentStatus.CONFIRMED,
+            txHash,
+            idempotencyKey: `hire-settle-${stepId}`,
+          },
+        });
+      } catch (err) {
+        // A unique-key clash means a concurrent settle already recorded this step
+        // (benign: the on-chain release is idempotent). Anything else must not undo
+        // a real on-chain payment, so log-and-continue.
+        if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) {
+          console.warn(`hire settlement record failed for step ${stepId}: ${String(err)}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Hands-off public-lane spend: the server signs release_payment_session with the
+   * caller's delegate/session key. No per-payment wallet signature (that is the
+   * point); the vault's on-chain scope is the whole protection. When `hire` names a
+   * task step, the paid provider is linked to it for the provider's earnings.
+   */
+  async sessionPay(
+    userId: string,
+    payee: string,
+    amountUsdc: number,
+    ruleIdHex?: string | null,
+    hire?: { taskId: string; stepId: string } | null,
+  ) {
+    if (amountUsdc <= 0) throw new BadRequestException('amount must be positive');
+    if (!StrKey.isValidEd25519PublicKey(payee)) throw new BadRequestException('invalid payee');
+    const kp = await this.delegates.keypairFor(userId);
+    if (!kp) throw new BadRequestException('No managed session: enable one first');
+    const txHash = await this.contract.releaseViaSession(kp, payee, amountUsdc, ruleIdHex ?? null);
+    if (hire) await this.recordHireSettlements(userId, hire.taskId, [hire.stepId], [payee], txHash);
+    return { txHash };
+  }
+
+  /**
+   * Submit a KEYLESS, proof-authorized private release for the caller. The user's
+   * address comes from their authenticated session (never the request body), so a
+   * caller can only ever spend from their OWN vault; the proof + the user's pinned
+   * commitment gate it on-chain regardless. No delegate, no per-payment signature:
+   * the relayer only pays the fee. Returns the on-chain tx hash.
+   */
+  async releaseKeyless(
+    userId: string,
+    params: {
+      commitmentHex: string;
+      payees: string[];
+      amountsStroops: bigint[];
+      nullifiers: Buffer[];
+      validAfter: bigint;
+      validBefore: bigint;
+      resetR2: boolean;
+      resetR7: boolean;
+      proof: { a: Buffer; b: Buffer; c: Buffer };
+      global?: {
+        commitmentHex: string;
+        nullifiers: Buffer[];
+        resetR2: boolean;
+        resetR7: boolean;
+        proof: { a: Buffer; b: Buffer; c: Buffer };
+      } | null;
+      // When this release settles a hire, the step each payee pays (parallel to
+      // `payees`), so the provider's earnings attribute to it. Null entries (a plain
+      // disburse recipient) are skipped.
+      hire?: { taskId: string; stepIds: (string | null)[] } | null;
+    },
+  ): Promise<{ txHash: string }> {
+    const { hire, ...release } = params;
+    const user = await this.primaryAddress(userId);
+    const txHash = await this.contract.releaseProvedKeyless({ user, ...release });
+    if (hire)
+      await this.recordHireSettlements(userId, hire.taskId, hire.stepIds, params.payees, txHash);
+    return { txHash };
+  }
+
+  /** Build the wallet-signed revoke_session XDR (kills the managed session on-chain). */
+  async buildRevokeSession(userId: string) {
+    const address = await this.primaryAddress(userId);
+    const publicKey = await this.delegates.publicKeyFor(userId);
+    if (!publicKey) throw new BadRequestException('No managed session to revoke');
+    const xdr = await this.contract.buildRevokeSessionXdr(address, publicKey);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** The caller's live managed-session scope (budget/allowlist/expiry), or null. */
+  async getSession(userId: string) {
+    const publicKey = await this.delegates.publicKeyFor(userId);
+    if (!publicKey) return { sessionPublicKey: null, session: null };
+    const session = await this.contract.readSession(publicKey);
+    return { sessionPublicKey: publicKey, session };
+  }
+
+  // ── Self-custody agent keys (local session keys) ─────────────────────────────
+  // Unlike the Managed Session (a server-held delegate), these are keys the AGENT
+  // holds. The owner authorizes an arbitrary public key ONCE (register_session with
+  // server_held=false), bound to a public rule and an optional cap; local keys may be
+  // open-ended (no expiry). All ops are wallet-signed and submitted via `submit`.
+
+  /** Build the wallet-signed register_session for a self-custody agent key. */
+  async buildRegisterAgentKey(
+    userId: string,
+    sessionPublicKey: string,
+    ruleIdHex?: string,
+    spendCapUsdc?: number,
+    expiresInSeconds?: number,
+  ) {
+    if (!StrKey.isValidEd25519PublicKey(sessionPublicKey)) {
+      throw new BadRequestException('Invalid agent key (expected a G... address)');
+    }
+    const cap = spendCapUsdc ?? 0;
+    if (cap < 0) throw new BadRequestException('spendCapUsdc cannot be negative');
+    if (cap === 0 && !ruleIdHex) {
+      throw new BadRequestException('an agent key needs a public rule and/or a spend cap');
+    }
+    const address = await this.primaryAddress(userId);
+    const expiry =
+      expiresInSeconds && expiresInSeconds > 0
+        ? Math.floor(Date.now() / 1000) + expiresInSeconds
+        : 0;
+    const xdr = await this.contract.buildRegisterSessionXdr(
+      address,
+      sessionPublicKey,
+      expiry,
+      cap,
+      ruleIdHex || null,
+      false,
+    );
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed pause/unpause XDR for a self-custody agent key. */
+  async buildPauseAgentKey(userId: string, sessionPublicKey: string, paused: boolean) {
+    if (!StrKey.isValidEd25519PublicKey(sessionPublicKey)) {
+      throw new BadRequestException('Invalid agent key');
+    }
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildSetSessionPausedXdr(address, sessionPublicKey, paused);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** Build the wallet-signed revoke_session XDR for a self-custody agent key. */
+  async buildRevokeAgentKey(userId: string, sessionPublicKey: string) {
+    if (!StrKey.isValidEd25519PublicKey(sessionPublicKey)) {
+      throw new BadRequestException('Invalid agent key');
+    }
+    const address = await this.primaryAddress(userId);
+    const xdr = await this.contract.buildRevokeSessionXdr(address, sessionPublicKey);
+    return { xdr, networkPassphrase: this.contract.passphrase };
+  }
+
+  /** The live on-chain scope of a specific agent key (cap/spent/rule/paused/...), or null. */
+  async getAgentKey(_userId: string, sessionPublicKey: string) {
+    if (!StrKey.isValidEd25519PublicKey(sessionPublicKey)) {
+      throw new BadRequestException('Invalid agent key');
+    }
+    const session = await this.contract.readSession(sessionPublicKey);
+    return { sessionPublicKey, session };
+  }
+
+  /** Mark the caller's delegate as authorized (called after the register tx submits). */
+  /**
+   * The user's registered agent key (for the agent-key payment mode). Returns
+   * only the public key; the platform never holds the secret.
+   */
+  async getAgentWallet(userId: string): Promise<{ publicKey: string | null }> {
+    const w = await this.prisma.agentWallet.findUnique({ where: { userId } });
+    return { publicKey: w?.publicKey ?? null };
+  }
+
+  /**
+   * Register (or update) the user's OWN agent key. We store only the public
+   * key: the user's agent holds the secret and signs its own payments, so this
+   * stays non-custodial. The vault will top this address up in bounded amounts
+   * under the user's policy (agent-key mode, paying external x402/MPP services).
+   */
+  async setAgentWallet(userId: string, publicKey: string): Promise<{ publicKey: string }> {
+    if (!StrKey.isValidEd25519PublicKey(publicKey)) {
+      throw new BadRequestException('Invalid Stellar public key (expected a G... address)');
+    }
+    const w = await this.prisma.agentWallet.upsert({
+      where: { userId },
+      create: { userId, publicKey },
+      update: { publicKey },
+    });
+    return { publicKey: w.publicKey };
+  }
+
+  async confirmDelegateRegistered(userId: string) {
+    await this.delegates.markRegistered(userId);
+    return { ok: true as const };
+  }
+
+  /**
+   * Aggregate the vault position for a user across every wallet they control.
+   * On-chain is the source of truth; these rows are the indexed mirror, so a
+   * user with no deposits yet simply reads back zeros.
+   */
+  async getForUser(userId: string) {
+    const wallets = await this.prisma.wallet.findMany({
+      where: { userId },
+      orderBy: { isPrimary: 'desc' },
+      select: { address: true },
+    });
+    const addresses = wallets.map((w) => w.address);
+    if (addresses.length === 0) {
+      return {
+        balance: 0,
+        available: 0,
+        locked: 0,
+        totalDeposited: 0,
+        totalSpent: 0,
+        accounts: [],
+      };
+    }
+
+    // Authoritative headline: the primary wallet's position read live from the
+    // ACTIVE vault. The mirror below is keyed by (address, asset) not by vault id,
+    // so after a cutover it can report a stale balance from an old vault; on-chain
+    // is the source of truth. Fall back to the mirror only if the read is
+    // unavailable (RPC blip / inactive contract).
+    if (this.contract.active) {
+      try {
+        const onchain = await this.contract.readUserAccount(addresses[0]);
+        if (onchain) {
+          return {
+            balance: onchain.balance,
+            available: onchain.available,
+            locked: onchain.locked,
+            totalDeposited: onchain.totalDeposited,
+            totalSpent: onchain.totalSpent,
+            accounts: [
+              {
+                address: addresses[0],
+                asset: this.contract.usdcAsset,
+                balance: onchain.balance,
+                available: onchain.available,
+                locked: onchain.locked,
+                activeTasks: 0,
+              },
+            ],
+          };
+        }
+        // No account in this vault yet: honest zeros (not a stale mirror balance).
+        return {
+          balance: 0,
+          available: 0,
+          locked: 0,
+          totalDeposited: 0,
+          totalSpent: 0,
+          accounts: [],
+        };
+      } catch {
+        // fall through to the mirror
+      }
+    }
+
+    // The app denominates the vault in USDC. Filter to the configured USDC asset
+    // so we never sum balances across different assets (e.g. a legacy XLM
+    // position + a USDC position) into one misleading number.
+    const where: { address: { in: string[] }; asset?: string } = { address: { in: addresses } };
+    if (this.contract.usdcAsset) where.asset = this.contract.usdcAsset;
+
+    const rows = await this.prisma.vaultAccount.findMany({
+      where,
+      orderBy: { balance: 'desc' },
+    });
+
+    let balance = ZERO;
+    let locked = ZERO;
+    let totalDeposited = ZERO;
+    let totalSpent = ZERO;
+    for (const r of rows) {
+      balance = balance.add(r.balance);
+      locked = locked.add(r.locked);
+      totalDeposited = totalDeposited.add(r.totalDeposited);
+      totalSpent = totalSpent.add(r.totalSpent);
+    }
+
+    return {
+      balance: n(balance),
+      available: n(balance.sub(locked)),
+      locked: n(locked),
+      totalDeposited: n(totalDeposited),
+      totalSpent: n(totalSpent),
+      accounts: rows.map((r) => ({
+        address: r.address,
+        asset: r.asset,
+        balance: n(r.balance),
+        available: n(r.balance.sub(r.locked)),
+        locked: n(r.locked),
+        activeTasks: r.activeTasks,
+      })),
+    };
+  }
+}

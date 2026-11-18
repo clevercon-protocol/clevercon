@@ -1,0 +1,987 @@
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
+import { preloadWallet } from '../lib/wallet';
+import {
+  Shield,
+  Store,
+  Boxes,
+  Github,
+  ArrowRight,
+  Wallet,
+  Eye,
+  Zap,
+  Layers,
+  CheckCircle2,
+  Sparkles,
+  Search,
+  Users,
+  EyeOff,
+  Fingerprint,
+  GraduationCap,
+  FlaskConical,
+  Code2,
+  Briefcase,
+  TrendingUp,
+} from 'lucide-react';
+
+const GITHUB_URL = 'https://github.com/clevercon-protocol/clevercon';
+
+// Shown in the "For providers" section: a complete, hireable service is one file.
+const PROVIDER_SNIPPET = `import { createProvider } from '@clevercon/agent-sdk/provider';
+import { createHash } from 'node:crypto';
+
+createProvider({
+  name: 'data-notary',
+  async fulfill({ input }) {
+    const data = String(input.data ?? '');
+    return { sha256: createHash('sha256').update(data).digest('hex') };
+  },
+}).listen(); // POST / to fulfill, GET /health for liveness`;
+
+/** Fade-and-rise on scroll into view. */
+function Reveal({
+  children,
+  delay = 0,
+  className = '',
+}: {
+  children: ReactNode;
+  delay?: number;
+  className?: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) =>
+        entries.forEach((e) => {
+          if (e.isIntersecting) {
+            el.classList.add('cc-in');
+            io.unobserve(el);
+          }
+        }),
+      { threshold: 0.12 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return (
+    <div ref={ref} className={`cc-reveal ${className}`} style={{ transitionDelay: `${delay}ms` }}>
+      {children}
+    </div>
+  );
+}
+
+function Logo() {
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-500 to-indigo-700 flex items-center justify-center shadow-lg shadow-violet-900/40">
+        <Layers size={16} className="text-white" />
+      </div>
+      <span className="text-[15px] font-bold tracking-tight text-white">CleverCon</span>
+    </div>
+  );
+}
+
+function LaunchButton() {
+  return (
+    <Link
+      to="/connect"
+      className="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-900/40 transition-all"
+    >
+      Launch app
+      <ArrowRight size={15} className="transition-transform group-hover:translate-x-0.5" />
+    </Link>
+  );
+}
+
+const PILLARS = [
+  {
+    icon: Wallet,
+    tint: 'from-cyan-500/20 to-transparent',
+    ring: 'text-cyan-300',
+    border: 'border-cyan-800/40',
+    tag: 'Bounded & non-custodial',
+    title: "Money it can't misuse",
+    body: 'Fund a non-custodial vault and set your limits. The contract holds the money and refuses any payment that breaks a rule, so the platform never has custody and the agent cannot overspend or pay anyone you did not approve.',
+  },
+  {
+    icon: Shield,
+    tint: 'from-violet-500/20 to-transparent',
+    ring: 'text-violet-300',
+    border: 'border-violet-800/40',
+    tag: 'Private by choice',
+    title: 'Rules only you can see',
+    body: 'Choose a private rule and your limits are committed and checked on-chain without being published, enforced by a real zero-knowledge proof verified on-chain (live on testnet), not a trusted server. Or go public with a session key. Either way your budget and approved payees stay bounded on-chain.',
+  },
+  {
+    icon: Boxes,
+    tint: 'from-emerald-500/20 to-transparent',
+    ring: 'text-emerald-300',
+    border: 'border-emerald-800/40',
+    tag: 'A real economy',
+    title: 'An economy to act in',
+    body: 'Pay vendors, disburse to many, hire services, pay per call for APIs, or pay other agents, via dApp, SDK, or MCP. Direct payments are the base; on top is an open market of services anyone can list, across countless categories, all inside your policy.',
+  },
+];
+
+// Illustrative, not exhaustive: the directory is open, so categories grow as
+// providers list new kinds of services.
+const CATEGORIES = [
+  'Data & Oracles',
+  'AI & Analysis',
+  'Web & Research',
+  'Media & Files',
+  'Finance & DeFi',
+  'Trading & Crypto',
+  'Risk & Compliance',
+  'Developers & Freelance',
+  'Human Services',
+  'Business Services',
+];
+
+// Who the same rail serves. Each example maps to a real capability (pay / disburse /
+// hire under a private, on-chain-enforced rule), so this is honest positioning, not
+// a promise of features that do not exist.
+const VERTICALS = [
+  {
+    icon: GraduationCap,
+    title: 'Students',
+    body: 'Fund one account and let an agent pay per-use research and writing tools, capped so a runaway loop can never overspend.',
+  },
+  {
+    icon: FlaskConical,
+    title: 'Researchers',
+    body: 'Hire data, scraping, and analysis services; keep your methodology and limits private while the chain sees only bounded payments.',
+  },
+  {
+    icon: Code2,
+    title: 'Developers',
+    body: 'Give an agent an API key and a private rule; it discovers and pays services per call within your limits, over MCP or the SDK.',
+  },
+  {
+    icon: Briefcase,
+    title: 'Businesses',
+    body: 'Disburse to contractors or vendors in one instruction, each payment capped and policy-bounded, and never custodial.',
+  },
+  {
+    icon: TrendingUp,
+    title: 'Traders & investors',
+    body: 'Let an agent pay for data and signals under a strict daily cap and allowlist, with every spend on-chain-verifiable.',
+  },
+];
+
+const USAGE_MODES = [
+  {
+    icon: Wallet,
+    title: 'Pay a single address',
+    body: 'One bounded, private payment to any Stellar address you allowlist: a vendor, a specific provider, another agent, a one-off. The vault enforces the cap and the payee on-chain.',
+  },
+  {
+    icon: Users,
+    title: 'Disburse to many',
+    body: 'Pay a whole set of recipients in one instruction, capped per payment and in total. Payouts, contractor batches, grant and bounty disbursement, or one agent paying several others.',
+  },
+  {
+    icon: Search,
+    title: 'Hire and pay services',
+    body: 'Hire from the registered service market and pay per call (x402/MPP) from the vault under your policy: data, AI, research, or any paid API an agent needs.',
+  },
+];
+
+type OfferStatus = 'live' | 'dev' | 'planned';
+const OFFERINGS: {
+  icon: typeof Wallet;
+  name: string;
+  status: OfferStatus;
+  body: string;
+  href?: string;
+  hrefLabel?: string;
+}[] = [
+  {
+    icon: Wallet,
+    name: 'Non-custodial vault',
+    status: 'live',
+    body: 'Fund a Soroban contract and spend under a budget it enforces. The platform never holds your money.',
+  },
+  {
+    icon: Store,
+    name: 'Service directory',
+    status: 'live',
+    body: 'A registered market of services an agent can hire and pay per call (x402/MPP), with on-chain reputation. Open to any provider.',
+  },
+  {
+    icon: Shield,
+    name: 'Private spending policies',
+    status: 'live',
+    body: 'Spending rules enforced on-chain but kept private. A real zero-knowledge proof (Groth16 on BLS12-381) is verified on-chain today on testnet, no trusted prover, so the ledger shows a payment was allowed without revealing the rule that allowed it.',
+  },
+  {
+    icon: Zap,
+    name: 'Sessions and Fast mode',
+    status: 'live',
+    body: 'Private and sovereign by default. For high-frequency, low-value spend, authorize a bounded session key (a cap, an allowlist, an expiry) the vault enforces, so routine payments settle instantly with no per-payment proof.',
+  },
+  {
+    icon: Boxes,
+    name: 'Agent SDK',
+    status: 'live',
+    body: 'Embed bounded, non-custodial spending (pay, disburse, hire), or agent-key mode for external x402 services, into any app or agent in a few lines.',
+    href: 'https://www.npmjs.com/package/@clevercon/agent-sdk',
+    hrefLabel: 'npm install @clevercon/agent-sdk',
+  },
+  {
+    icon: Layers,
+    name: 'Stellar MCP server',
+    status: 'live',
+    body: 'Give any MCP-capable agent the ability to pay, disburse, hire, attach a file, set limits, and read its budget, bounded by your rules, natively over MCP.',
+    href: 'https://www.npmjs.com/package/@clevercon/mcp',
+    hrefLabel: 'npm install @clevercon/mcp',
+  },
+  {
+    icon: Zap,
+    name: 'Agent-key mode (x402)',
+    status: 'live',
+    body: "Top up an agent's own wallet from the vault under your policy, then let it pay external x402 services, settling in the same USDC.",
+  },
+  {
+    icon: Sparkles,
+    name: 'On-chain registry',
+    status: 'live',
+    body: 'Verifiable service discovery and reputation, deployed on Soroban.',
+  },
+];
+const STATUS: Record<OfferStatus, { label: string; cls: string }> = {
+  live: { label: 'Live', cls: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/25' },
+  dev: { label: 'In development', cls: 'bg-violet-500/10 text-violet-300 border-violet-500/25' },
+  planned: { label: 'Planned', cls: 'bg-white/5 text-slate-400 border-white/10' },
+};
+
+/** Interactive, mock demo of a private spending policy. Illustrative only. */
+function PrivacyDemo() {
+  const [cap, setCap] = useState(true);
+  const [allow, setAllow] = useState(true);
+  const [weekly, setWeekly] = useState(true);
+  const [paid, setPaid] = useState(false);
+
+  const rules = [
+    cap ? 'Max $100 per payment' : null,
+    allow ? 'Only 5 approved providers' : null,
+    weekly ? 'Max $500 per week' : null,
+  ].filter(Boolean) as string[];
+
+  const commitment = (() => {
+    const s = rules.join('|') + '::salt';
+    let h = 5381 >>> 0;
+    for (let i = 0; i < s.length; i++) h = (((h << 5) + h) ^ s.charCodeAt(i)) >>> 0;
+    const hex = h.toString(16).padStart(8, '0');
+    return '0x' + (hex + hex + hex + hex + hex).slice(0, 40);
+  })();
+
+  const Toggle = ({
+    on,
+    set,
+    label,
+  }: {
+    on: boolean;
+    set: (v: boolean) => void;
+    label: string;
+  }) => (
+    <button
+      onClick={() => {
+        set(!on);
+        setPaid(false);
+      }}
+      className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm text-left transition-colors ${on ? 'border-violet-500/40 bg-violet-500/10 text-slate-100' : 'border-white/10 bg-white/[0.02] text-slate-500'}`}
+    >
+      <span
+        className={`w-4 h-4 rounded flex items-center justify-center shrink-0 ${on ? 'bg-violet-500' : 'bg-white/10'}`}
+      >
+        {on && <CheckCircle2 size={12} className="text-white" />}
+      </span>
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="grid lg:grid-cols-2 gap-5">
+      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6 text-left">
+        <p className="text-xs uppercase tracking-wider text-slate-500 font-medium">
+          Your private policy
+        </p>
+        <p className="mt-1 text-sm text-slate-400">Toggle the rules the vault should enforce.</p>
+        <div className="mt-4 grid gap-2">
+          <Toggle on={cap} set={setCap} label="Max $100 per payment" />
+          <Toggle on={allow} set={setAllow} label="Only 5 approved providers" />
+          <Toggle on={weekly} set={setWeekly} label="Max $500 per week" />
+        </div>
+        <div className="mt-4 rounded-lg border border-white/10 bg-black/30 p-3">
+          <p className="text-[11px] uppercase tracking-wider text-slate-500">
+            Committed on-chain (a hash)
+          </p>
+          <p className="mt-1 font-mono text-xs text-violet-300 break-all">
+            {rules.length ? commitment : 'set at least one rule'}
+          </p>
+        </div>
+        <button
+          onClick={() => setPaid(true)}
+          disabled={!rules.length}
+          className="mt-4 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 px-4 py-2 text-sm font-semibold text-white transition-all"
+        >
+          <Zap size={14} /> Simulate a $60 payment
+        </button>
+      </div>
+
+      <div className="grid gap-5">
+        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.03] p-5 text-left">
+          <div className="flex items-center gap-2 text-emerald-300 text-sm font-medium">
+            <Eye size={15} /> What you see
+          </div>
+          <ul className="mt-3 space-y-1.5 text-sm text-slate-300">
+            {rules.length ? (
+              rules.map((r) => (
+                <li key={r} className="flex items-center gap-2">
+                  <CheckCircle2 size={13} className="text-emerald-400" /> {r}
+                </li>
+              ))
+            ) : (
+              <li className="text-slate-500">No rules set.</li>
+            )}
+          </ul>
+          {paid && (
+            <p className="mt-3 text-sm text-emerald-300">Paid $60 to Chainlens. Within policy.</p>
+          )}
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5 text-left">
+          <div className="flex items-center gap-2 text-slate-400 text-sm font-medium">
+            <EyeOff size={15} /> What the public ledger sees
+          </div>
+          <ul className="mt-3 space-y-1.5 text-sm text-slate-500 font-mono">
+            <li>budget: ••••••</li>
+            <li>payees: ••••••</li>
+            <li>limits: ••••••</li>
+            <li className="text-slate-400 break-all">
+              policy: {rules.length ? commitment.slice(0, 18) + '…' : 'n/a'}
+            </li>
+          </ul>
+          {paid && (
+            <p className="mt-3 text-sm text-slate-300 flex items-start gap-1.5">
+              <Fingerprint size={14} className="text-violet-400 mt-0.5 shrink-0" /> Proof verified.
+              Payment allowed. Your rules stayed hidden.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function Landing() {
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // While the landing sits idle, warm the wallet-kit chunk so the first
+  // "Connect wallet" after "Launch app" is instant rather than a cold download.
+  useEffect(() => {
+    // Typed as optional so the runtime fallback compiles (older mobile Safari
+    // predates requestIdleCallback); the DOM lib otherwise types it as always present.
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    const warm = () => void preloadWallet();
+    const hasRic = typeof w.requestIdleCallback === 'function';
+    const id = hasRic
+      ? w.requestIdleCallback!(warm, { timeout: 2500 })
+      : window.setTimeout(warm, 1500);
+    return () => {
+      if (hasRic && w.cancelIdleCallback) w.cancelIdleCallback(id);
+      else window.clearTimeout(id);
+    };
+  }, []);
+
+  return (
+    <div className="min-h-screen overflow-x-hidden bg-[#0a0b12] text-slate-200">
+      <header
+        className={`fixed top-0 inset-x-0 z-40 transition-colors ${scrolled ? 'border-b border-white/5 bg-[#0a0b12]/85 backdrop-blur' : ''}`}
+      >
+        <nav className="max-w-6xl mx-auto px-5 h-16 flex items-center justify-between">
+          <Link to="/">
+            <Logo />
+          </Link>
+          <div className="hidden md:flex items-center gap-7 text-sm text-slate-400">
+            <a href="#platform" className="hover:text-white transition-colors">
+              Product
+            </a>
+            <a href="#directory" className="hover:text-white transition-colors">
+              Directory
+            </a>
+            <a href="#how" className="hover:text-white transition-colors">
+              How it works
+            </a>
+            <a href="#developers" className="hover:text-white transition-colors">
+              Developers
+            </a>
+            <a href="#providers" className="hover:text-white transition-colors">
+              Providers
+            </a>
+            <a href="#privacy" className="hover:text-white transition-colors">
+              Privacy
+            </a>
+            <Link to="/docs" className="hover:text-white transition-colors">
+              Docs
+            </Link>
+          </div>
+          <div className="flex items-center gap-3">
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-slate-400 hover:text-white transition-colors"
+              aria-label="GitHub"
+            >
+              <Github size={18} />
+            </a>
+            <LaunchButton />
+          </div>
+        </nav>
+      </header>
+
+      {/* Hero */}
+      <section className="relative pt-40 pb-28 px-5">
+        <div className="absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
+          <div className="cc-grid absolute inset-0" />
+          <div className="cc-orb absolute -top-24 left-1/4 w-[36rem] h-[36rem] rounded-full bg-violet-600/20 blur-[120px]" />
+          <div
+            className="cc-orb absolute top-10 right-1/4 w-[30rem] h-[30rem] rounded-full bg-cyan-500/15 blur-[120px]"
+            style={{ animationDelay: '3s' }}
+          />
+        </div>
+
+        <div className="max-w-4xl mx-auto text-center">
+          <Reveal>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-400">
+              <Sparkles size={12} className="text-violet-400" />
+              Non-custodial money for AI agents on Stellar
+            </span>
+          </Reveal>
+          <Reveal delay={80}>
+            <h1 className="mt-6 text-4xl sm:text-6xl font-extrabold tracking-tight text-white leading-[1.05] text-balance">
+              Money your AI agent can use,
+              <br />
+              <span className="cc-gradient-text">under rules it can&apos;t break.</span>
+            </h1>
+          </Reveal>
+          <Reveal delay={160}>
+            <p className="mt-6 text-base sm:text-lg text-slate-400 max-w-2xl mx-auto leading-relaxed">
+              CleverCon lets an AI agent pay, disburse, or hire a service to get a task done on
+              Stellar, always inside rules you set and enforce on-chain, kept private with
+              zero-knowledge or public, your choice. Direct payments are the base; on top sits an
+              open, growing economy of services it connects you to.
+            </p>
+          </Reveal>
+          <Reveal delay={240}>
+            <div className="mt-9 flex items-center justify-center gap-3 flex-wrap">
+              <LaunchButton />
+              <a
+                href={GITHUB_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 px-5 py-2.5 text-sm font-medium text-slate-200 transition-colors"
+              >
+                <Github size={15} /> View on GitHub
+              </a>
+            </div>
+          </Reveal>
+          <Reveal delay={320}>
+            <div className="mt-10 flex items-center justify-center gap-x-6 gap-y-2 flex-wrap text-xs text-slate-500">
+              {[
+                'Non-custodial',
+                'Zero-knowledge, on-chain',
+                'USDC settlement',
+                'Live on testnet',
+              ].map((t) => (
+                <span key={t} className="inline-flex items-center gap-1.5">
+                  <CheckCircle2 size={12} className="text-emerald-500/80" /> {t}
+                </span>
+              ))}
+            </div>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* Pillars */}
+      <section id="pillars" className="px-5 py-20 border-t border-white/5">
+        <div className="max-w-6xl mx-auto">
+          <Reveal className="text-center max-w-2xl mx-auto">
+            <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight text-balance">
+              Bounded, private, and an economy to act in
+            </h2>
+            <p className="mt-3 text-slate-400">Three things, one coherent product.</p>
+          </Reveal>
+          <div className="mt-12 grid md:grid-cols-3 gap-5">
+            {PILLARS.map((p, i) => (
+              <Reveal key={p.title} delay={i * 90}>
+                <div
+                  className={`relative h-full rounded-2xl border ${p.border} bg-white/[0.02] p-6 overflow-hidden transition duration-200 hover:bg-white/[0.03] motion-safe:hover:-translate-y-1`}
+                >
+                  <div
+                    className={`absolute inset-0 bg-gradient-to-b ${p.tint} pointer-events-none`}
+                  />
+                  <div className="relative">
+                    <div className="w-11 h-11 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
+                      <p.icon size={19} className={p.ring} />
+                    </div>
+                    <p className="mt-4 text-xs uppercase tracking-wider text-slate-500 font-medium">
+                      {p.tag}
+                    </p>
+                    <h3 className="mt-1 text-lg font-semibold text-white">{p.title}</h3>
+                    <p className="mt-2 text-sm text-slate-400 leading-relaxed">{p.body}</p>
+                  </div>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* For developers */}
+      <section id="developers" className="border-t border-white/5 px-5 py-20">
+        <div className="mx-auto max-w-5xl">
+          <Reveal className="mx-auto max-w-2xl text-center">
+            <p className="text-xs font-medium uppercase tracking-wider text-violet-400">
+              For developers
+            </p>
+            <h2 className="mt-2 text-balance text-2xl font-bold tracking-tight text-white sm:text-3xl">
+              Let your agent pay, hire, and disburse in two lines
+            </h2>
+            <p className="mt-3 text-slate-400">
+              Published on npm. Point your agent at CleverCon over MCP, or embed the SDK in your own
+              app, and it spends within your private limits.
+            </p>
+            <Link
+              to="/docs/developer-quickstart"
+              className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-violet-300 transition-colors hover:text-violet-200"
+            >
+              Read the developer docs <ArrowRight size={14} />
+            </Link>
+          </Reveal>
+          <div className="mt-10 grid gap-5 md:grid-cols-2">
+            {[
+              {
+                name: '@clevercon/mcp',
+                tagline: 'For any MCP agent (Claude, Cursor, …)',
+                cmd: 'npm install @clevercon/mcp',
+                href: 'https://www.npmjs.com/package/@clevercon/mcp',
+                icon: Layers,
+              },
+              {
+                name: '@clevercon/agent-sdk',
+                tagline: 'For your own app or agent',
+                cmd: 'npm install @clevercon/agent-sdk',
+                href: 'https://www.npmjs.com/package/@clevercon/agent-sdk',
+                icon: Boxes,
+              },
+            ].map((p) => (
+              <Reveal key={p.name}>
+                <a
+                  href={p.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group block h-full rounded-2xl border border-white/10 bg-white/[0.02] p-6 transition hover:border-violet-500/40 hover:bg-white/[0.04]"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-violet-500/20 bg-violet-500/10">
+                      <p.icon size={18} className="text-violet-300" />
+                    </div>
+                    <div>
+                      <div className="font-mono text-sm font-semibold text-white">{p.name}</div>
+                      <div className="text-xs text-slate-500">{p.tagline}</div>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex items-center justify-between rounded-lg border border-white/10 bg-black/40 px-3 py-2.5 font-mono text-[13px] text-slate-200">
+                    <span>$ {p.cmd}</span>
+                    <span className="text-xs text-violet-300 transition-opacity group-hover:opacity-100 sm:opacity-0">
+                      npm ↗
+                    </span>
+                  </div>
+                </a>
+              </Reveal>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Offerings */}
+      <section id="platform" className="px-5 py-20 border-t border-white/5">
+        <div className="max-w-6xl mx-auto">
+          <Reveal className="text-center max-w-2xl mx-auto">
+            <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight text-balance">
+              Everything CleverCon offers
+            </h2>
+            <p className="mt-3 text-slate-400">
+              The vault, rules (private or public), SDK, and MCP server are live on Stellar testnet,
+              with every spend enforced on-chain and private payments proven in zero-knowledge.
+              Mainnet and published packages are on the way, built in the open.
+            </p>
+          </Reveal>
+          <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {OFFERINGS.map((o, i) => {
+              const st = STATUS[o.status];
+              return (
+                <Reveal key={o.name} delay={(i % 3) * 80}>
+                  <div className="h-full rounded-2xl border border-white/10 bg-white/[0.02] p-6 transition duration-200 hover:border-white/20 hover:bg-white/[0.03] motion-safe:hover:-translate-y-1">
+                    <div className="flex items-center justify-between">
+                      <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
+                        <o.icon size={17} className="text-slate-300" />
+                      </div>
+                      <span className={`text-[11px] px-2 py-0.5 rounded-full border ${st.cls}`}>
+                        {st.label}
+                      </span>
+                    </div>
+                    <h3 className="mt-4 text-base font-semibold text-white">{o.name}</h3>
+                    <p className="mt-1.5 text-sm text-slate-400 leading-relaxed">{o.body}</p>
+                    {o.href && (
+                      <a
+                        href={o.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/30 px-2.5 py-1 font-mono text-[11px] text-slate-300 transition-colors hover:border-white/20 hover:text-white"
+                      >
+                        {o.hrefLabel ?? 'View on npm'}
+                        <ArrowRight size={11} />
+                      </a>
+                    )}
+                  </div>
+                </Reveal>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* Directory */}
+      <section id="directory" className="px-5 py-20 border-t border-white/5">
+        <div className="max-w-6xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
+          <Reveal>
+            <p className="text-xs uppercase tracking-wider text-cyan-400 font-medium">
+              Somewhere to spend
+            </p>
+            <h2 className="mt-2 text-2xl sm:text-3xl font-bold text-white tracking-tight text-balance">
+              An open directory of services an agent can hire
+            </h2>
+            <p className="mt-4 text-slate-400 leading-relaxed">
+              Connect a wallet, fund a non-custodial vault, and hire from an open directory of
+              services of every kind: bots, APIs, and human work, across countless categories, each
+              listed by whoever runs it. Search, filter by category, and sort by rating, price, or
+              speed. The vault releases payment on accepted delivery, so the platform never has
+              custody. The directory is for discovery; the spending control works whether you pay
+              one endpoint or many, or no service at all.
+            </p>
+            <ul className="mt-5 space-y-2 text-sm text-slate-300">
+              {[
+                'Pay one service you choose, or let a delegate compose many',
+                'Paid per step in USDC, released by the vault under your policy',
+                'Open to services that register with a Stellar wallet',
+              ].map((t) => (
+                <li key={t} className="flex items-start gap-2">
+                  <CheckCircle2 size={15} className="text-cyan-400 mt-0.5 shrink-0" /> {t}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-6">
+              <LaunchButton />
+            </div>
+          </Reveal>
+
+          <Reveal delay={120}>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+              <p className="text-xs uppercase tracking-wider text-slate-500 font-medium mb-3">
+                Categories
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {CATEGORIES.map((c) => (
+                  <span
+                    key={c}
+                    className="text-xs rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-slate-300"
+                  >
+                    {c}
+                  </span>
+                ))}
+              </div>
+              <div className="mt-5 grid grid-cols-3 gap-3 text-center">
+                {[
+                  ['MCP', 'connect any agent'],
+                  ['SDK', 'embed in code'],
+                  ['dApp', 'try in browser'],
+                ].map(([n, l]) => (
+                  <div key={l} className="rounded-xl border border-white/10 bg-white/[0.02] py-4">
+                    <div className="text-xl font-bold text-white">{n}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{l}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* For providers */}
+      <section id="providers" className="border-t border-white/5 px-5 py-20">
+        <div className="mx-auto grid max-w-6xl items-center gap-12 lg:grid-cols-2">
+          <Reveal>
+            <p className="text-xs font-medium uppercase tracking-wider text-cyan-400">
+              For providers
+            </p>
+            <h2 className="mt-2 text-balance text-2xl font-bold tracking-tight text-white sm:text-3xl">
+              Have a service? List it, and let agents pay you per call
+            </h2>
+            <p className="mt-4 leading-relaxed text-slate-400">
+              Turn an API, a model, a bot, a dataset, or human work into a service any agent on
+              CleverCon can hire. A provider is a single file: the SDK handles the job lifecycle,
+              delivery verification, and settlement. You are paid per call in USDC, straight to your
+              Stellar wallet on accepted delivery, with reputation you earn from real jobs.
+            </p>
+            <ul className="mt-5 space-y-2 text-sm text-slate-300">
+              {[
+                'Paid per call in USDC, non-custodially, on accepted delivery',
+                'Sync, long-running, needs-input, or human work on one endpoint',
+                'More verifiable means faster pay and a higher ranking',
+              ].map((t) => (
+                <li key={t} className="flex items-start gap-2">
+                  <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-cyan-400" /> {t}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <Link
+                to="/docs/providers"
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition-all hover:from-violet-500 hover:to-indigo-500"
+              >
+                Read the provider guide <ArrowRight size={14} />
+              </Link>
+              <Link
+                to="/provider"
+                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-5 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-white/10"
+              >
+                <Store size={15} /> Open the console
+              </Link>
+            </div>
+          </Reveal>
+
+          <Reveal delay={120}>
+            <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02]">
+              <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2.5">
+                <span className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
+                  data-notary.ts
+                </span>
+                <span className="font-mono text-[11px] text-cyan-300">a provider in one file</span>
+              </div>
+              <pre className="overflow-x-auto px-4 py-4 text-[12.5px] leading-relaxed text-slate-200">
+                <code className="font-mono">{PROVIDER_SNIPPET}</code>
+              </pre>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-3 text-center">
+              {[
+                ['Per call', 'paid in USDC'],
+                ['On-chain', 'reputation'],
+                ['Any shape', 'one endpoint'],
+              ].map(([n, l]) => (
+                <div key={l} className="rounded-xl border border-white/10 bg-white/[0.02] py-3">
+                  <div className="text-sm font-bold text-white">{n}</div>
+                  <div className="mt-0.5 text-xs text-slate-500">{l}</div>
+                </div>
+              ))}
+            </div>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* How it works */}
+      <section id="how" className="px-5 py-20 border-t border-white/5">
+        <div className="max-w-6xl mx-auto">
+          <Reveal className="text-center max-w-2xl mx-auto">
+            <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight text-balance">
+              What your agent can do with money
+            </h2>
+            <p className="mt-3 text-slate-400">
+              The same rail underneath every time: bounded, private, on-chain-enforced spending. Pay
+              one address, disburse to many, or hire a service, your agent decides within the limits
+              you set.
+            </p>
+          </Reveal>
+          <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {USAGE_MODES.map((s, i) => (
+              <Reveal key={s.title} delay={i * 80}>
+                <div className="h-full rounded-2xl border border-white/10 bg-white/[0.02] p-6 transition duration-200 hover:border-white/20 hover:bg-white/[0.03] motion-safe:hover:-translate-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="w-10 h-10 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
+                      <s.icon size={17} className="text-violet-300" />
+                    </div>
+                    <span className="text-3xl font-bold text-white/10">{i + 1}</span>
+                  </div>
+                  <h3 className="mt-4 text-base font-semibold text-white">{s.title}</h3>
+                  <p className="mt-1.5 text-sm text-slate-400 leading-relaxed">{s.body}</p>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+          <Reveal delay={120}>
+            <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.02] p-6 flex items-start gap-4">
+              <div className="w-10 h-10 shrink-0 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+                <Shield size={17} className="text-emerald-300" />
+              </div>
+              <p className="text-sm text-slate-400 leading-relaxed">
+                <span className="text-white font-medium">
+                  Whatever does the spending is just a delegate.
+                </span>{' '}
+                The built-in chat agent, your own agent via the SDK, or an MCP client, it makes no
+                difference. The rail is what makes delegation safe: even a compromised or careless
+                delegate cannot spend outside the budget and private rules you set. That, not the
+                planning, is the point.
+              </p>
+            </div>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* Who it's for */}
+      <section id="who" className="px-5 py-20 border-t border-white/5">
+        <div className="max-w-6xl mx-auto">
+          <Reveal className="text-center max-w-2xl mx-auto">
+            <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight text-balance">
+              Built for anyone who hands work to an agent
+            </h2>
+            <p className="mt-3 text-slate-400">
+              One rail, many uses. The limits and privacy are yours to set; the examples below are
+              real things an agent can do today within a bounded, private rule.
+            </p>
+          </Reveal>
+          <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {VERTICALS.map((v, i) => (
+              <Reveal key={v.title} delay={i * 70}>
+                <div className="h-full rounded-2xl border border-white/10 bg-white/[0.02] p-6 transition duration-200 hover:border-white/20 hover:bg-white/[0.03] motion-safe:hover:-translate-y-1">
+                  <div className="w-10 h-10 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
+                    <v.icon size={17} className="text-violet-300" />
+                  </div>
+                  <h3 className="mt-4 text-base font-semibold text-white">{v.title}</h3>
+                  <p className="mt-1.5 text-sm text-slate-400 leading-relaxed">{v.body}</p>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Privacy */}
+      <section id="privacy" className="px-5 py-20 border-t border-white/5">
+        <div className="max-w-4xl mx-auto text-center">
+          <Reveal>
+            <div className="inline-flex w-12 h-12 rounded-2xl bg-violet-500/10 border border-violet-500/20 items-center justify-center">
+              <Eye size={22} className="text-violet-300" />
+            </div>
+            <h2 className="mt-5 text-2xl sm:text-3xl font-bold text-white tracking-tight text-balance">
+              Enforcement on-chain. Rules kept private.
+            </h2>
+            <p className="mt-4 text-slate-400 leading-relaxed">
+              Your budget, your approved payees, and your limits do not belong on a public ledger
+              for anyone to read. CleverCon is built so the contract enforces your spending policy
+              and proves it was followed, without revealing the policy itself. That is what makes it
+              safe to hand an autonomous agent real money.
+            </p>
+            <p className="mt-4 text-sm text-slate-500">
+              Stated honestly: what stays private is the policy (your caps, allowlist, and limits),
+              enforced by a zero-knowledge proof the chain verifies on every payment, no trusted
+              server. Amounts and counterparties are still public on the ledger, like any Stellar
+              payment; hiding those too leans on Stellar's confidential-token support and is the
+              deeper end of the roadmap.
+            </p>
+          </Reveal>
+
+          <Reveal delay={100}>
+            <p className="mt-6 text-sm text-slate-400 leading-relaxed">
+              Concretely: a trading firm funds an agent to buy research data and sets rules, only
+              five approved providers, at most $100 a purchase, $500 a week. Without privacy, rivals
+              read its budget, its providers (its edge), and when it ramps up before a trade. With
+              CleverCon, the chain shows only that a payment was allowed. Try it:
+            </p>
+          </Reveal>
+        </div>
+
+        <div className="max-w-5xl mx-auto mt-8">
+          <Reveal delay={140}>
+            <PrivacyDemo />
+          </Reveal>
+          <p className="mt-4 text-center text-xs text-slate-600">
+            Interactive illustration. Values are mock; the commitment hash and proof are shown for
+            demonstration only.
+          </p>
+        </div>
+      </section>
+
+      {/* CTA */}
+      <section className="px-5 py-20 border-t border-white/5">
+        <Reveal className="max-w-4xl mx-auto">
+          <div className="relative rounded-3xl border border-white/10 overflow-hidden p-10 sm:p-14 text-center">
+            <div className="absolute inset-0 -z-10 bg-gradient-to-br from-violet-600/20 via-transparent to-cyan-500/15" />
+            <h2 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight text-balance">
+              Give your agent a wallet it can't misuse.
+            </h2>
+            <p className="mt-3 text-slate-300 max-w-xl mx-auto">
+              Try it on Stellar testnet: connect a wallet, fund a vault, set a private policy, and
+              connect your agent.
+            </p>
+            <div className="mt-8 flex items-center justify-center gap-3 flex-wrap">
+              <LaunchButton />
+              <a
+                href={GITHUB_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 px-5 py-2.5 text-sm font-medium text-slate-200 transition-colors"
+              >
+                <Github size={15} /> GitHub
+              </a>
+            </div>
+          </div>
+        </Reveal>
+      </section>
+
+      {/* Footer */}
+      <footer className="px-5 py-12 border-t border-white/5">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-6">
+          <div className="flex items-center gap-3">
+            <Logo />
+            <span className="text-xs text-slate-600">Built on Stellar. Testnet.</span>
+          </div>
+          <div className="flex items-center gap-4">
+            <Link to="/docs" className="text-xs text-slate-400 transition-colors hover:text-white">
+              Docs
+            </Link>
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-slate-500 hover:text-white transition-colors"
+              aria-label="GitHub"
+            >
+              <Github size={17} />
+            </a>
+            <Link
+              to="/connect"
+              className="text-xs text-violet-400 hover:text-violet-300 transition-colors"
+            >
+              Launch app
+            </Link>
+          </div>
+        </div>
+        <p className="max-w-6xl mx-auto mt-6 text-xs text-slate-700">
+          On Stellar testnet, all assets are test assets with no real-world value.
+        </p>
+      </footer>
+    </div>
+  );
+}

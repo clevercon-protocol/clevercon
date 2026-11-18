@@ -1,0 +1,69 @@
+name: ZK proving artifacts
+
+# Builds the pp/2 batch circuit's proving artifacts (witness wasm + proving zkey
+# + verifying key) and the Poseidon oracle wasms, and uploads them. The SDK
+# prover loads the wasm + zkey; the verifying key is converted and installed on
+# the policy-verifier via set_groth16_vk. The trusted setup uses FIXED entropy,
+# so the artifacts (and thus the VK) are reproducible: the committed/hosted zkey
+# matches the deployed VK. This is a dev/testnet ceremony; mainnet needs a real
+# multi-contributor ceremony.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  artifacts:
+    name: Build proving artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install circom
+        run: |
+          curl -sSL -o /usr/local/bin/circom \
+            https://github.com/iden3/circom/releases/latest/download/circom-linux-amd64
+          chmod +x /usr/local/bin/circom
+          circom --version
+
+      - name: Install snarkjs and circomlib
+        run: |
+          npm install -g snarkjs
+          npm install --prefix /tmp/clib circomlib
+
+      - name: Build circuit + trusted setup
+        run: |
+          mkdir -p artifacts
+          CLIB=/tmp/clib/node_modules/circomlib/circuits
+          circom circuits/spend-policy-g16/poseidon2.circom --wasm --prime bls12381 -o artifacts -l "$CLIB"
+          circom circuits/spend-policy-g16/poseidon3.circom --wasm --prime bls12381 -o artifacts -l "$CLIB"
+          circom circuits/spend-policy-g16/poseidon4.circom --wasm --prime bls12381 -o artifacts -l "$CLIB"
+          circom circuits/spend-policy-g16/policy_batch.circom --r1cs --wasm --prime bls12381 -o artifacts -l "$CLIB"
+          snarkjs powersoftau new bls12-381 16 artifacts/pot_0.ptau -v
+          snarkjs powersoftau contribute artifacts/pot_0.ptau artifacts/pot_1.ptau --name=ceremony -e="clevercon pp2 entropy 1"
+          snarkjs powersoftau prepare phase2 artifacts/pot_1.ptau artifacts/pot_final.ptau -v
+          snarkjs groth16 setup artifacts/policy_batch.r1cs artifacts/pot_final.ptau artifacts/pb_0.zkey
+          snarkjs zkey contribute artifacts/pb_0.zkey artifacts/policy_batch_final.zkey --name=ceremony -e="clevercon pp2 entropy 2"
+          snarkjs zkey export verificationkey artifacts/policy_batch_final.zkey artifacts/policy_batch_vkey.json
+          # Lay out exactly what the SDK and deploy step consume.
+          mkdir -p out
+          cp artifacts/policy_batch_js/policy_batch.wasm out/
+          cp artifacts/policy_batch_final.zkey out/
+          cp artifacts/policy_batch_vkey.json out/
+          cp artifacts/poseidon2_js/poseidon2.wasm out/
+          cp artifacts/poseidon3_js/poseidon3.wasm out/
+          cp artifacts/poseidon4_js/poseidon4.wasm out/
+          echo "VK sha256:" && sha256sum out/policy_batch_vkey.json
+          ls -la out
+
+      - name: Upload proving artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pp2-proving-artifacts
+          path: out/
+          retention-days: 90

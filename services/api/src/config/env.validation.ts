@@ -1,0 +1,131 @@
+import { z } from 'zod';
+
+/**
+ * Typed, fail-fast environment validation. The app refuses to boot with an
+ * invalid config and prints exactly what's wrong.
+ */
+export const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  API_PORT: z.coerce.number().int().positive().default(4100),
+  NETWORK: z.enum(['local', 'testnet', 'mainnet']).default('testnet'),
+  DATABASE_URL: z.string().url(),
+  REDIS_URL: z.string().url().optional(),
+  // Number of trusted proxy hops in front of the API (load balancer / ingress).
+  // Controls Express `trust proxy` so rate limiting sees the real client IP from
+  // X-Forwarded-For instead of the proxy's. Keep 0 for direct local runs.
+  TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+  // Comma-separated CORS allowlist (e.g. https://app.example.com,https://demo.example.com).
+  // Set this in production to restrict who can call the API from a browser. When
+  // unset, any origin is reflected (convenient for local dev).
+  CORS_ORIGINS: z.string().optional(),
+  JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
+  JWT_ACCESS_TTL: z.string().default('15m'),
+  // SEP-10 wallet auth. If SERVER_SIGNING_KEY is unset, an ephemeral key is used
+  // (dev only; challenges do not survive a restart).
+  SERVER_SIGNING_KEY: z.string().optional(),
+  NETWORK_PASSPHRASE: z.string().default('Test SDF Network ; September 2015'),
+  HOME_DOMAIN: z.string().default('localhost'),
+  WEB_AUTH_DOMAIN: z.string().default('localhost'),
+  LOG_LEVEL: z.string().default('info'),
+  // OpenTelemetry: tracing is off unless OTEL_EXPORTER_OTLP_ENDPOINT points at a
+  // collector (e.g. http://localhost:4318). Read in src/tracing.ts at startup.
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
+  OTEL_SERVICE_NAME: z.string().default('clevercon-api'),
+  // CleverVault (Soroban). Optional: when the contract id is unset or a
+  // placeholder the vault client stays inactive and deposit/withdraw report
+  // "not configured" instead of touching the chain.
+  AGENT_VAULT_CONTRACT_ID: z.string().optional(),
+  STELLAR_RPC_URL: z.string().url().default('https://soroban-testnet.stellar.org'),
+  // Horizon (classic) endpoint + the classic USDC issuer the vault's SAC wraps,
+  // used to check a provider payout wallet has a USDC trustline (can receive USDC).
+  HORIZON_URL: z.string().url().default('https://horizon-testnet.stellar.org'),
+  USDC_ISSUER: z.string().default('GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5'),
+  USDC_SAC: z.string().optional(),
+  // Deployed policy-verifier (Phase 3). When set, the app knows which on-chain
+  // verifier gates proof-backed releases; the vault's set_policy_verifier must
+  // point here for release_payment_proved to succeed.
+  POLICY_VERIFIER_CONTRACT_ID: z.string().optional(),
+  // On-chain agent registry (Phase 4). When REGISTRY_CONTRACT_ID and
+  // REGISTRY_ADMIN_KEY are set, the API anchors service manifest hashes and
+  // reputation on-chain (the platform is the registry admin/owner). KMS in prod.
+  REGISTRY_CONTRACT_ID: z.string().optional(),
+  REGISTRY_ADMIN_KEY: z.string().optional(),
+  // Vault admin key (the address passed to the vault's init). Lets the operator
+  // console read + set the protocol fee and view accrued fees. KMS in prod.
+  VAULT_ADMIN_KEY: z.string().optional(),
+  // Platform dispute-resolver secret (S...). Must also be registered on the vault
+  // via set_dispute_resolver. Enables POST /disputes/:id/resolve.
+  DISPUTE_RESOLVER_SECRET: z.string().optional(),
+  // Keyless-release fee-payer secret (S...). The vault's release_proved_keyless
+  // takes NO require_auth: the ZK proof + the user's pinned commitment + a fresh
+  // nullifier ARE the authorization, so this account only pays the tx fee and
+  // submits. It can neither learn a rule nor move a cent outside the proof, so it
+  // is pure plumbing (the plan's "disposable relayer"). Falls back to
+  // VAULT_ADMIN_KEY when unset. A dedicated relayer (+ channel accounts) at scale.
+  RELAYER_SECRET_KEY: z.string().optional(),
+  // At-rest encryption key for per-user delegate secrets (32-byte hex or base64;
+  // KMS in production). When set, the platform can provision per-user spending
+  // delegates and automatic settlement is enabled; when unset, tasks run
+  // off-chain only. Shared with the worker (which reads it from process.env).
+  DELEGATE_ENCRYPTION_KEY: z.string().optional(),
+  // The chat agent's brain: parses a natural-language instruction into a
+  // structured plan (server-side; the plan is re-validated and the vault enforces
+  // limits regardless). Provider-agnostic: native Anthropic OR any OpenAI-compatible
+  // endpoint (OpenAI, Gemini's OpenAI-compat, OpenRouter, local Ollama/vLLM). When
+  // no key is set, a deterministic parser + the quick-action forms keep it working.
+  // AGENT_PROVIDER forces one ('anthropic' | 'openai' | 'none'); 'auto' (default)
+  // picks whichever key is present.
+  AGENT_PROVIDER: z.enum(['auto', 'anthropic', 'openai', 'none']).default('auto'),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_MODEL: z.string().default('claude-opus-4-8'),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
+  OPENAI_MODEL: z.string().default('gpt-4o-mini'),
+  // Cloudflare R2 (S3-compatible) for job attachments. All optional: uploads are
+  // simply unavailable (503) until these are set. R2_PUBLIC_BASE_URL is the
+  // bucket's public URL (r2.dev or a custom domain) for direct, stable downloads.
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_BUCKET: z.string().optional(),
+  R2_PUBLIC_BASE_URL: z.string().url().optional(),
+  // GitHub OAuth broker: lets buyers connect GitHub with a scoped, revocable token
+  // (via GitHub's own consent screen) instead of pasting a PAT. All optional: the
+  // "Connect GitHub" button only appears when the client id + secret are set.
+  GITHUB_OAUTH_CLIENT_ID: z.string().optional(),
+  GITHUB_OAUTH_CLIENT_SECRET: z.string().optional(),
+  // The API's own public base (to build the OAuth redirect_uri GitHub calls back).
+  // Falls back to RAILWAY_PUBLIC_DOMAIN. Must match the OAuth App's callback URL.
+  API_PUBLIC_URL: z.string().url().optional(),
+  RAILWAY_PUBLIC_DOMAIN: z.string().optional(),
+  // Where to send the user back after connecting (the dapp). Falls back to the first
+  // CORS origin, then clevercon.xyz.
+  APP_PUBLIC_URL: z.string().url().optional(),
+});
+
+export type AppEnv = z.infer<typeof envSchema>;
+
+export function validateEnv(config: Record<string, unknown>): AppEnv {
+  const parsed = envSchema.safeParse(config);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join('\n');
+    throw new Error(`Invalid environment configuration:\n${issues}`);
+  }
+  const env = parsed.data;
+  // Fail fast if NETWORK=mainnet but testnet values were left in place.
+  if (env.NETWORK === 'mainnet') {
+    const bad: string[] = [];
+    if (/testnet/i.test(env.STELLAR_RPC_URL))
+      bad.push('STELLAR_RPC_URL must be a mainnet Soroban RPC');
+    if (env.NETWORK_PASSPHRASE.includes('Test SDF'))
+      bad.push('NETWORK_PASSPHRASE must be the public network passphrase');
+    if (env.USDC_SAC === 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA')
+      bad.push('USDC_SAC is the testnet contract');
+    if (bad.length > 0) {
+      throw new Error(`NETWORK=mainnet but testnet values are present:\n  - ${bad.join('\n  - ')}`);
+    }
+  }
+  return env;
+}

@@ -1,0 +1,97 @@
+name: ZK verifier fixture
+
+# Generates a REAL BLS12-381 Groth16 proof + verifying key with circom/snarkjs
+# (GitHub runners have the RAM and network the local sandbox lacks), converts it
+# to the Soroban uncompressed byte encoding, and runs the on-chain verifier test
+# against it. This is how we prove the policy-verifier Groth16 path actually
+# accepts valid proofs and rejects tampered ones.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'circuits/spend-policy-g16/**'
+      - 'scripts/zk/**'
+      - 'contracts/policy-verifier/**'
+      - '.github/workflows/zk-fixture.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    name: Generate fixture and verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/policy-verifier
+
+      - name: Install circom
+        run: |
+          curl -sSL -o /usr/local/bin/circom \
+            https://github.com/iden3/circom/releases/latest/download/circom-linux-amd64
+          chmod +x /usr/local/bin/circom
+          circom --version
+
+      - name: Install snarkjs and circomlib
+        run: |
+          npm install -g snarkjs
+          npm install --prefix /tmp/clib circomlib
+
+      - name: Generate the Groth16 fixture (real spend-policy circuit)
+        run: |
+          mkdir -p build
+          CLIB=/tmp/clib/node_modules/circomlib/circuits
+          # Hash oracles, used to build the allowlist leaf + Merkle witness off-circuit.
+          circom circuits/spend-policy-g16/poseidon2.circom --wasm --prime bls12381 -o build -l "$CLIB"
+          circom circuits/spend-policy-g16/poseidon3.circom --wasm --prime bls12381 -o build -l "$CLIB"
+          circom circuits/spend-policy-g16/poseidon4.circom --wasm --prime bls12381 -o build -l "$CLIB"
+          # The batch policy circuit (one proof authorizes N releases).
+          circom circuits/spend-policy-g16/policy_batch.circom --r1cs --wasm --prime bls12381 -o build -l "$CLIB"
+          # Build a satisfiable batch witness (R1 + R3 + R5; 3 active + 1 null slot).
+          node scripts/zk/build-ci-witness.cjs
+          snarkjs powersoftau new bls12-381 16 build/pot_0.ptau -v
+          snarkjs powersoftau contribute build/pot_0.ptau build/pot_1.ptau \
+            --name=ci -e="clevercon ci entropy 1"
+          snarkjs powersoftau prepare phase2 build/pot_1.ptau build/pot_final.ptau -v
+          snarkjs groth16 setup build/policy_batch.r1cs build/pot_final.ptau build/p_0.zkey
+          snarkjs zkey contribute build/p_0.zkey build/p_final.zkey \
+            --name=ci -e="clevercon ci entropy 2"
+          snarkjs zkey export verificationkey build/p_final.zkey build/vkey.json
+          node build/policy_batch_js/generate_witness.js \
+            build/policy_batch_js/policy_batch.wasm \
+            build/policy-input.json build/witness.wtns
+          snarkjs groth16 prove build/p_final.zkey build/witness.wtns \
+            build/proof.json build/public.json
+          node scripts/zk/gen-fixture.mjs build/vkey.json build/proof.json \
+            build/public.json contracts/policy-verifier/tests/fixture_data.rs
+
+      - name: Upload the generated fixture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: groth16-fixture
+          path: contracts/policy-verifier/tests/fixture_data.rs
+          if-no-files-found: ignore
+
+      - name: Verify the proof on-chain (Rust)
+        run: >
+          cargo test
+          --manifest-path contracts/policy-verifier/Cargo.toml
+          --features zk-fixture
+          --test groth16_fixture
+          -- --nocapture
