@@ -22,7 +22,11 @@ function hrefOf(v: string): string {
 /** A public owner profile: an organization or an individual provider, with their services. */
 export function Profile() {
   const { handle = '' } = useParams();
-  const { data: p, isLoading, error } = useQuery({
+  const {
+    data: p,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ['profile', handle],
     queryFn: () => getPublicProfile(handle),
   });
@@ -65,17 +69,19 @@ export function Profile() {
               {p.bio && <p className="mt-2 text-sm leading-relaxed text-slate-300">{p.bio}</p>}
               {p.links && (
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {LINK_LABELS.filter(({ k }) => (p.links?.[k] ?? '').trim()).map(({ k, label }) => (
-                    <a
-                      key={k}
-                      href={hrefOf(p.links![k] as string)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="rounded-lg bg-white/[0.06] px-3 py-1 text-xs text-slate-300 hover:bg-white/10 hover:text-white"
-                    >
-                      {label}
-                    </a>
-                  ))}
+                  {LINK_LABELS.filter(({ k }) => (p.links?.[k] ?? '').trim()).map(
+                    ({ k, label }) => (
+                      <a
+                        key={k}
+                        href={hrefOf(p.links![k] as string)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rounded-lg bg-white/[0.06] px-3 py-1 text-xs text-slate-300 hover:bg-white/10 hover:text-white"
+                      >
+                        {label}
+                      </a>
+                    ),
+                  )}
                 </div>
               )}
             </div>

@@ -112,17 +112,26 @@ async function resolveFile(args: Record<string, unknown>): Promise<{
     const bytes = Buffer.from(await res.arrayBuffer());
     const fromUrl = basename(new URL(url).pathname) || 'download';
     const filename = argName ?? fromUrl;
-    const contentType = argType ?? res.headers.get('content-type')?.split(';')[0] ?? guessMime(filename);
+    const contentType =
+      argType ?? res.headers.get('content-type')?.split(';')[0] ?? guessMime(filename);
     return { bytes, filename, contentType };
   }
   if (content) {
     const filename = argName ?? 'document.txt';
-    return { bytes: Buffer.from(content, 'utf-8'), filename, contentType: argType ?? guessMime(filename) };
+    return {
+      bytes: Buffer.from(content, 'utf-8'),
+      filename,
+      contentType: argType ?? guessMime(filename),
+    };
   }
   // base64
   const filename = argName;
   if (!filename) throw new Error('filename is required when uploading base64 bytes');
-  return { bytes: Buffer.from(base64 as string, 'base64'), filename, contentType: argType ?? guessMime(filename) };
+  return {
+    bytes: Buffer.from(base64 as string, 'base64'),
+    filename,
+    contentType: argType ?? guessMime(filename),
+  };
 }
 
 export async function uploadFileHandler(

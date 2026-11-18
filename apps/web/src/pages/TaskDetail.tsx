@@ -29,8 +29,7 @@ import { getDelegate } from '../lib/vault';
 import { PrivacyReveal } from '../components/PrivacyReveal';
 import { config } from '../config';
 
-const NON_TERMINAL = (status: string) =>
-  !['COMPLETED', 'FAILED', 'CANCELLED'].includes(status);
+const NON_TERMINAL = (status: string) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(status);
 
 const EXPLORER_NET = config.network === 'mainnet' ? 'public' : 'testnet';
 const explorerTx = (hash: string) => `https://stellar.expert/explorer/${EXPLORER_NET}/tx/${hash}`;
@@ -320,9 +319,7 @@ function DisputePanel({ taskId }: { taskId: string }) {
               )}
             </div>
             {d.reason && <p className="mt-1 text-slate-400">Reason: {d.reason}</p>}
-            {d.resolution && (
-              <p className="mt-1 text-emerald-300/90">Resolution: {d.resolution}</p>
-            )}
+            {d.resolution && <p className="mt-1 text-emerald-300/90">Resolution: {d.resolution}</p>}
           </div>
         ))}
       </div>
@@ -377,7 +374,8 @@ export function TaskDetail() {
     queryFn: () => getTask(id),
     // While a job is running, waiting on an answer, or in its dispute window, poll
     // so live progress and a pending question appear without a manual refresh.
-    refetchInterval: (query) => (query.state.data && NON_TERMINAL(query.state.data.status) ? 4000 : false),
+    refetchInterval: (query) =>
+      query.state.data && NON_TERMINAL(query.state.data.status) ? 4000 : false,
   });
 
   return (

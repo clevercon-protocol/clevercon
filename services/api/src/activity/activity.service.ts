@@ -121,9 +121,7 @@ export class ActivityService {
     // A hire settled keyless records a step Payment AND emits a keyless chain event for
     // the SAME tx, so drop the chain copy when a Payment already covers that tx hash.
     try {
-      const paidTxHashes = new Set(
-        payments.map((p) => p.txHash).filter((h): h is string => !!h),
-      );
+      const paidTxHashes = new Set(payments.map((p) => p.txHash).filter((h): h is string => !!h));
       const movements = await this.vaultMovements(userId, limit);
       items.push(
         ...movements.filter(

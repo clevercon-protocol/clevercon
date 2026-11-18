@@ -14,7 +14,9 @@ import { GITHUB_SERVICE } from './github.js';
 function env(name: string): string {
   const v = process.env[name];
   if (!v) {
-    console.error(`Missing ${name}. Required: CLEVERCON_API_URL, PROVIDER_SECRET, PROVIDER_ENDPOINT`);
+    console.error(
+      `Missing ${name}. Required: CLEVERCON_API_URL, PROVIDER_SECRET, PROVIDER_ENDPOINT`,
+    );
     process.exit(1);
   }
   return v;
@@ -68,7 +70,8 @@ async function resolveOrg(
     headers,
     body: JSON.stringify({ name, handle }),
   });
-  if (!createRes.ok) throw new Error(`create org failed: ${createRes.status} ${await createRes.text()}`);
+  if (!createRes.ok)
+    throw new Error(`create org failed: ${createRes.status} ${await createRes.text()}`);
   const org = (await createRes.json()) as { id: string };
   console.log(`Created org @${handle} (${org.id}); an admin must verify it for the tick.`);
   return org.id;
@@ -86,7 +89,7 @@ async function main(): Promise<void> {
   // re-running picks up new functions and prices) instead of creating a duplicate.
   const mineRes = await fetch(`${api}/provider/services`, { headers: authHeaders });
   const mine = mineRes.ok
-    ? ((await mineRes.json()) as { items?: { id: string; name: string }[] }).items ?? []
+    ? (((await mineRes.json()) as { items?: { id: string; name: string }[] }).items ?? [])
     : [];
   const existing = mine.find((s) => s.name === GITHUB_SERVICE.name);
 
@@ -106,7 +109,9 @@ async function main(): Promise<void> {
     contactLinks: GITHUB_SERVICE.contactLinks,
     ...(ownerOrgId ? { ownerOrgId } : {}),
     // pricingModel/pricePerCall are only accepted on create (fixed thereafter).
-    ...(existing ? {} : { pricingModel: GITHUB_SERVICE.pricingModel, pricePerCall: GITHUB_SERVICE.pricePerCall }),
+    ...(existing
+      ? {}
+      : { pricingModel: GITHUB_SERVICE.pricingModel, pricePerCall: GITHUB_SERVICE.pricePerCall }),
   };
 
   console.log(
@@ -117,14 +122,18 @@ async function main(): Promise<void> {
     { method: existing ? 'PATCH' : 'POST', headers: authHeaders, body: JSON.stringify(body) },
   );
   if (!res.ok) {
-    console.error(`x ${existing ? 'update' : 'register'} failed: ${res.status} ${await res.text()}`);
+    console.error(
+      `x ${existing ? 'update' : 'register'} failed: ${res.status} ${await res.text()}`,
+    );
     process.exit(1);
   }
   const out = (await res.json()) as { agentId?: string; id?: string };
   console.log(
     `ok GitHub Tool ${existing ? 'updated' : 'registered'} (agentId ${out.agentId ?? '?'}, id ${out.id ?? existing?.id ?? '?'})`,
   );
-  console.log(`${GITHUB_SERVICE.functions.length} functions, ${GITHUB_SERVICE.prerequisites.length} requirement(s).`);
+  console.log(
+    `${GITHUB_SERVICE.functions.length} functions, ${GITHUB_SERVICE.prerequisites.length} requirement(s).`,
+  );
 }
 
 main().catch((e) => {

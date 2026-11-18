@@ -1,13 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { Keypair } from '@stellar/stellar-sdk';
-import {
-  verifyResult,
-  validateSchema,
-  resultSigningPayload,
-} from './verifier.js';
+import { verifyResult, validateSchema, resultSigningPayload } from './verifier.js';
 import type { ServiceManifest, JobResultEnvelope, VerificationSpec } from './marketplace.js';
 
-function manifest(verification: VerificationSpec, output: Record<string, unknown> = {}): ServiceManifest {
+function manifest(
+  verification: VerificationSpec,
+  output: Record<string, unknown> = {},
+): ServiceManifest {
   return {
     id: 's',
     name: 's',
@@ -41,19 +40,31 @@ describe('validateSchema', () => {
 
 describe('verifyResult', () => {
   it('rejects a not-ok delivery', async () => {
-    const r = await verifyResult(manifest({ method: 'attest' }), {}, envelope({ ok: false, error: 'boom' }));
+    const r = await verifyResult(
+      manifest({ method: 'attest' }),
+      {},
+      envelope({ ok: false, error: 'boom' }),
+    );
     expect(r.ok).toBe(false);
   });
 
   it('content-hash: matches the requested hash and rejects a mismatch', async () => {
     const m = manifest({ method: 'content-hash' });
-    const ok = await verifyResult(m, { hash: 'sha256:abc' }, envelope({
-      artifact: { url: 'u', hash: 'sha256:abc', contentType: 'image/png', size: 1 },
-    }));
+    const ok = await verifyResult(
+      m,
+      { hash: 'sha256:abc' },
+      envelope({
+        artifact: { url: 'u', hash: 'sha256:abc', contentType: 'image/png', size: 1 },
+      }),
+    );
     expect(ok.ok).toBe(true);
-    const bad = await verifyResult(m, { hash: 'sha256:abc' }, envelope({
-      artifact: { url: 'u', hash: 'sha256:xyz', contentType: 'image/png', size: 1 },
-    }));
+    const bad = await verifyResult(
+      m,
+      { hash: 'sha256:abc' },
+      envelope({
+        artifact: { url: 'u', hash: 'sha256:xyz', contentType: 'image/png', size: 1 },
+      }),
+    );
     expect(bad.ok).toBe(false);
   });
 

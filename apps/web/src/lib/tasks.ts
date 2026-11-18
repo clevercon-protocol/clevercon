@@ -294,10 +294,9 @@ export async function answerStep(
   response: Record<string, unknown>,
 ): Promise<{ ok: boolean; stepId: string }> {
   if (isDemo()) return { ok: true, stepId };
-  return apiPost<{ ok: boolean; stepId: string }>(
-    `/tasks/${taskId}/steps/${stepId}/answer`,
-    { response },
-  );
+  return apiPost<{ ok: boolean; stepId: string }>(`/tasks/${taskId}/steps/${stepId}/answer`, {
+    response,
+  });
 }
 
 /** The buyer's disputes, newest first. */

@@ -29,7 +29,9 @@ const downFetch = vi.fn(async () => new Response('err', { status: 503 }));
 
 describe('healthUrl', () => {
   it('uses the declared healthCheck, else derives /health from the endpoint', () => {
-    expect(healthUrl('https://svc.test/query', 'https://svc.test/alive')).toBe('https://svc.test/alive');
+    expect(healthUrl('https://svc.test/query', 'https://svc.test/alive')).toBe(
+      'https://svc.test/alive',
+    );
     expect(healthUrl('https://svc.test/query', null)).toBe('https://svc.test/health');
     expect(healthUrl('https://svc.test/query', '   ')).toBe('https://svc.test/health');
   });
@@ -37,7 +39,12 @@ describe('healthUrl', () => {
 
 describe('sweepHealth', () => {
   it('marks a reachable service healthy and resets its failure counter', async () => {
-    const svc: Svc = { id: 's1', endpoint: 'https://svc.test', healthCheck: null, healthFailures: 2 };
+    const svc: Svc = {
+      id: 's1',
+      endpoint: 'https://svc.test',
+      healthCheck: null,
+      healthFailures: 2,
+    };
     const res = await sweepHealth(mockPrisma([svc]), okFetch as unknown as typeof fetch);
     expect(res).toMatchObject({ checked: 1, healthy: 1, unhealthy: 0 });
     expect(svc.healthy).toBe(true);
@@ -73,7 +80,12 @@ describe('sweepHealth', () => {
   });
 
   it('treats a reachable host with no /health route (404) as healthy', async () => {
-    const svc: Svc = { id: 's1', endpoint: 'https://svc.test', healthCheck: null, healthFailures: 2 };
+    const svc: Svc = {
+      id: 's1',
+      endpoint: 'https://svc.test',
+      healthCheck: null,
+      healthFailures: 2,
+    };
     const notFound = vi.fn(async () => new Response('nope', { status: 404 }));
     const res = await sweepHealth(mockPrisma([svc]), notFound as unknown as typeof fetch);
     expect(res.healthy).toBe(1);
@@ -82,7 +94,12 @@ describe('sweepHealth', () => {
   });
 
   it('treats a thrown fetch (unreachable) as a failure', async () => {
-    const svc: Svc = { id: 's1', endpoint: 'https://svc.test', healthCheck: null, healthFailures: 2 };
+    const svc: Svc = {
+      id: 's1',
+      endpoint: 'https://svc.test',
+      healthCheck: null,
+      healthFailures: 2,
+    };
     const boom = vi.fn(async () => {
       throw new Error('ECONNREFUSED');
     });

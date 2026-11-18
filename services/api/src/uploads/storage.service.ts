@@ -91,12 +91,9 @@ export class StorageService {
       signedHeaders,
       'UNSIGNED-PAYLOAD',
     ].join('\n');
-    const stringToSign = [
-      'AWS4-HMAC-SHA256',
-      amzDate,
-      scope,
-      sha256hex(canonicalRequest),
-    ].join('\n');
+    const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256hex(canonicalRequest)].join(
+      '\n',
+    );
 
     const kDate = hmac(`AWS4${c.secretKey}`, dateStamp);
     const kRegion = hmac(kDate, region);

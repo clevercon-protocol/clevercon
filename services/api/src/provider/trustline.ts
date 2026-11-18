@@ -39,9 +39,7 @@ export async function hasUsdcTrustline(address: string): Promise<boolean | null>
     if (res.status === 404) return false; // not funded -> cannot receive anything
     if (!res.ok) return null;
     const acct = (await res.json()) as { balances?: HorizonBalance[] };
-    return (acct.balances ?? []).some(
-      (b) => b.asset_code === 'USDC' && b.asset_issuer === issuer,
-    );
+    return (acct.balances ?? []).some((b) => b.asset_code === 'USDC' && b.asset_issuer === issuer);
   } catch {
     return null;
   }

@@ -62,9 +62,8 @@ export async function resolveConfiguredPolicyId(client: ApiClient): Promise<stri
   // Compute the rule's commitment locally (the prover loads only here, lazily, so the
   // hire path stays light when no private rule is configured) and match it to a pinned
   // rule to get its policyId.
-  const { commitmentForBundle, DEFAULT_POSEIDON_ARTIFACTS } = await import(
-    '@clevercon/agent-sdk/prover'
-  );
+  const { commitmentForBundle, DEFAULT_POSEIDON_ARTIFACTS } =
+    await import('@clevercon/agent-sdk/prover');
   const { resolveArtifacts } = await import('@clevercon/agent-sdk/artifacts');
   const { wasmPath } = await resolveArtifacts();
   const poseidon = {

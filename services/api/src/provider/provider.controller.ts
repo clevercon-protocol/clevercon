@@ -158,11 +158,15 @@ const updateSchema = z
   )
   // Cross-field check only when both are sent together (a partial update may touch one);
   // the edit form resends the full manifest, so this holds in practice.
-  .refine((o) => o.functions === undefined || o.prerequisites === undefined
-    ? true
-    : requiresResolve(o.functions, o.prerequisites), {
-    message: 'a function requires a requirement key not in the service requirements list',
-  })
+  .refine(
+    (o) =>
+      o.functions === undefined || o.prerequisites === undefined
+        ? true
+        : requiresResolve(o.functions, o.prerequisites),
+    {
+      message: 'a function requires a requirement key not in the service requirements list',
+    },
+  )
   .refine((o) => uniqueKeys(o.functions), { message: 'function keys must be unique' });
 
 const statusSchema = z.object({ active: z.boolean() });

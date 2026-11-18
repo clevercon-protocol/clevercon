@@ -97,7 +97,10 @@ export async function sweepHealth(
           where: { id: s.id },
           // Only flip `healthy` off once failures cross the threshold, so a single
           // blip does not remove a service; recovery (above) resets the counter.
-          data: { healthFailures: failures, ...(failures >= unhealthyAfter ? { healthy: false } : {}) },
+          data: {
+            healthFailures: failures,
+            ...(failures >= unhealthyAfter ? { healthy: false } : {}),
+          },
         });
       }
     } catch {

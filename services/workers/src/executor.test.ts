@@ -223,27 +223,37 @@ describe('executeTask', () => {
     const good = vi.fn(
       async () =>
         new Response(
-          JSON.stringify({ ok: true, contentType: 'application/json', data: { a: 3, b: 5 }, issuedAt: 1 }),
+          JSON.stringify({
+            ok: true,
+            contentType: 'application/json',
+            data: { a: 3, b: 5 },
+            issuedAt: 1,
+          }),
           { status: 200 },
         ),
     );
     const passTask = oneStep('t8', service, { n: 15 });
-    expect((await executeTask(mockPrisma(passTask), good as unknown as typeof fetch, 't8')).status).toBe(
-      'completed',
-    );
+    expect(
+      (await executeTask(mockPrisma(passTask), good as unknown as typeof fetch, 't8')).status,
+    ).toBe('completed');
     expect(passTask.steps[0].status).toBe('RELEASED');
 
     const bad = vi.fn(
       async () =>
         new Response(
-          JSON.stringify({ ok: true, contentType: 'application/json', data: { a: 3, b: 4 }, issuedAt: 1 }),
+          JSON.stringify({
+            ok: true,
+            contentType: 'application/json',
+            data: { a: 3, b: 4 },
+            issuedAt: 1,
+          }),
           { status: 200 },
         ),
     );
     const failTask = oneStep('t9', service, { n: 15 });
-    expect((await executeTask(mockPrisma(failTask), bad as unknown as typeof fetch, 't9')).status).toBe(
-      'failed',
-    );
+    expect(
+      (await executeTask(mockPrisma(failTask), bad as unknown as typeof fetch, 't9')).status,
+    ).toBe('failed');
     expect(failTask.steps[0].error).toContain('verification');
   });
 });
@@ -544,7 +554,11 @@ interface PolledStep {
   inputRequest?: unknown;
   inputResponse?: unknown;
   createdAt: Date;
-  service: { endpoint: string; tier?: string; outputSchema?: Record<string, unknown> | null } | null;
+  service: {
+    endpoint: string;
+    tier?: string;
+    outputSchema?: Record<string, unknown> | null;
+  } | null;
   task: { id: string; status: string; buyerId: string; vaultTaskId: bigint | null } | null;
 }
 
@@ -651,7 +665,8 @@ describe('pollStep', () => {
     const reEnqueueTask = vi.fn(async () => {});
     const res = await pollStep(
       mockPollPrisma(step),
-      (() => envelopeResp({ ok: false, status: 'failed', error: 'boom' })) as unknown as typeof fetch,
+      (() =>
+        envelopeResp({ ok: false, status: 'failed', error: 'boom' })) as unknown as typeof fetch,
       's1',
       { reEnqueueTask, scheduleStepPoll: vi.fn(async () => {}) },
     );
@@ -698,7 +713,9 @@ describe('pollStep', () => {
   });
 
   it('does not poll (or settle) an async step on a disputed task', async () => {
-    const step = parked({ task: { id: 't1', status: 'DISPUTED', buyerId: 'u1', vaultTaskId: null } });
+    const step = parked({
+      task: { id: 't1', status: 'DISPUTED', buyerId: 'u1', vaultTaskId: null },
+    });
     const spy = vi.fn(async () => completedResp());
     const reEnqueueTask = vi.fn(async () => {});
     const res = await pollStep(mockPollPrisma(step), spy as unknown as typeof fetch, 's1', {

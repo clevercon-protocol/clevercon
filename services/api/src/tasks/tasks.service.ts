@@ -296,10 +296,10 @@ export class TasksService {
           where: { id: params.policyId, userId },
           select: { eligibility: true },
         });
-        const check = checkEligibility(
-          (policy?.eligibility as EligibilityRules | null) ?? null,
-          { id: service.id, tier: service.tier },
-        );
+        const check = checkEligibility((policy?.eligibility as EligibilityRules | null) ?? null, {
+          id: service.id,
+          tier: service.tier,
+        });
         if (!check.ok) throw new BadRequestException(`Hire blocked by your rule: ${check.reason}`);
       }
       directPayee = service.stellarAddress ?? null;
@@ -614,7 +614,12 @@ export class TasksService {
    * than waiting for the next scheduled poll. Ownership is enforced (the task must
    * be the caller's), and only an INPUT_REQUIRED step can be answered.
    */
-  async answerStep(userId: string, taskId: string, stepId: string, response: Record<string, unknown>) {
+  async answerStep(
+    userId: string,
+    taskId: string,
+    stepId: string,
+    response: Record<string, unknown>,
+  ) {
     const task = await this.prisma.task.findFirst({
       where: { id: taskId, buyerId: userId },
       select: { id: true },
@@ -632,7 +637,8 @@ export class TasksService {
     const ir = step.inputRequest as InputRequest | null;
     if (ir?.schema) {
       const check = validateAgainstSchema(response, ir.schema as SchemaDoc);
-      if (!check.ok) throw new BadRequestException(`answer does not match the question: ${check.reason}`);
+      if (!check.ok)
+        throw new BadRequestException(`answer does not match the question: ${check.reason}`);
     }
     await this.prisma.taskStep.update({
       where: { id: stepId },
@@ -670,7 +676,9 @@ export class TasksService {
         steps: {
           orderBy: { index: 'asc' },
           include: {
-            service: { select: { name: true, tier: true, verification: true, stellarAddress: true } },
+            service: {
+              select: { name: true, tier: true, verification: true, stellarAddress: true },
+            },
           },
         },
         payments: { orderBy: { createdAt: 'desc' } },
@@ -682,7 +690,9 @@ export class TasksService {
     // via record-payment. The client uses this to settle a delivered, unpaid hire
     // under the task's rule, and to avoid paying twice.
     const paidStepIds = new Set(
-      t.payments.filter((p) => p.status === PaymentStatus.CONFIRMED && p.stepId).map((p) => p.stepId!),
+      t.payments
+        .filter((p) => p.status === PaymentStatus.CONFIRMED && p.stepId)
+        .map((p) => p.stepId!),
     );
     const spent = Number(
       t.payments

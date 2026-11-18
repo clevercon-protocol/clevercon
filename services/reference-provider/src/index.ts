@@ -23,7 +23,9 @@ const NAME = process.env.PROVIDER_NAME ?? 'clevercon-reference-provider';
 // registered endpoint, else localhost for local runs.
 const PUBLIC_URL = (
   process.env.PROVIDER_PUBLIC_URL ??
-  (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : undefined) ??
+  (process.env.RAILWAY_PUBLIC_DOMAIN
+    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+    : undefined) ??
   process.env.PROVIDER_ENDPOINT ??
   `http://localhost:${PORT}`
 ).replace(/\/+$/, '');

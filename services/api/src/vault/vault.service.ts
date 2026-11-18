@@ -284,7 +284,10 @@ export class VaultService {
       try {
         const step = await this.prisma.taskStep.findFirst({
           where: { id: stepId, taskId, task: { buyerId: userId } },
-          include: { service: { select: { stellarAddress: true } }, task: { select: { asset: true } } },
+          include: {
+            service: { select: { stellarAddress: true } },
+            task: { select: { asset: true } },
+          },
         });
         if (!step || step.status !== StepStatus.RELEASED) continue;
         const expected = step.payee ?? step.service?.stellarAddress ?? null;
@@ -371,7 +374,8 @@ export class VaultService {
     const { hire, ...release } = params;
     const user = await this.primaryAddress(userId);
     const txHash = await this.contract.releaseProvedKeyless({ user, ...release });
-    if (hire) await this.recordHireSettlements(userId, hire.taskId, hire.stepIds, params.payees, txHash);
+    if (hire)
+      await this.recordHireSettlements(userId, hire.taskId, hire.stepIds, params.payees, txHash);
     return { txHash };
   }
 

@@ -269,8 +269,8 @@ function FeesCard() {
           {save.error && <p className="mt-2 text-sm text-red-400">Could not update the fee.</p>}
           {claim.error && (
             <p className="mt-2 text-xs text-amber-300">
-              {(claim.error as Error).message || 'Could not claim fees.'} The vault requires the
-              fee recipient to be the orchestrator key for console claims.
+              {(claim.error as Error).message || 'Could not claim fees.'} The vault requires the fee
+              recipient to be the orchestrator key for console claims.
             </p>
           )}
         </>

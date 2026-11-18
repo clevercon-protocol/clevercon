@@ -658,7 +658,9 @@ export function CommandChat() {
         return;
       }
       if (!file && spec?.required) {
-        err(`${result.service.name} needs a file to run. Attach one to your message, then plan again.`);
+        err(
+          `${result.service.name} needs a file to run. Attach one to your message, then plan again.`,
+        );
         return;
       }
       if (file && spec) {
@@ -809,7 +811,12 @@ export function CommandChat() {
       try {
         attachments = await takeAttachments();
       } catch {
-        push({ id: nextId(), role: 'agent', ok: false, text: 'Could not upload the attachment. Please try again.' });
+        push({
+          id: nextId(),
+          role: 'agent',
+          ok: false,
+          text: 'Could not upload the attachment. Please try again.',
+        });
         return;
       }
       plan = {
@@ -1242,7 +1249,9 @@ export function CommandChat() {
                         ) : (
                           <label
                             className={`flex cursor-pointer items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs hover:border-violet-500/40 hover:text-slate-300 ${
-                              required ? 'border-amber-500/40 text-amber-300' : 'border-white/10 text-slate-400'
+                              required
+                                ? 'border-amber-500/40 text-amber-300'
+                                : 'border-white/10 text-slate-400'
                             }`}
                           >
                             <Paperclip size={12} />
@@ -1310,7 +1319,8 @@ export function CommandChat() {
   );
 }
 
-const resolveArtifact = (url: string) => (/^https?:\/\//.test(url) ? url : `${config.apiUrl}${url}`);
+const resolveArtifact = (url: string) =>
+  /^https?:\/\//.test(url) ? url : `${config.apiUrl}${url}`;
 
 /** A compact answer box for a step the service parked as needs-input (in chat). */
 function InlineAnswer({ taskId, step }: { taskId: string; step: TaskStepView }) {
@@ -1409,7 +1419,12 @@ async function settleUnderRule(opts: {
       );
     }
   }
-  const result = await proveAndReleaseBatch({ bundle: pinned, globalBundle, recipients, hireTaskId });
+  const result = await proveAndReleaseBatch({
+    bundle: pinned,
+    globalBundle,
+    recipients,
+    hireTaskId,
+  });
   return { total: result.total, legs: result.legs };
 }
 
@@ -1417,9 +1432,7 @@ async function settleUnderRule(opts: {
 // settles it with settleUnderRule under the rule the buyer picked at hire time, so a
 // hire pays the provider ONLY after delivery, through the SAME path a disburse uses.
 function unpaidReleased(task: TaskDetail | undefined) {
-  return (task?.steps ?? []).filter(
-    (s) => s.status === 'RELEASED' && !s.paid && !!s.payee,
-  );
+  return (task?.steps ?? []).filter((s) => s.status === 'RELEASED' && !s.paid && !!s.payee);
 }
 
 function JobCard({
@@ -1485,7 +1498,10 @@ function JobCard({
       qc.invalidateQueries({ queryKey: ['activity'] });
       setSettle({ phase: 'idle' });
     } catch (e) {
-      setSettle({ phase: 'error', error: e instanceof Error ? e.message : 'Could not pay the provider.' });
+      setSettle({
+        phase: 'error',
+        error: e instanceof Error ? e.message : 'Could not pay the provider.',
+      });
     } finally {
       busyRef.current = false;
     }
@@ -1559,7 +1575,9 @@ function JobCard({
                 />
               </div>
             )}
-            {progress.message && <div className="mt-1 text-[11px] text-sky-300">{progress.message}</div>}
+            {progress.message && (
+              <div className="mt-1 text-[11px] text-sky-300">{progress.message}</div>
+            )}
           </div>
         )}
         {inputStep && <InlineAnswer taskId={taskId} step={inputStep} />}
@@ -1570,7 +1588,9 @@ function JobCard({
         )}
         {/* The agent's plain-language answer to the request, from the delivered result. */}
         {done && answer && (
-          <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{answer}</p>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
+            {answer}
+          </p>
         )}
         {results.map((s) => (
           <div key={s.index} className="mt-2 space-y-1">
@@ -1690,7 +1710,9 @@ function ChatBubble({
         </div>
         {plan.kind === 'hire' && msg.status === 'pending' && services.length > 0 && (
           <label className="mt-2 block">
-            <span className="text-[11px] text-slate-500">Service (change if the agent picked wrong)</span>
+            <span className="text-[11px] text-slate-500">
+              Service (change if the agent picked wrong)
+            </span>
             <select
               value={plan.serviceId ?? ''}
               onChange={(e) => onPickService(msg.id, e.target.value)}

@@ -47,7 +47,10 @@ describe('resolveConfiguredPolicyId', () => {
   it('matches a legacy {rules,salt} JSON bundle commitment to a pinned policyId', async () => {
     // CLEVERCON_POLICY_JSON avoids the key codec; the commitment is computed by the
     // prover, so stub the dynamic import to keep this unit test hermetic.
-    process.env.CLEVERCON_POLICY_JSON = JSON.stringify({ rules: { r1: { ceiling: 5 } }, salt: 'ff' });
+    process.env.CLEVERCON_POLICY_JSON = JSON.stringify({
+      rules: { r1: { ceiling: 5 } },
+      salt: 'ff',
+    });
     vi.doMock('@clevercon/agent-sdk/prover', () => ({
       commitmentForBundle: async () => 'ABCDEF',
       DEFAULT_POSEIDON_ARTIFACTS: { p2: '', p3: '', p4: '' },

@@ -258,9 +258,7 @@ function buildBaseRequest(
   // service, else the first capability (single-function), else the step action.
   const jobAction = step.functionKey ?? step.service?.capabilities?.[0] ?? step.action;
   const raw = (input as { attachments?: unknown }).attachments;
-  const attachments = Array.isArray(raw)
-    ? (raw as JobRequestEnvelope['attachments'])
-    : undefined;
+  const attachments = Array.isArray(raw) ? (raw as JobRequestEnvelope['attachments']) : undefined;
   return {
     jobId: step.id,
     taskId,
@@ -468,7 +466,11 @@ async function failStep(
 ): Promise<void> {
   await prisma.taskStep.update({
     where: { id: step.id },
-    data: { status: StepStatus.FAILED, error: message, ...(latencyMs != null ? { latencyMs } : {}) },
+    data: {
+      status: StepStatus.FAILED,
+      error: message,
+      ...(latencyMs != null ? { latencyMs } : {}),
+    },
   });
   step.status = StepStatus.FAILED;
   if (step.serviceId) await recordOutcome(prisma, step.serviceId, false, latencyMs ?? 0);
@@ -643,7 +645,11 @@ export async function executeTask(
   // A held task stays RUNNING: its T2 steps are AWAITING_APPROVAL until the window
   // elapses (or the buyer approves/disputes), so it is not yet terminal and gets
   // no completion webhook. finalizeTaskIfComplete also skips while a step is held.
-  const status = anyFailed ? TaskStatus.FAILED : anyHeld ? TaskStatus.RUNNING : TaskStatus.COMPLETED;
+  const status = anyFailed
+    ? TaskStatus.FAILED
+    : anyHeld
+      ? TaskStatus.RUNNING
+      : TaskStatus.COMPLETED;
   await prisma.task.update({ where: { id: taskId }, data: { status } });
   // Finalize the on-chain task if nothing settled (e.g. all steps failed), so the
   // locked budget is unlocked instead of stranded. When steps DID release, this is
@@ -884,7 +890,12 @@ export async function pollStep(
       }
       return { status: outcome === 'held' ? 'held' : 'completed', ...base };
     } catch (accErr) {
-      await failStep(prisma, step, accErr instanceof Error ? accErr.message : String(accErr), latencyMs);
+      await failStep(
+        prisma,
+        step,
+        accErr instanceof Error ? accErr.message : String(accErr),
+        latencyMs,
+      );
       try {
         await reEnqueueTask(task.id);
       } catch {
@@ -949,7 +960,12 @@ export async function releaseHeldStep(
     task.status === TaskStatus.CANCELLED ||
     task.status === TaskStatus.FAILED
   )
-    return { status: 'skipped', reason: `task ${task.status.toLowerCase()}`, buyerId, taskId: task.id };
+    return {
+      status: 'skipped',
+      reason: `task ${task.status.toLowerCase()}`,
+      buyerId,
+      taskId: task.id,
+    };
   const openDisputes = await prisma.dispute.count({
     where: { taskId: task.id, status: DisputeStatus.OPEN },
   });

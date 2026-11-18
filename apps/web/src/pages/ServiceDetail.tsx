@@ -178,9 +178,7 @@ function RequirementsPanel({ serviceId }: { serviceId: string }) {
           </span>
         )}
       </div>
-      <p className="mt-1 text-sm text-slate-400">
-        Set these up once before hiring this service.
-      </p>
+      <p className="mt-1 text-sm text-slate-400">Set these up once before hiring this service.</p>
       {connectResult === '1' && (
         <p className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
           GitHub connected.
@@ -236,7 +234,12 @@ function RequirementsPanel({ serviceId }: { serviceId: string }) {
                       disabled={connecting}
                       className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.08] px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-white/15 disabled:opacity-60"
                     >
-                      <Github size={13} /> {connecting ? 'Redirecting…' : satisfied ? 'Reconnect GitHub' : 'Connect GitHub'}
+                      <Github size={13} />{' '}
+                      {connecting
+                        ? 'Redirecting…'
+                        : satisfied
+                          ? 'Reconnect GitHub'
+                          : 'Connect GitHub'}
                     </button>
                   )}
                   {oauth?.configured && (
@@ -258,7 +261,9 @@ function RequirementsPanel({ serviceId }: { serviceId: string }) {
                       is not configured on this server). Stored encrypted, like OAuth. */}
                   <details className="text-[11px] text-slate-500">
                     <summary className="cursor-pointer select-none hover:text-slate-300">
-                      {oauth?.configured ? 'Or paste a token instead' : 'Paste a personal access token'}
+                      {oauth?.configured
+                        ? 'Or paste a token instead'
+                        : 'Paste a personal access token'}
                     </summary>
                     <input
                       type="password"
@@ -309,9 +314,7 @@ function RequirementsPanel({ serviceId }: { serviceId: string }) {
       >
         {save.isPending ? 'Saving…' : 'Save requirements'}
       </button>
-      {save.error && (
-        <p className="mt-2 text-xs text-amber-300">{(save.error as Error).message}</p>
-      )}
+      {save.error && <p className="mt-2 text-xs text-amber-300">{(save.error as Error).message}</p>}
     </div>
   );
 }
@@ -424,7 +427,8 @@ function HireBox({
           Budget (USDC)<span className="text-rose-400"> *</span>
         </span>
         <span className="mt-0.5 block text-[11px] text-slate-500">
-          {fn ? `This function costs ${pricingLabel(fn.pricing)}. ` : ''}The most this job can spend; you are charged only the agreed price.
+          {fn ? `This function costs ${pricingLabel(fn.pricing)}. ` : ''}The most this job can
+          spend; you are charged only the agreed price.
         </span>
         <input
           value={budget}
@@ -481,7 +485,9 @@ function HireBox({
           <div className="mt-3">
             <label
               className={`flex cursor-pointer items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs hover:border-violet-500/40 hover:text-slate-300 ${
-                fileRequired ? 'border-amber-500/40 text-amber-300' : 'border-white/10 text-slate-400'
+                fileRequired
+                  ? 'border-amber-500/40 text-amber-300'
+                  : 'border-white/10 text-slate-400'
               }`}
             >
               <Paperclip size={12} />
@@ -490,7 +496,9 @@ function HireBox({
               <input
                 type="file"
                 className="hidden"
-                {...(attachmentsIn.accept?.length ? { accept: attachmentsIn.accept.join(',') } : {})}
+                {...(attachmentsIn.accept?.length
+                  ? { accept: attachmentsIn.accept.join(',') }
+                  : {})}
                 onChange={(e) => {
                   const f = e.target.files?.[0] ?? null;
                   const err = f ? validateAttachment(f, attachmentsIn) : null;
@@ -569,8 +577,8 @@ function FunctionsPanel({
         <span className="text-xs text-slate-500">{functions.length}</span>
       </div>
       <p className="mt-1 text-sm text-slate-400">
-        Each is priced and gated on its own. Pick one to hire; you are charged only for what
-        you use.
+        Each is priced and gated on its own. Pick one to hire; you are charged only for what you
+        use.
       </p>
       <div className="mt-4 space-y-2.5">
         {functions.map((f) => {
@@ -581,7 +589,9 @@ function FunctionsPanel({
             <div
               key={f.key}
               className={`rounded-xl border p-3.5 ${
-                selected ? 'border-violet-400/50 bg-violet-500/[0.08]' : 'border-white/10 bg-black/20'
+                selected
+                  ? 'border-violet-400/50 bg-violet-500/[0.08]'
+                  : 'border-white/10 bg-black/20'
               }`}
             >
               <div className="flex items-start justify-between gap-3">
@@ -652,7 +662,11 @@ function FunctionsPanel({
 /** Who listed this service and how to reach them, before granting any access. */
 function ContactCard({ links }: { links: ContactLinks }) {
   const asUrl = (v: string) =>
-    v.startsWith('http') || v.includes('@') ? (v.includes('@') ? `mailto:${v}` : v) : `https://${v}`;
+    v.startsWith('http') || v.includes('@')
+      ? v.includes('@')
+        ? `mailto:${v}`
+        : v
+      : `https://${v}`;
   const rows: { k: keyof ContactLinks; label: string; icon: typeof Globe }[] = [
     { k: 'website', label: 'Website', icon: Globe },
     { k: 'docs', label: 'Docs', icon: FileText },

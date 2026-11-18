@@ -299,12 +299,13 @@ function main(): void {
   const healthQ = healthQueue();
   void healthQ
     .upsertJobScheduler('health-sweep', { every: HEALTH_SWEEP_MS }, { name: 'sweep' })
-    .catch((err) => logger.error({ err: (err as Error).message }, 'failed to schedule health sweep'));
-  const healthWorker = new Worker(
-    HEALTH_QUEUE,
-    async () => sweepHealth(prisma, fetch),
-    { connection: redisConnection(), concurrency: 1 },
-  );
+    .catch((err) =>
+      logger.error({ err: (err as Error).message }, 'failed to schedule health sweep'),
+    );
+  const healthWorker = new Worker(HEALTH_QUEUE, async () => sweepHealth(prisma, fetch), {
+    connection: redisConnection(),
+    concurrency: 1,
+  });
   healthWorker.on('completed', (_job, result) => logger.info({ result }, 'health sweep processed'));
   healthWorker.on('failed', (_job, err) =>
     logger.error({ err: err.message }, 'health sweep failed'),

@@ -40,9 +40,9 @@ describe('StorageService', () => {
     configure();
     const s = new StorageService();
     const url = s.presignPut('uploads/u1/abc-file.pdf', 300, new Date('2026-10-16T13:00:00Z'));
-    expect(url.startsWith('https://acct123.r2.cloudflarestorage.com/clevercon/uploads/u1/abc-file.pdf?')).toBe(
-      true,
-    );
+    expect(
+      url.startsWith('https://acct123.r2.cloudflarestorage.com/clevercon/uploads/u1/abc-file.pdf?'),
+    ).toBe(true);
     expect(url).toContain('X-Amz-Algorithm=AWS4-HMAC-SHA256');
     expect(url).toContain('X-Amz-Credential=AKIATEST%2F20261016%2Fauto%2Fs3%2Faws4_request');
     expect(url).toContain('X-Amz-Date=20261016T130000Z');

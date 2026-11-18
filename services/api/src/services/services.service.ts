@@ -331,7 +331,9 @@ export class ServicesService {
         else delete data[key];
       }
     }
-    const secretCipher = Object.keys(secrets).length ? encryptSecret(JSON.stringify(secrets)) : null;
+    const secretCipher = Object.keys(secrets).length
+      ? encryptSecret(JSON.stringify(secrets))
+      : null;
     await this.prisma.serviceSetup.upsert({
       where: { userId_serviceId: { userId, serviceId } },
       update: { data: data as Prisma.InputJsonValue, secretCipher },

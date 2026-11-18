@@ -15,7 +15,10 @@ const rid = 'a'.repeat(64);
 
 describe('config tokens', () => {
   it('policy key round-trips { rules, salt } and is opaque', () => {
-    const bundle = { rules: { perPaymentCeilingUsdc: 100, allowlist: [{ payeeAddress: 'G1' }] }, salt: 'deadbeef' };
+    const bundle = {
+      rules: { perPaymentCeilingUsdc: 100, allowlist: [{ payeeAddress: 'G1' }] },
+      salt: 'deadbeef',
+    };
     const token = packPolicyKey(bundle);
     expect(token.startsWith(POLICY_KEY_PREFIX)).toBe(true);
     expect(token).not.toContain('deadbeef'); // the salt is not readable in the token
@@ -45,7 +48,13 @@ describe('config tokens', () => {
   });
 
   it('session key round-trips secret + network + rule', () => {
-    const cfg = { sessionSecret: 'SABC', vaultId: 'CVAULT', usdcSac: 'CUSDC', rpcUrl: 'https://rpc', ruleId: rid };
+    const cfg = {
+      sessionSecret: 'SABC',
+      vaultId: 'CVAULT',
+      usdcSac: 'CUSDC',
+      rpcUrl: 'https://rpc',
+      ruleId: rid,
+    };
     const token = packSessionKey(cfg);
     expect(token.startsWith(SESSION_KEY_PREFIX)).toBe(true);
     expect(unpackSessionKey(token)).toEqual(cfg);

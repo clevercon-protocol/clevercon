@@ -1361,9 +1361,7 @@ export function Marketplace() {
                   </Badge>
                 )}
                 {s.attachmentsIn?.required && (
-                  <Badge className="border-amber-500/25 bg-amber-500/10 text-amber-300">
-                    file
-                  </Badge>
+                  <Badge className="border-amber-500/25 bg-amber-500/10 text-amber-300">file</Badge>
                 )}
               </div>
               <div className="mt-3 flex items-center justify-between border-t border-line pt-2.5 text-xs text-slate-500">

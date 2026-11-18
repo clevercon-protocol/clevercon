@@ -89,14 +89,20 @@ function needsInput() {
       if (req.kind === 'answer' && req.inputResponse) {
         const format = String(req.inputResponse.format ?? 'json');
         const text = `Delivered as ${format}: ${JSON.stringify(req.input)}`;
-        return format === 'text' ? text : { status: 'completed' as const, data: { format, input: req.input } };
+        return format === 'text'
+          ? text
+          : { status: 'completed' as const, data: { format, input: req.input } };
       }
       return {
         status: 'input_required' as const,
         inputRequest: {
           requestId: 'format',
           prompt: 'Which output format would you like? (json or text)',
-          schema: { type: 'object', required: ['format'], properties: { format: { type: 'string' } } },
+          schema: {
+            type: 'object',
+            required: ['format'],
+            properties: { format: { type: 'string' } },
+          },
         },
       };
     },

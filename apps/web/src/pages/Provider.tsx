@@ -106,36 +106,36 @@ function Stats() {
   const { data: feeBps = 0 } = useQuery({ queryKey: ['platform-fee'], queryFn: getPlatformFeeBps });
   return (
     <>
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <StatCard
-        icon={DollarSign}
-        accent="emerald"
-        label="Total earned"
-        loading={isLoading}
-        value={`$${(data?.totalEarned ?? 0).toFixed(2)}`}
-      />
-      <StatCard
-        icon={DollarSign}
-        accent="violet"
-        label="This week"
-        loading={isLoading}
-        value={`$${(data?.thisWeek ?? 0).toFixed(2)}`}
-      />
-      <StatCard
-        icon={Briefcase}
-        accent="sky"
-        label="Jobs"
-        loading={isLoading}
-        value={String(data?.jobs ?? 0)}
-      />
-      <StatCard
-        icon={Star}
-        accent="amber"
-        label="Rating"
-        loading={isLoading}
-        value={(data?.rating ?? 0).toFixed(1)}
-      />
-    </div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard
+          icon={DollarSign}
+          accent="emerald"
+          label="Total earned"
+          loading={isLoading}
+          value={`$${(data?.totalEarned ?? 0).toFixed(2)}`}
+        />
+        <StatCard
+          icon={DollarSign}
+          accent="violet"
+          label="This week"
+          loading={isLoading}
+          value={`$${(data?.thisWeek ?? 0).toFixed(2)}`}
+        />
+        <StatCard
+          icon={Briefcase}
+          accent="sky"
+          label="Jobs"
+          loading={isLoading}
+          value={String(data?.jobs ?? 0)}
+        />
+        <StatCard
+          icon={Star}
+          accent="amber"
+          label="Rating"
+          loading={isLoading}
+          value={(data?.rating ?? 0).toFixed(1)}
+        />
+      </div>
       {feeBps > 0 && (
         <p className="mt-2 text-xs text-slate-500">
           Earnings are net of a {(feeBps / 100).toFixed(2)}% protocol fee deducted on each payout.
@@ -250,7 +250,9 @@ function SchemaBuilder({
         <textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={'JSON Schema, e.g. {"type":"object","required":["operation"],"properties":{"operation":{"type":"string"}}}'}
+          placeholder={
+            'JSON Schema, e.g. {"type":"object","required":["operation"],"properties":{"operation":{"type":"string"}}}'
+          }
           className={`${controls.field} font-mono`}
           rows={3}
         />
@@ -265,7 +267,9 @@ function SchemaBuilder({
           }}
           className="text-[11px] font-medium text-violet-300 hover:text-violet-200 disabled:opacity-40"
           disabled={schemaToFields(value) === null}
-          title={schemaToFields(value) === null ? 'This JSON is too complex for the field view' : ''}
+          title={
+            schemaToFields(value) === null ? 'This JSON is too complex for the field view' : ''
+          }
         >
           Use field builder
         </button>
@@ -487,7 +491,10 @@ function FunctionsEditor({
                 aria-label="Function name"
               />
             </Field>
-            <Field label="Action key" hint="The exact action sent to your endpoint. Auto from the name.">
+            <Field
+              label="Action key"
+              hint="The exact action sent to your endpoint. Auto from the name."
+            >
               <input
                 value={f.key}
                 onChange={(e) => patch(i, { key: e.target.value })}
@@ -524,7 +531,9 @@ function FunctionsEditor({
 
           <div className="grid gap-2 sm:grid-cols-2">
             <div>
-              <span className="text-[11px] font-medium text-slate-400">Input the agent provides</span>
+              <span className="text-[11px] font-medium text-slate-400">
+                Input the agent provides
+              </span>
               <div className="mt-1">
                 <SchemaBuilder
                   value={f.inJson}
@@ -602,7 +611,9 @@ function FunctionsEditor({
           {/* Requirements this function needs, chosen from the catalog below. */}
           {requirements.length > 0 && (
             <div>
-              <span className="text-[11px] font-medium text-slate-400">Requirements this needs</span>
+              <span className="text-[11px] font-medium text-slate-400">
+                Requirements this needs
+              </span>
               <div className="mt-1 flex flex-wrap gap-1.5">
                 {requirements.map((r) => (
                   <label
@@ -1156,7 +1167,7 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
         ...(prerequisites.length ? { prerequisites } : {}),
         functions: functionsOut,
         ...(Object.keys(contactLinks).length ? { contactLinks } : {}),
-      ...(ownerOrgId || edit ? { ownerOrgId } : {}),
+        ...(ownerOrgId || edit ? { ownerOrgId } : {}),
       };
     }
     return {
@@ -1193,23 +1204,23 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
     >
       {edit ? (
         <p className="text-xs leading-relaxed text-slate-400">
-          Editing <span className="text-slate-200">{edit.name}</span>. Changes re-anchor the
-          service manifest; its trust history and settlements carry over. The pricing model
-          (escrow vs metered scheme) is fixed at registration.
+          Editing <span className="text-slate-200">{edit.name}</span>. Changes re-anchor the service
+          manifest; its trust history and settlements carry over. The pricing model (escrow vs
+          metered scheme) is fixed at registration.
         </p>
       ) : (
         <p className="text-xs leading-relaxed text-slate-400">
           Your service lists immediately as <span className="text-slate-300">New</span> and earns a{' '}
           <span className="text-emerald-300">Trusted</span> tier as it settles real jobs on-chain.
-          Buyers pay you from their vault under a private, policy-bounded release, you are never given
-          their key or their rule.
+          Buyers pay you from their vault under a private, policy-bounded release, you are never
+          given their key or their rule.
         </p>
       )}
       {!edit && (
         <div className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-1.5 text-[11px] text-slate-500">
           <span>
-            Your progress is saved in this browser, so a dropped session won&apos;t lose it.
-            Finish and register anytime.
+            Your progress is saved in this browser, so a dropped session won&apos;t lose it. Finish
+            and register anytime.
           </span>
           <button
             type="button"
@@ -1346,13 +1357,12 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
 
       <Section title="Requirements catalog">
         <p className="text-[11px] leading-relaxed text-slate-500">
-          What a buyer must set up before hiring, that a prompt cannot carry: an API
-          key/token, an install or authorization (with a link), or setup info. Declare them
-          here, then attach each to the functions that need it, so a buyer is gated only on
-          the functions whose requirements are unmet and can still use the rest. The agent
-          checks before hiring and asks the buyer to complete any missing ones; satisfied
-          values are sent to your endpoint as <code>credentials</code> (a secret is encrypted
-          and never shown to the buyer again).
+          What a buyer must set up before hiring, that a prompt cannot carry: an API key/token, an
+          install or authorization (with a link), or setup info. Declare them here, then attach each
+          to the functions that need it, so a buyer is gated only on the functions whose
+          requirements are unmet and can still use the rest. The agent checks before hiring and asks
+          the buyer to complete any missing ones; satisfied values are sent to your endpoint as{' '}
+          <code>credentials</code> (a secret is encrypted and never shown to the buyer again).
         </p>
         {prereqs.map((p, i) => (
           <div key={i} className="space-y-1.5 rounded-lg border border-white/10 bg-black/20 p-2.5">
@@ -1515,7 +1525,11 @@ function RegisterForm({ edit, onDone }: { edit?: ProviderServiceItem | null; onD
                   <SchemaBuilder value={inJson} onChange={setInJson} addLabel="+ Add input field" />
                 </Field>
                 <Field label="Deliverable it returns">
-                  <SchemaBuilder value={outJson} onChange={setOutJson} addLabel="+ Add result field" />
+                  <SchemaBuilder
+                    value={outJson}
+                    onChange={setOutJson}
+                    addLabel="+ Add result field"
+                  />
                 </Field>
                 <Field label="Verifier spec (for T1)">
                   <textarea
@@ -1661,7 +1675,11 @@ function ServicesCard() {
                               : 'text-slate-500'
                         }
                       >
-                        {s.trust === 'trusted' ? 'Trusted' : s.trust === 'active' ? 'Active' : 'New'}
+                        {s.trust === 'trusted'
+                          ? 'Trusted'
+                          : s.trust === 'active'
+                            ? 'Active'
+                            : 'New'}
                       </span>
                       <span>{s.tier}</span>
                       {paymentModelLabel(s.paymentModel) && (
@@ -1684,8 +1702,8 @@ function ServicesCard() {
                       {(s.prerequisites?.length ?? 0) > 0 && (
                         <span
                           className="inline-flex items-center gap-1 text-amber-200"
-                          title={`Buyers must set up before hiring: ${s.prerequisites!
-                            .map((p) => p.label)
+                          title={`Buyers must set up before hiring: ${s
+                            .prerequisites!.map((p) => p.label)
                             .join(', ')}`}
                         >
                           <KeyRound size={11} /> {s.prerequisites!.length} setup req
@@ -2087,7 +2105,10 @@ function IdentityCard() {
                               <span className="text-[10px] text-slate-500">unverified</span>
                             )}
                           </div>
-                          <Link to={`/p/${o.handle}`} className="text-xs text-slate-500 hover:text-slate-300">
+                          <Link
+                            to={`/p/${o.handle}`}
+                            className="text-xs text-slate-500 hover:text-slate-300"
+                          >
                             @{o.handle} · view profile
                           </Link>
                         </div>
@@ -2331,7 +2352,8 @@ function DisputesCard() {
   } = useQuery({ queryKey: ['provider-disputes'], queryFn: getProviderDisputes });
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const respond = useMutation({
-    mutationFn: ({ id, response }: { id: string; response: string }) => respondToDispute(id, response),
+    mutationFn: ({ id, response }: { id: string; response: string }) =>
+      respondToDispute(id, response),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['provider-disputes'] }),
   });
 
@@ -2355,7 +2377,9 @@ function DisputesCard() {
               <div key={d.id} className="rounded-xl bg-white/[0.03] p-4">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">{d.task ?? d.taskId}</span>
-                  <span className={`text-xs font-semibold ${statusTone(d.status)}`}>{d.status}</span>
+                  <span className={`text-xs font-semibold ${statusTone(d.status)}`}>
+                    {d.status}
+                  </span>
                 </div>
                 {d.reason && <p className="mt-1 text-sm text-slate-400">Buyer: {d.reason}</p>}
                 {d.providerResponse ? (

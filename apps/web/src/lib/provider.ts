@@ -193,7 +193,12 @@ export interface RegisterServiceInput {
   // Interaction/payment shape (manifest v2); absent = sync/escrow.
   interaction?: 'sync' | 'async' | 'human' | 'metered';
   paymentModel?: 'escrow' | 'x402' | 'mpp-session' | 'subscription';
-  attachmentsIn?: { required?: boolean; accept?: string[]; maxSizeBytes?: number; maxCount?: number };
+  attachmentsIn?: {
+    required?: boolean;
+    accept?: string[];
+    maxSizeBytes?: number;
+    maxCount?: number;
+  };
   // Requirement catalog the functions reference by key (auth/install/key/info).
   prerequisites?: {
     kind: 'info' | 'apiKey' | 'install' | 'oauth';

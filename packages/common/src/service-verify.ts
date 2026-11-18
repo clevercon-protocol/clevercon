@@ -20,7 +20,9 @@ export const WITNESS_PREDICATES: Record<string, WitnessPredicate> = {
   // The returned factors multiply back to the requested product.
   product: (input, data) => {
     const d = data as { a?: number; b?: number } | null;
-    return !!d && typeof d.a === 'number' && typeof d.b === 'number' && d.a * d.b === Number(input.n);
+    return (
+      !!d && typeof d.a === 'number' && typeof d.b === 'number' && d.a * d.b === Number(input.n)
+    );
   },
   // The returned digest is sha256 of the requested data (re-hashed and compared,
   // so a notary/commitment service cannot be paid for a wrong hash).
@@ -109,11 +111,14 @@ export async function verifyDelivery(
       const expect = (spec.expect as string) ?? (input[field] as string | undefined);
       const got = output.artifact?.hash;
       if (!expect) return { ok: false, reason: 'no expected hash to check against' };
-      return got === expect ? { ok: true } : { ok: false, reason: `hash mismatch: ${got} != ${expect}` };
+      return got === expect
+        ? { ok: true }
+        : { ok: false, reason: `hash mismatch: ${got} != ${expect}` };
     }
     case 'signature': {
       const key = (spec.signerKey as string) ?? '';
-      if (!key || !output.signature) return { ok: false, reason: 'missing signer key or signature' };
+      if (!key || !output.signature)
+        return { ok: false, reason: 'missing signer key or signature' };
       try {
         const ok = Keypair.fromPublicKey(key).verify(
           Buffer.from(resultSigningPayload(output)),
@@ -129,13 +134,16 @@ export async function verifyDelivery(
       const pred = { ...WITNESS_PREDICATES, ...(opts.predicates ?? {}) }[name];
       if (!pred) return { ok: false, reason: `unknown witness predicate: ${name}` };
       try {
-        return pred(input, output.data) ? { ok: true } : { ok: false, reason: 'witness check failed' };
+        return pred(input, output.data)
+          ? { ok: true }
+          : { ok: false, reason: 'witness check failed' };
       } catch (e) {
         return { ok: false, reason: `witness error: ${String(e)}` };
       }
     }
     case 'onchain': {
-      if (!opts.derive) return { ok: true, deferred: true, reason: 'onchain verification deferred to buyer' };
+      if (!opts.derive)
+        return { ok: true, deferred: true, reason: 'onchain verification deferred to buyer' };
       try {
         const expected = await opts.derive(input);
         return stable(expected) === stable(output.data)

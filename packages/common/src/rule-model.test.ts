@@ -43,22 +43,39 @@ describe('validateRule', () => {
 
   it('rejects min greater than max', () => {
     const r = validateRule(
-      rule({ clauses: [{ type: 'perPaymentMax', usdc: 10 }, { type: 'perPaymentMin', usdc: 20 }] }),
+      rule({
+        clauses: [
+          { type: 'perPaymentMax', usdc: 10 },
+          { type: 'perPaymentMin', usdc: 20 },
+        ],
+      }),
     );
     expect(r.ok).toBe(false);
-    expect(r.errors.some((e) => e.toLowerCase().includes('min per payment cannot exceed'))).toBe(true);
+    expect(r.errors.some((e) => e.toLowerCase().includes('min per payment cannot exceed'))).toBe(
+      true,
+    );
   });
 
   it('accepts exact-amount (min == max)', () => {
     const r = validateRule(
-      rule({ clauses: [{ type: 'perPaymentMax', usdc: 10 }, { type: 'perPaymentMin', usdc: 10 }] }),
+      rule({
+        clauses: [
+          { type: 'perPaymentMax', usdc: 10 },
+          { type: 'perPaymentMin', usdc: 10 },
+        ],
+      }),
     );
     expect(r.ok).toBe(true);
   });
 
   it('rejects a duplicate clause type', () => {
     const r = validateRule(
-      rule({ clauses: [{ type: 'perPaymentMax', usdc: 10 }, { type: 'perPaymentMax', usdc: 20 }] }),
+      rule({
+        clauses: [
+          { type: 'perPaymentMax', usdc: 10 },
+          { type: 'perPaymentMax', usdc: 20 },
+        ],
+      }),
     );
     expect(r.ok).toBe(false);
     expect(r.errors.some((e) => e.includes('Only one perPaymentMax'))).toBe(true);
@@ -66,7 +83,12 @@ describe('validateRule', () => {
 
   it('rejects an invalid payee address', () => {
     const r = validateRule(
-      rule({ clauses: [{ type: 'perPaymentMax', usdc: 10 }, { type: 'allowlist', payees: [{ address: 'nope' }] }] }),
+      rule({
+        clauses: [
+          { type: 'perPaymentMax', usdc: 10 },
+          { type: 'allowlist', payees: [{ address: 'nope' }] },
+        ],
+      }),
     );
     expect(r.ok).toBe(false);
     expect(r.errors.some((e) => e.includes('Invalid payee address'))).toBe(true);
@@ -88,7 +110,9 @@ describe('validateRule', () => {
   });
 
   it('rejects a calendar window that does not end after it starts', () => {
-    const r = validateRule(rule({ clauses: [{ type: 'calendar', windows: [{ startUnix: 100, endUnix: 100 }] }] }));
+    const r = validateRule(
+      rule({ clauses: [{ type: 'calendar', windows: [{ startUnix: 100, endUnix: 100 }] }] }),
+    );
     expect(r.ok).toBe(false);
     expect(r.errors.some((e) => e.includes('end after it starts'))).toBe(true);
   });
@@ -115,7 +139,10 @@ describe('describeRule', () => {
     const s = describeRule(
       rule({
         global: true,
-        clauses: [{ type: 'perPaymentMax', usdc: 100 }, { type: 'perPaymentMin', usdc: 10 }],
+        clauses: [
+          { type: 'perPaymentMax', usdc: 100 },
+          { type: 'perPaymentMin', usdc: 10 },
+        ],
       }),
     );
     expect(s).toContain('$10-$100/payment');
@@ -149,9 +176,9 @@ describe('ruleToBundleRules', () => {
   });
 
   it('requires a perPaymentMax clause (R1 ceiling)', () => {
-    expect(() => ruleToBundleRules(rule({ clauses: [{ type: 'velocity', maxCount: 1, windowSecs: 60 }] }))).toThrow(
-      /perPaymentMax/,
-    );
+    expect(() =>
+      ruleToBundleRules(rule({ clauses: [{ type: 'velocity', maxCount: 1, windowSecs: 60 }] })),
+    ).toThrow(/perPaymentMax/);
   });
 });
 
@@ -172,7 +199,10 @@ describe('enforcement map', () => {
 
   it('weakestEnforcement returns the softest clause status', () => {
     const r = rule({
-      clauses: [{ type: 'perPaymentMax', usdc: 10 }, { type: 'providerCriteria', minReputation: 4 }],
+      clauses: [
+        { type: 'perPaymentMax', usdc: 10 },
+        { type: 'providerCriteria', minReputation: 4 },
+      ],
     });
     expect(weakestEnforcement(r)).toBe('app-enforced');
   });

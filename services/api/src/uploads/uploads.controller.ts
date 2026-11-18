@@ -52,8 +52,7 @@ export class UploadsController {
     const uploadUrl = this.storage.presignPut(key, 300);
     // A stable public URL when the bucket is public, else a path that re-presigns
     // a short-lived GET on demand (see /uploads/download).
-    const url =
-      this.storage.publicUrl(key) ?? `/uploads/download?key=${encodeURIComponent(key)}`;
+    const url = this.storage.publicUrl(key) ?? `/uploads/download?key=${encodeURIComponent(key)}`;
     return {
       key,
       uploadUrl,

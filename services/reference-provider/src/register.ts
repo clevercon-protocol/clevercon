@@ -15,7 +15,9 @@ import { SERVICES } from './services.js';
 function env(name: string): string {
   const v = process.env[name];
   if (!v) {
-    console.error(`Missing ${name}. Required: CLEVERCON_API_URL, PROVIDER_SECRET, PROVIDER_ENDPOINT`);
+    console.error(
+      `Missing ${name}. Required: CLEVERCON_API_URL, PROVIDER_SECRET, PROVIDER_ENDPOINT`,
+    );
     process.exit(1);
   }
   return v;
@@ -59,10 +61,14 @@ async function main(): Promise<void> {
     .filter(Boolean);
   const toRegister = only.length ? SERVICES.filter((s) => only.includes(s.action)) : SERVICES;
   if (only.length && toRegister.length === 0) {
-    console.error(`No services match ONLY=${only.join(',')}. Known: ${SERVICES.map((s) => s.action).join(', ')}`);
+    console.error(
+      `No services match ONLY=${only.join(',')}. Known: ${SERVICES.map((s) => s.action).join(', ')}`,
+    );
     process.exit(1);
   }
-  console.log(`Signed in as ${kp.publicKey()}; registering ${toRegister.length} service(s) at ${endpoint}`);
+  console.log(
+    `Signed in as ${kp.publicKey()}; registering ${toRegister.length} service(s) at ${endpoint}`,
+  );
 
   for (const s of toRegister) {
     const res = await fetch(`${api}/provider/services`, {
@@ -94,7 +100,9 @@ async function main(): Promise<void> {
     const out = (await res.json()) as { agentId?: string };
     console.log(`  ok ${s.name} (tier ${s.tier}, agentId ${out.agentId ?? '?'})`);
   }
-  console.log('Done. Set VERIFIED_AGENT_IDS on the API to an agentId above for the verified badge.');
+  console.log(
+    'Done. Set VERIFIED_AGENT_IDS on the API to an agentId above for the verified badge.',
+  );
 }
 
 main().catch((e) => {

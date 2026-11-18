@@ -67,7 +67,12 @@ export class DisputesService {
     if (!wallet) throw new BadRequestException('no wallet on file to sign the dispute');
 
     const dispute = await this.prisma.dispute.create({
-      data: { taskId, raisedBy: wallet.address, reason: reason ?? null, status: DisputeStatus.OPEN },
+      data: {
+        taskId,
+        raisedBy: wallet.address,
+        reason: reason ?? null,
+        status: DisputeStatus.OPEN,
+      },
     });
     // Let the provider(s) on this task know a dispute was raised (both channels).
     const providerIds = await this.providerIdsForTask(taskId);
@@ -138,12 +143,19 @@ export class DisputesService {
    */
   async resolve(
     id: string,
-    params: { refundToUser: number; payoutToProvider: number; upheld: boolean; resolution?: string },
+    params: {
+      refundToUser: number;
+      payoutToProvider: number;
+      upheld: boolean;
+      resolution?: string;
+    },
   ) {
     const d = await this.prisma.dispute.findUnique({
       where: { id },
       include: {
-        task: { select: { buyerId: true, vaultTaskId: true, steps: { select: { serviceId: true } } } },
+        task: {
+          select: { buyerId: true, vaultTaskId: true, steps: { select: { serviceId: true } } },
+        },
       },
     });
     if (!d) throw new NotFoundException('Dispute not found');
@@ -175,7 +187,10 @@ export class DisputesService {
       await this.prisma.serviceReputation
         .update({
           where: { serviceId },
-          data: { disputes: { increment: 1 }, disputesUpheld: { increment: params.upheld ? 1 : 0 } },
+          data: {
+            disputes: { increment: 1 },
+            disputesUpheld: { increment: params.upheld ? 1 : 0 },
+          },
         })
         .catch(() => {});
     }

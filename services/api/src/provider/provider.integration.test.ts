@@ -58,7 +58,9 @@ describe.skipIf(!DB)('Provider (integration, real Postgres)', () => {
     userId: string,
     params: { stellarAddress: string } & Record<string, unknown>,
   ) {
-    await prisma.wallet.create({ data: { userId, address: params.stellarAddress } }).catch(() => {});
+    await prisma.wallet
+      .create({ data: { userId, address: params.stellarAddress } })
+      .catch(() => {});
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return provider.registerService(userId, params as any);
   }

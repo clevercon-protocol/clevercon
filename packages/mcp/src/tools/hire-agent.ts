@@ -40,7 +40,7 @@ export const hireAgentSchema = {
       input: {
         type: 'object',
         description:
-          "Structured job input for the service/function (validated against its input schema). Put required files in input.attachments as an array of ArtifactRef { url, hash, contentType, size }.",
+          'Structured job input for the service/function (validated against its input schema). Put required files in input.attachments as an array of ArtifactRef { url, hash, contentType, size }.',
       },
     },
     required: ['title', 'mode', 'budget'],
@@ -62,7 +62,10 @@ export async function hireAgentHandler(
       throw new Error('serviceId is required for DIRECT mode');
     if (functionKey !== undefined && typeof functionKey !== 'string')
       throw new Error('functionKey must be a string');
-    if (input !== undefined && (typeof input !== 'object' || input === null || Array.isArray(input)))
+    if (
+      input !== undefined &&
+      (typeof input !== 'object' || input === null || Array.isArray(input))
+    )
       throw new Error('input must be an object');
 
     const client = createApiClient(config);

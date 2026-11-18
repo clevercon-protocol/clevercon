@@ -24,7 +24,12 @@ const server = new Horizon.Server(HORIZON_URL);
 const USDC = new Asset('USDC', USDC_ISSUER);
 
 function envelope(data: unknown): JobResultEnvelope {
-  return { ok: true, contentType: 'application/json', data, issuedAt: Math.floor(Date.now() / 1000) };
+  return {
+    ok: true,
+    contentType: 'application/json',
+    data,
+    issuedAt: Math.floor(Date.now() / 1000),
+  };
 }
 
 /** What a handler receives: the structured input, any buyer-supplied attachments,
@@ -49,7 +54,12 @@ export interface ServiceDef {
   // Manifest-v2 shape (absent = sync/escrow).
   interaction?: 'sync' | 'async' | 'human' | 'metered';
   paymentModel?: 'escrow' | 'x402' | 'mpp-session' | 'subscription';
-  attachmentsIn?: { required?: boolean; accept?: string[]; maxSizeBytes?: number; maxCount?: number };
+  attachmentsIn?: {
+    required?: boolean;
+    accept?: string[];
+    maxSizeBytes?: number;
+    maxCount?: number;
+  };
   handler: (ctx: HandlerCtx) => Promise<JobResultEnvelope>;
 }
 
@@ -73,18 +83,27 @@ async function accountBalances({ input }: HandlerCtx): Promise<JobResultEnvelope
 function dataHash({ input }: HandlerCtx): Promise<JobResultEnvelope> {
   const data = String(input.data ?? '');
   const sha256 = createHash('sha256').update(data).digest('hex');
-  return Promise.resolve(envelope({ sha256, algo: 'sha256', bytes: data.length, at: new Date().toISOString() }));
+  return Promise.resolve(
+    envelope({ sha256, algo: 'sha256', bytes: data.length, at: new Date().toISOString() }),
+  );
 }
 
 // ── 3. Stellar market snapshot (T2, attestable) ───────────────────────────────
 async function marketSnapshot(): Promise<JobResultEnvelope> {
   const [ledgerRes, trades] = await Promise.all([
     server.ledgers().limit(1).order('desc').call(),
-    server.trades().forAssetPair(Asset.native(), USDC).limit(1).order('desc').call().catch(() => null),
+    server
+      .trades()
+      .forAssetPair(Asset.native(), USDC)
+      .limit(1)
+      .order('desc')
+      .call()
+      .catch(() => null),
   ]);
   const latest = ledgerRes.records[0];
   const t = trades?.records?.[0];
-  const price = t?.price?.n && t?.price?.d ? (Number(t.price.n) / Number(t.price.d)).toFixed(6) : null;
+  const price =
+    t?.price?.n && t?.price?.d ? (Number(t.price.n) / Number(t.price.d)).toFixed(6) : null;
   return envelope({
     network: {
       latest_ledger: latest.sequence,
@@ -108,7 +127,11 @@ function pickFormat(v: unknown, fallback: string | undefined): ImageFormat {
   return fallback === 'png' ? 'png' : fallback === 'webp' ? 'webp' : 'jpeg';
 }
 
-async function imageTransform({ input, attachments, hostArtifact }: HandlerCtx): Promise<JobResultEnvelope> {
+async function imageTransform({
+  input,
+  attachments,
+  hostArtifact,
+}: HandlerCtx): Promise<JobResultEnvelope> {
   const issuedAt = Math.floor(Date.now() / 1000);
   const ref = attachments[0];
   if (!ref) {
@@ -147,7 +170,8 @@ async function imageTransform({ input, attachments, hostArtifact }: HandlerCtx):
     }
   }
 
-  const quality = input.quality != null ? Math.min(100, Math.max(1, Math.floor(Number(input.quality)))) : 80;
+  const quality =
+    input.quality != null ? Math.min(100, Math.max(1, Math.floor(Number(input.quality)))) : 80;
   const format = pickFormat(input.format, srcMeta.format);
 
   let pipe = sharp(src, { failOn: 'none' }).rotate(); // honor EXIF orientation
@@ -157,7 +181,8 @@ async function imageTransform({ input, attachments, hostArtifact }: HandlerCtx):
   pipe = pipe.toFormat(format, { quality });
   const out = await pipe.toBuffer();
   const outMeta = await sharp(out).metadata();
-  const contentType = format === 'jpeg' ? 'image/jpeg' : format === 'png' ? 'image/png' : 'image/webp';
+  const contentType =
+    format === 'jpeg' ? 'image/jpeg' : format === 'png' ? 'image/png' : 'image/webp';
   const artifact = hostArtifact(out, contentType);
 
   return {
@@ -166,7 +191,12 @@ async function imageTransform({ input, attachments, hostArtifact }: HandlerCtx):
     contentType: 'application/json',
     data: {
       operation,
-      from: { format: srcMeta.format, width: srcMeta.width, height: srcMeta.height, bytes: src.length },
+      from: {
+        format: srcMeta.format,
+        width: srcMeta.width,
+        height: srcMeta.height,
+        bytes: src.length,
+      },
       to: { format, width: outMeta.width, height: outMeta.height, bytes: out.length },
       savedBytes: src.length - out.length,
     },
@@ -193,7 +223,11 @@ export const SERVICES: ServiceDef[] = [
         },
       },
     },
-    outputSchema: { type: 'object', required: ['balances'], properties: { balances: { type: 'array' } } },
+    outputSchema: {
+      type: 'object',
+      required: ['balances'],
+      properties: { balances: { type: 'array' } },
+    },
     verification: {
       method: 'onchain',
       spec: { source: 'horizon', derive: 'accounts/{address}/balances', match: 'balances' },
@@ -214,7 +248,11 @@ export const SERVICES: ServiceDef[] = [
         data: { type: 'string', description: 'Any text to hash and notarize (sha256)' },
       },
     },
-    outputSchema: { type: 'object', required: ['sha256'], properties: { sha256: { type: 'string' } } },
+    outputSchema: {
+      type: 'object',
+      required: ['sha256'],
+      properties: { sha256: { type: 'string' } },
+    },
     verification: { method: 'witness', spec: { predicate: 'sha256' } },
     handler: dataHash,
   },
@@ -225,7 +263,11 @@ export const SERVICES: ServiceDef[] = [
     category: 'Data & Oracles',
     pricePerCall: 0.03,
     tier: 'T2',
-    outputSchema: { type: 'object', required: ['network'], properties: { network: { type: 'object' } } },
+    outputSchema: {
+      type: 'object',
+      required: ['network'],
+      properties: { network: { type: 'object' } },
+    },
     verification: { method: 'attest' },
     handler: () => marketSnapshot(),
   },

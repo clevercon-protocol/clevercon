@@ -296,12 +296,14 @@ export function createSpender(options: SpenderOptions): CleverConClient {
       zkeyPath: options.proverArtifacts?.zkeyPath,
     });
     const commitment = (
-      await commitmentForBundle(bundle, { ...resolved, poseidon: options.proverArtifacts?.poseidon })
+      await commitmentForBundle(bundle, {
+        ...resolved,
+        poseidon: options.proverArtifacts?.poseidon,
+      })
     ).toLowerCase();
-    const { items } = await request<{ items: { id: string; commitment: string; status: string }[] }>(
-      'GET',
-      '/policies',
-    );
+    const { items } = await request<{
+      items: { id: string; commitment: string; status: string }[];
+    }>('GET', '/policies');
     const match = items.find(
       (p) => p.commitment?.toLowerCase() === commitment && p.status !== 'archived',
     );

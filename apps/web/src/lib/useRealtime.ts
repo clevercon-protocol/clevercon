@@ -60,8 +60,9 @@ export function useRealtime(): void {
         kind: 'success',
         title: 'You got paid',
         body:
-          (typeof p?.amountUsdc === 'number' ? `$${p.amountUsdc.toFixed(2)} USDC` : 'Payment received') +
-          (p?.service ? ` · ${p.service}` : ''),
+          (typeof p?.amountUsdc === 'number'
+            ? `$${p.amountUsdc.toFixed(2)} USDC`
+            : 'Payment received') + (p?.service ? ` · ${p.service}` : ''),
       });
     };
     const onDisputeOpened = () => {

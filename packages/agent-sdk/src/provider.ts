@@ -129,10 +129,7 @@ export type FulfillmentResult = string | number | boolean | object;
 
 export type FulfillmentHandler = (
   req: FulfillmentRequest,
-) =>
-  | FulfillmentResult
-  | FulfillmentOutcome
-  | Promise<FulfillmentResult | FulfillmentOutcome>;
+) => FulfillmentResult | FulfillmentOutcome | Promise<FulfillmentResult | FulfillmentOutcome>;
 
 export interface Logger {
   info(message: string): void;
@@ -272,7 +269,8 @@ async function encodeOutcome(
   // completed
   const data = outcome.data;
   const contentType =
-    outcome.contentType ?? (typeof data === 'string' ? 'text/plain; charset=utf-8' : 'application/json');
+    outcome.contentType ??
+    (typeof data === 'string' ? 'text/plain; charset=utf-8' : 'application/json');
   const env: JobResultEnvelope = {
     ok: true,
     status: 'completed',
@@ -282,7 +280,8 @@ async function encodeOutcome(
     ...(outcome.artifact ? { artifact: outcome.artifact } : {}),
   };
   if (sign) {
-    const outputStr = typeof data === 'string' ? data : JSON.stringify(data ?? outcome.artifact ?? '');
+    const outputStr =
+      typeof data === 'string' ? data : JSON.stringify(data ?? outcome.artifact ?? '');
     const payload = `${req.jobId}|${sha256Hex(JSON.stringify(req.input))}|${sha256Hex(outputStr)}|${issuedAt}`;
     env.signature = await sign(payload);
   }
@@ -375,7 +374,9 @@ export function createProvider(options: ProviderOptions): Provider {
         // A thrown handler is a failed step: return non-2xx so the worker marks
         // it FAILED and does not pay for it.
         const message = err instanceof Error ? err.message : String(err);
-        log.error(`[${name}] fulfill error for "${request.action}" (task ${request.taskId}): ${message}`);
+        log.error(
+          `[${name}] fulfill error for "${request.action}" (task ${request.taskId}): ${message}`,
+        );
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: message }));
       }

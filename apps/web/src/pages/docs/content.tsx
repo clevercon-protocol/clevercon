@@ -61,8 +61,8 @@ function Introduction() {
           delivery under your rule.
         </LI>
         <LI>
-          <B>Hand a service a file.</B> Attach an image or document to a hire; a service can return a
-          processed file you download.
+          <B>Hand a service a file.</B> Attach an image or document to a hire; a service can return
+          a processed file you download.
         </LI>
         <LI>
           <B>Pay per call for APIs and plugins.</B> Give your agent a metered capability it pays for
@@ -274,8 +274,8 @@ function WhatYouCanDo() {
           calls <Code>upload_file</Code> then hires with the reference.
         </LI>
         <LI>
-          <B>By hand:</B> the Services tab, pick a file-taking service, attach the file, hire under a
-          rule, then download the result from the job.
+          <B>By hand:</B> the Services tab, pick a file-taking service, attach the file, hire under
+          a rule, then download the result from the job.
         </LI>
       </UL>
 
@@ -1186,9 +1186,9 @@ function Mcp() {
       <H2 id="setup">Setup, step by step</H2>
       <P>
         Two minutes: get what your lane needs from the app, add one config block, restart. For the
-        fastest, most reliable start, install the package once and point your client at the installed{' '}
-        <Code>clevercon-mcp</Code>. A plain <Code>npx -y</Code> cold start downloads a large
-        dependency set and can exceed an MCP client's startup timeout on first run.
+        fastest, most reliable start, install the package once and point your client at the
+        installed <Code>clevercon-mcp</Code>. A plain <Code>npx -y</Code> cold start downloads a
+        large dependency set and can exceed an MCP client's startup timeout on first run.
       </P>
       <Steps>
         <Step n={1} title="Fund the vault">
@@ -1196,12 +1196,13 @@ function Mcp() {
           this balance; see the <A to="/docs/quickstart">Walkthrough</A>.
         </Step>
         <Step n={2} title="Get the key(s) your lane needs">
-          Private lane: create and pin a private rule (Rules tab), choose Reveal, copy its policy key
-          (<Code>ccpk1_</Code>), and mint an API key (<Code>cc_...</Code>) in the Developer console
-          (needed for the keyless relay and for hiring / reads). Public local: on the Vault tab under
-          Agent keys, authorize a session and copy its session secret (<Code>S...</Code>); add an API
-          key only to also hire / read / discover. Public server: on the Vault tab enable a Managed
-          Session and mint an API key. See the lane table below for exactly what each needs.
+          Private lane: create and pin a private rule (Rules tab), choose Reveal, copy its policy
+          key (<Code>ccpk1_</Code>), and mint an API key (<Code>cc_...</Code>) in the Developer
+          console (needed for the keyless relay and for hiring / reads). Public local: on the Vault
+          tab under Agent keys, authorize a session and copy its session secret (<Code>S...</Code>);
+          add an API key only to also hire / read / discover. Public server: on the Vault tab enable
+          a Managed Session and mint an API key. See the lane table below for exactly what each
+          needs.
         </Step>
         <Step n={3} title="Add the config and restart">
           Paste the matching block below into your MCP client (Claude Desktop: Settings, Developer,
@@ -1226,17 +1227,17 @@ function Mcp() {
       <H2 id="lanes">The lanes, and their config</H2>
       <P>
         You configure your agent with the rule it spends under, the same way you pick a pinned rule
-        in the app. Pick a lane, set the one or two values it needs, and the vault enforces the rest.
-        You do <B>not</B> set an API URL (it defaults to the live API; <Code>CLEVERCON_API_URL</Code>{' '}
-        is only for self-hosting), and the vault and USDC asset default to the live testnet
-        contracts.
+        in the app. Pick a lane, set the one or two values it needs, and the vault enforces the
+        rest. You do <B>not</B> set an API URL (it defaults to the live API;{' '}
+        <Code>CLEVERCON_API_URL</Code> is only for self-hosting), and the vault and USDC asset
+        default to the live testnet contracts.
       </P>
       <Callout kind="warn" title="Every spend runs under a rule you set (fail closed)">
-        A spend is always bound by a rule: your configured private rule, your configured public rule,
-        or the session you authorized. If none is configured, the spend is <B>refused</B>, never run
-        under a throwaway. For a private rule, if a global-private rule is enabled on your account you
-        must also set <Code>CLEVERCON_GLOBAL_KEY</Code>. For public, the global rule is already
-        on-chain, so you never set it.
+        A spend is always bound by a rule: your configured private rule, your configured public
+        rule, or the session you authorized. If none is configured, the spend is <B>refused</B>,
+        never run under a throwaway. For a private rule, if a global-private rule is enabled on your
+        account you must also set <Code>CLEVERCON_GLOBAL_KEY</Code>. For public, the global rule is
+        already on-chain, so you never set it.
       </Callout>
       <Table
         head={['Lane', 'Set', 'API key?']}
@@ -1244,8 +1245,8 @@ function Mcp() {
           [
             <B>Private (keyless)</B>,
             <>
-              <Code>CLEVERCON_POLICY_KEY</Code> (your rule), plus <Code>CLEVERCON_GLOBAL_KEY</Code> if
-              a global-private rule is enabled
+              <Code>CLEVERCON_POLICY_KEY</Code> (your rule), plus <Code>CLEVERCON_GLOBAL_KEY</Code>{' '}
+              if a global-private rule is enabled
             </>,
             'Yes',
           ],
@@ -1267,12 +1268,12 @@ function Mcp() {
         ]}
       />
       <Callout kind="note" title="When is the API key needed?">
-        The <Code>cc_...</Code> API key authenticates your account to the hosted API, so it is needed
-        for discovery, hiring, reading budget / activity, limits, disputes, the private keyless
-        relay, and a Managed Session. The one case that does <B>not</B> need it is the fully local
-        public session (<Code>session_pay</Code> / <Code>session_scope</Code> with your own session
-        key), which signs and submits to the chain itself. In practice: set the API key unless you
-        only use the local session lane.
+        The <Code>cc_...</Code> API key authenticates your account to the hosted API, so it is
+        needed for discovery, hiring, reading budget / activity, limits, disputes, the private
+        keyless relay, and a Managed Session. The one case that does <B>not</B> need it is the fully
+        local public session (<Code>session_pay</Code> / <Code>session_scope</Code> with your own
+        session key), which signs and submits to the chain itself. In practice: set the API key
+        unless you only use the local session lane.
       </Callout>
       <Callout kind="warn" title="Your keys are spend authority">
         The policy key, session secret, and API key can each move funds within your rule. They live
@@ -1285,9 +1286,9 @@ function Mcp() {
       <P>
         The policy key packs your rule and its salt; the agent proves locally and relays only the
         proof. The same rule also bounds your <B>hires</B>: a hire binds it (matched to your pinned
-        rule on-chain), exactly like picking a rule in the app, and a hire with no rule configured is
-        refused, never run under a throwaway. Set <Code>CLEVERCON_POLICY_ID</Code> to bind a rule by
-        id directly, or <Code>CLEVERCON_GLOBAL_KEY</Code> when a global-private rule is enabled.
+        rule on-chain), exactly like picking a rule in the app, and a hire with no rule configured
+        is refused, never run under a throwaway. Set <Code>CLEVERCON_POLICY_ID</Code> to bind a rule
+        by id directly, or <Code>CLEVERCON_GLOBAL_KEY</Code> when a global-private rule is enabled.
       </P>
       <CodeBlock code={MCP_PRIVATE} title="private" />
       <H3>Public, local (the agent holds a session key)</H3>
@@ -1758,7 +1759,11 @@ function Providers() {
               <Code>completed</Code> on buyer accept
             </>,
           ],
-          ['Metered', 'Pay-per-call APIs and streams (x402 / MPP)', 'billed per call, not per task'],
+          [
+            'Metered',
+            'Pay-per-call APIs and streams (x402 / MPP)',
+            'billed per call, not per task',
+          ],
         ]}
       />
 
@@ -2420,7 +2425,8 @@ export const DOCS: DocPage[] = [
     slug: 'register-service',
     group: 'For providers',
     title: 'Register and earn',
-    description: 'Deploy, list it field by field, ensure a trustline, and get paid with reputation.',
+    description:
+      'Deploy, list it field by field, ensure a trustline, and get paid with reputation.',
     Body: RegisterService,
   },
   {

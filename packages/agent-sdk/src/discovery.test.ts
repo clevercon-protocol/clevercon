@@ -64,7 +64,9 @@ describe('createMarketplaceClient', () => {
     });
     const out = await client.getService('svc1');
     expect(out.name).toBe('Market Oracle');
-    expect((fetchImpl.mock.calls[0] as unknown as [string])[0]).toBe('https://api.test/services/svc1');
+    expect((fetchImpl.mock.calls[0] as unknown as [string])[0]).toBe(
+      'https://api.test/services/svc1',
+    );
   });
 
   it('throws on a non-2xx list', async () => {

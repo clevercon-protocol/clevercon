@@ -214,7 +214,8 @@ export class ProviderService {
         );
       }
       const proof = verifyPayoutOwnership(params.stellarAddress, params.payoutProof, userId);
-      if (!proof.ok) throw new BadRequestException(`payout ownership proof failed: ${proof.reason}`);
+      if (!proof.ok)
+        throw new BadRequestException(`payout ownership proof failed: ${proof.reason}`);
     }
 
     // Listing under an organization requires membership, so a service cannot claim an

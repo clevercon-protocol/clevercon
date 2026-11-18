@@ -110,15 +110,19 @@ async function resolveRepo(
   }
   // Fallback: a public search by name (best exact match). Only a guess, so a full
   // owner/name is always more reliable.
-  const r = await gh(`/search/repositories?q=${encodeURIComponent(`${name} in:name`)}&per_page=10`, {
-    token,
-  });
+  const r = await gh(
+    `/search/repositories?q=${encodeURIComponent(`${name} in:name`)}&per_page=10`,
+    {
+      token,
+    },
+  );
   const items = Array.isArray(r.json.items) ? (r.json.items as Json[]) : [];
   const exact = items.filter((x) => String(x.name).toLowerCase() === name.toLowerCase());
   const best = exact[0] ?? items[0];
   return best ? splitRepo(String(best.full_name)) : null;
 }
-const BAD_REPO = 'Could not find that repository. Give it as "owner/name", e.g. "clevercon-protocol/clevercon".';
+const BAD_REPO =
+  'Could not find that repository. Give it as "owner/name", e.g. "clevercon-protocol/clevercon".';
 
 // The issues endpoint also returns PRs; keep only true issues.
 const onlyIssues = (arr: Json[]): Json[] => arr.filter((i) => !i.pull_request);
@@ -192,7 +196,9 @@ const listIssues: GithubHandler = async ({ input, credentials }) => {
   const token = credentials.github_token?.trim() || undefined;
   const r = await resolveRepo(input.repo, token);
   if (!r) return fail(BAD_REPO);
-  const state = ['open', 'closed', 'all'].includes(String(input.state)) ? String(input.state) : 'open';
+  const state = ['open', 'closed', 'all'].includes(String(input.state))
+    ? String(input.state)
+    : 'open';
   const limit = clampLimit(input.limit, 15);
   const labels = input.labels ? `&labels=${encodeURIComponent(String(input.labels))}` : '';
   const res = await gh(
@@ -220,10 +226,9 @@ const findGoodFirstIssues: GithubHandler = async ({ input, credentials }) => {
   }
   const lang = input.language ? ` language:${String(input.language)}` : '';
   const q = `label:"good first issue" state:open is:issue${lang}`;
-  const res = await gh(
-    `/search/issues?q=${encodeURIComponent(q)}&per_page=${limit}&sort=updated`,
-    { token },
-  );
+  const res = await gh(`/search/issues?q=${encodeURIComponent(q)}&per_page=${limit}&sort=updated`, {
+    token,
+  });
   if (!res.ok) return fail(`Search failed: ${res.message}`);
   const items = Array.isArray(res.json.items) ? (res.json.items as Json[]) : [];
   return ok({
@@ -387,7 +392,11 @@ const schema = (required: string[], properties: Json): Json => ({
   ...(required.length ? { required } : {}),
   properties,
 });
-const perCall = (amount: number) => ({ model: 'per_call' as const, amount, currency: 'USDC' as const });
+const perCall = (amount: number) => ({
+  model: 'per_call' as const,
+  amount,
+  currency: 'USDC' as const,
+});
 
 /** The GitHub connection; write functions reference it by key. Primary path is OAuth
  *  (connect via GitHub's consent screen for a scoped, revocable token); the buyer can
@@ -449,7 +458,10 @@ export const GITHUB_FUNCTIONS = [
       'Open issues labeled "good first issue", scoped to a repo or searched across GitHub.',
     input: schema([], {
       repo: { type: 'string', description: 'Optional "owner/name" to scope to one repo.' },
-      language: { type: 'string', description: 'Optional language filter for the GitHub-wide search.' },
+      language: {
+        type: 'string',
+        description: 'Optional language filter for the GitHub-wide search.',
+      },
       limit: { type: 'number', description: 'Max results (default 15).' },
     }),
     output: schema(['issues'], { issues: { type: 'array' } }),

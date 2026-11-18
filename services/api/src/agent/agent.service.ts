@@ -109,7 +109,15 @@ const PLAN_SCHEMA = {
       description: 'one short sentence explaining the plan to the user',
     },
   },
-  required: ['kind', 'lines', 'serviceQuery', 'functionKey', 'budget', 'serviceParams', 'rationale'],
+  required: [
+    'kind',
+    'lines',
+    'serviceQuery',
+    'functionKey',
+    'budget',
+    'serviceParams',
+    'rationale',
+  ],
 };
 
 const SYSTEM_PROMPT =
@@ -276,7 +284,10 @@ export class AgentService {
         .map((b) => (b as { text: string }).text)
         .join('\n');
     }
-    const baseUrl = (process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/+$/, '');
+    const baseUrl = (process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(
+      /\/+$/,
+      '',
+    );
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -535,7 +546,8 @@ export class AgentService {
     if (raw.kind === 'hire' || allowed.length) {
       // The allow-list wins: one service forces it; several -> pick the one the model
       // chose (by name in serviceQuery), else the best word overlap, else the first.
-      let svc: { id: string; name: string; pricePerCall: unknown; functions: unknown } | null = null;
+      let svc: { id: string; name: string; pricePerCall: unknown; functions: unknown } | null =
+        null;
       const asSvc = (a: PlanService) => ({
         id: a.id,
         name: a.name,
@@ -578,7 +590,13 @@ export class AgentService {
                   { category: { contains: w, mode: 'insensitive' as const } },
                 ]),
               },
-              select: { id: true, name: true, pricePerCall: true, attachmentsIn: true, functions: true },
+              select: {
+                id: true,
+                name: true,
+                pricePerCall: true,
+                attachmentsIn: true,
+                functions: true,
+              },
               take: 5,
             })
           : [];

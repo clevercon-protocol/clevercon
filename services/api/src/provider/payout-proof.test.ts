@@ -29,10 +29,12 @@ describe('payout ownership proof', () => {
     const signature = kp.sign(Buffer.from(challenge)).toString('base64');
     // Tamper: flip the payload.
     const tampered = 'x' + challenge.slice(1);
-    expect(verifyPayoutOwnership(kp.publicKey(), { challenge: tampered, signature }, 'user-1').ok).toBe(
+    expect(
+      verifyPayoutOwnership(kp.publicKey(), { challenge: tampered, signature }, 'user-1').ok,
+    ).toBe(false);
+    // Wrong user: genuine challenge, but bound to user-1, verified against user-2.
+    expect(verifyPayoutOwnership(kp.publicKey(), { challenge, signature }, 'user-2').ok).toBe(
       false,
     );
-    // Wrong user: genuine challenge, but bound to user-1, verified against user-2.
-    expect(verifyPayoutOwnership(kp.publicKey(), { challenge, signature }, 'user-2').ok).toBe(false);
   });
 });
