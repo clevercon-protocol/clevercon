@@ -30,13 +30,7 @@ import {
   errorFromSendResponse,
   errorFromFailedTransaction,
 } from './errors.js';
-import type {
-  VaultSDKConfig,
-  UserAccount,
-  TaskInfo,
-  TaskStatus,
-  FeeConfig,
-} from './types.js';
+import type { VaultSDKConfig, UserAccount, TaskInfo, TaskStatus, FeeConfig } from './types.js';
 
 const STROOPS_PER_USDC = 10_000_000n;
 
@@ -50,8 +44,7 @@ export class VaultClient {
   constructor(config: VaultSDKConfig) {
     this.contractId = config.contractId;
     this.rpcUrl = config.rpcUrl ?? 'https://soroban-testnet.stellar.org';
-    this.networkPassphrase =
-      config.network === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
+    this.networkPassphrase = config.network === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
     this.usdcSac = config.usdcSac ?? '';
     this._mock = config.mock ?? false;
   }
@@ -173,19 +166,13 @@ export class VaultClient {
     await this.pollForConfirmation(server, response.hash);
 
     const result = await server.getTransaction(response.hash);
-    if (
-      result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS &&
-      result.returnValue
-    ) {
+    if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS && result.returnValue) {
       return scValToNative(result.returnValue) as T;
     }
     throw new Error(`Transaction succeeded but no return value: ${response.hash}`);
   }
 
-  private async pollForConfirmation(
-    server: SorobanRpc.Server,
-    hash: string,
-  ): Promise<string> {
+  private async pollForConfirmation(server: SorobanRpc.Server, hash: string): Promise<string> {
     for (let i = 0; i < 30; i++) {
       await new Promise((r) => setTimeout(r, 1000));
       const result = await server.getTransaction(hash);
@@ -337,19 +324,12 @@ export class VaultClient {
   /**
    * Create a new on-chain task. Returns the new task_id.
    */
-  async createTask(
-    orchestratorKeypair: Keypair,
-    planCostUsdc: number,
-  ): Promise<bigint> {
-    return this.signAndSubmitWithResult<bigint>(
-      orchestratorKeypair,
-      'create_task',
-      [
-        new Address(orchestratorKeypair.publicKey()).toScVal(),
-        this.usdcSacScVal(),
-        nativeToScVal(VaultClient.usdcToStroops(planCostUsdc), { type: 'i128' }),
-      ],
-    );
+  async createTask(orchestratorKeypair: Keypair, planCostUsdc: number): Promise<bigint> {
+    return this.signAndSubmitWithResult<bigint>(orchestratorKeypair, 'create_task', [
+      new Address(orchestratorKeypair.publicKey()).toScVal(),
+      this.usdcSacScVal(),
+      nativeToScVal(VaultClient.usdcToStroops(planCostUsdc), { type: 'i128' }),
+    ]);
   }
 
   /**
@@ -436,9 +416,7 @@ export class VaultClient {
 
   /** User config (orchestrator registration, active tasks). */
   async getUserConfig(userAddress: string): Promise<import('./types.js').UserConfig | null> {
-    const raw = await this.callView('get_user_config', [
-      new Address(userAddress).toScVal(),
-    ]);
+    const raw = await this.callView('get_user_config', [new Address(userAddress).toScVal()]);
     if (raw === null || raw === undefined) return null;
     return {
       orchestrator: raw.orchestrator ?? null,
@@ -450,9 +428,7 @@ export class VaultClient {
 
   /** Full task record by task_id. */
   async getTask(taskId: bigint): Promise<TaskInfo | null> {
-    const raw = await this.callView('get_task', [
-      nativeToScVal(taskId, { type: 'u64' }),
-    ]);
+    const raw = await this.callView('get_task', [nativeToScVal(taskId, { type: 'u64' })]);
     if (raw === null || raw === undefined) return null;
     return {
       user: String(raw.user),
@@ -468,9 +444,7 @@ export class VaultClient {
 
   /** Task lifecycle status. */
   async getTaskStatus(taskId: bigint): Promise<TaskStatus | null> {
-    const raw = await this.callView('get_task_status', [
-      nativeToScVal(taskId, { type: 'u64' }),
-    ]);
+    const raw = await this.callView('get_task_status', [nativeToScVal(taskId, { type: 'u64' })]);
     if (raw === null || raw === undefined) return null;
     // Soroban enum variants come back as the variant name string
     return String(raw) as TaskStatus;
@@ -478,9 +452,7 @@ export class VaultClient {
 
   /** List of a user's task IDs. */
   async getUserTasks(userAddress: string): Promise<bigint[]> {
-    const raw = await this.callView('get_user_tasks', [
-      new Address(userAddress).toScVal(),
-    ]);
+    const raw = await this.callView('get_user_tasks', [new Address(userAddress).toScVal()]);
     if (!raw) return [];
     return Array.from(raw).map((id: any) => BigInt(id));
   }
@@ -495,9 +467,7 @@ export class VaultClient {
 
   /** Whether an asset is whitelisted. */
   async isSupportedAsset(assetAddress: string): Promise<boolean> {
-    const raw = await this.callView('is_supported_asset', [
-      new Address(assetAddress).toScVal(),
-    ]);
+    const raw = await this.callView('is_supported_asset', [new Address(assetAddress).toScVal()]);
     return Boolean(raw);
   }
 
@@ -528,9 +498,7 @@ export class VaultClient {
 
   /** Token balance held by the vault for an asset. */
   async tokenBalance(assetAddress: string): Promise<bigint> {
-    const raw = await this.callView('token_balance', [
-      new Address(assetAddress).toScVal(),
-    ]);
+    const raw = await this.callView('token_balance', [new Address(assetAddress).toScVal()]);
     return raw !== null ? BigInt(raw) : 0n;
   }
 
@@ -564,9 +532,7 @@ export class VaultClient {
 
   /** Accrued but unclaimed fees for an asset. */
   async getAccruedFees(assetAddress: string): Promise<bigint> {
-    const raw = await this.callView('get_accrued_fees', [
-      new Address(assetAddress).toScVal(),
-    ]);
+    const raw = await this.callView('get_accrued_fees', [new Address(assetAddress).toScVal()]);
     return raw !== null ? BigInt(raw) : 0n;
   }
 }

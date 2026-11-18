@@ -3,16 +3,18 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { xdr, Address, Keypair } from '@stellar/stellar-sdk';
-import {
-  VaultErrorCode,
-  VaultContractError,
-  extractContractErrorCode,
-} from './errors.js';
+import { VaultErrorCode, VaultContractError, extractContractErrorCode } from './errors.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONTRACT_LIB_RS = path.join(
   __dirname,
-  '..', '..', '..', 'contracts', 'agent-vault', 'src', 'lib.rs',
+  '..',
+  '..',
+  '..',
+  'contracts',
+  'agent-vault',
+  'src',
+  'lib.rs',
 );
 
 describe('VaultErrorCode mirrors the Rust VaultError enum', () => {
@@ -62,7 +64,8 @@ describe('extractContractErrorCode', () => {
   });
 
   it('extracts the code from a simulation HostError message', () => {
-    const message = 'HostError: Error(Contract, #9)\n\nEvent log (newest first):\n   0: [Diagnostic Event] ...';
+    const message =
+      'HostError: Error(Contract, #9)\n\nEvent log (newest first):\n   0: [Diagnostic Event] ...';
     expect(extractContractErrorCode({ message })).toBe(9);
   });
 

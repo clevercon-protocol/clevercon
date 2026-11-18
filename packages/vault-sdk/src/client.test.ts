@@ -216,7 +216,9 @@ describe('createMockVaultClient', () => {
     await mock.mockDeposit(user, 100);
     const taskId = await mock.mockCreateTask(orch, 10);
 
-    await expect(mock.mockCancelTask('GZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ', taskId)).rejects.toThrow(VaultContractError);
+    await expect(
+      mock.mockCancelTask('GZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ', taskId),
+    ).rejects.toThrow(VaultContractError);
   });
 
   it('getUserTasks returns task IDs for a user', async () => {
@@ -236,7 +238,9 @@ describe('createMockVaultClient', () => {
 
   it('isSupportedAsset returns true for MOCK_ASSET', async () => {
     const mock = createMockVaultClient();
-    expect(await mock.isSupportedAsset('DCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC')).toBe(true);
+    expect(
+      await mock.isSupportedAsset('DCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'),
+    ).toBe(true);
     expect(await mock.isSupportedAsset('GUNKNOWN')).toBe(false);
   });
 

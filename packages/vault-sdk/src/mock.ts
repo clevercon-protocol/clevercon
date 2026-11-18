@@ -5,13 +5,7 @@
  * can run with zero RPC connectivity.
  */
 
-import type {
-  UserAccount,
-  UserConfig,
-  TaskInfo,
-  TaskStatus,
-  FeeConfig,
-} from './types.js';
+import type { UserAccount, UserConfig, TaskInfo, TaskStatus, FeeConfig } from './types.js';
 import { VaultContractError } from './errors.js';
 
 /** Default deterministic mock asset address. */
@@ -151,8 +145,14 @@ export function createMockVaultClient(overrides?: Partial<MockState>) {
       let acct = state.userAccounts.get(userAddress);
       if (!acct) {
         acct = {
-          balance: 0n, locked: 0n, total_deposited: 0n, total_spent: 0n,
-          active_tasks_count: 0, orchestrator: null, orchestrator_name: '', created_at: BigInt(Date.now()),
+          balance: 0n,
+          locked: 0n,
+          total_deposited: 0n,
+          total_spent: 0n,
+          active_tasks_count: 0,
+          orchestrator: null,
+          orchestrator_name: '',
+          created_at: BigInt(Date.now()),
         };
         state.userAccounts.set(userAddress, acct);
       }
@@ -204,8 +204,14 @@ export function createMockVaultClient(overrides?: Partial<MockState>) {
       let acct = state.userAccounts.get(userAddress);
       if (!acct) {
         acct = {
-          balance: 0n, locked: 0n, total_deposited: 0n, total_spent: 0n,
-          active_tasks_count: 0, orchestrator: null, orchestrator_name: '', created_at: BigInt(Date.now()),
+          balance: 0n,
+          locked: 0n,
+          total_deposited: 0n,
+          total_spent: 0n,
+          active_tasks_count: 0,
+          orchestrator: null,
+          orchestrator_name: '',
+          created_at: BigInt(Date.now()),
         };
         state.userAccounts.set(userAddress, acct);
       }
@@ -221,7 +227,8 @@ export function createMockVaultClient(overrides?: Partial<MockState>) {
       const task = state.tasks.get(taskId);
       if (!task) throw new VaultContractError(8, { mock: true }); // TaskNotFound
       if (task.completed) throw new VaultContractError(9, { mock: true }); // TaskAlreadyCompleted
-      if (task.orchestrator !== orchestratorAddress) throw new VaultContractError(17, { mock: true }); // NotYourOrchestrator
+      if (task.orchestrator !== orchestratorAddress)
+        throw new VaultContractError(17, { mock: true }); // NotYourOrchestrator
 
       const owner = task.user;
       const acct = state.userAccounts.get(owner);
