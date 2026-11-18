@@ -16,7 +16,8 @@
     "sourceMap": true,
     "baseUrl": ".",
     "paths": {
-      "@clevercon/agent-sdk": ["./src/index.ts"]
+      "@clevercon/agent-sdk": ["./src/index.ts"],
+      "@clevercon/agent-sdk/provider": ["./src/provider.ts"]
     }
   },
   "include": ["src/**/*", "examples/**/*"],

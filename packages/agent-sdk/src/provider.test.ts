@@ -7,6 +7,7 @@ import {
   artifactRef,
   sha256Hex,
   fetchAttachment,
+  type FulfillmentRequest,
 } from './provider.js';
 
 /**
@@ -104,7 +105,7 @@ describe('createProvider (fulfillment contract)', () => {
     });
     const r = await invoke(p, 'POST', '/', JSON.stringify({ action: 'a', taskId: 't' }));
     expect(r.status).toBe(200);
-    expect(info).toHaveBeenCalledWith(expect.stringContaining('truncate'));
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('summarized on storage'));
   });
 
   it('404s anything that is not a POST or the health check', async () => {
@@ -116,8 +117,15 @@ describe('createProvider (fulfillment contract)', () => {
 
 describe('createProvider (async lifecycle outcomes)', () => {
   it('encodes a completed outcome as an envelope with data + artifact', async () => {
-    const artifact = { url: 'https://cdn/x.png', hash: 'sha256:ab', contentType: 'image/png', size: 9 };
-    const p = createProvider({ fulfill: () => ({ status: 'completed', data: { ok: 1 }, artifact }) });
+    const artifact = {
+      url: 'https://cdn/x.png',
+      hash: 'sha256:ab',
+      contentType: 'image/png',
+      size: 9,
+    };
+    const p = createProvider({
+      fulfill: () => ({ status: 'completed', data: { ok: 1 }, artifact }),
+    });
     const r = await invoke(p, 'POST', '/', JSON.stringify({ action: 'a', taskId: 't' }));
     const env = JSON.parse(r.body);
     expect(r.status).toBe(200);
@@ -131,12 +139,20 @@ describe('createProvider (async lifecycle outcomes)', () => {
     });
     const r = await invoke(p, 'POST', '/', JSON.stringify({ action: 'a', taskId: 't' }));
     const env = JSON.parse(r.body);
-    expect(env).toMatchObject({ ok: true, status: 'working', handle: 'job-1', progress: { pct: 25 } });
+    expect(env).toMatchObject({
+      ok: true,
+      status: 'working',
+      handle: 'job-1',
+      progress: { pct: 25 },
+    });
   });
 
   it('encodes an input_required outcome with the question', async () => {
     const p = createProvider({
-      fulfill: () => ({ status: 'input_required', inputRequest: { requestId: 'q1', prompt: 'Which size?' } }),
+      fulfill: () => ({
+        status: 'input_required',
+        inputRequest: { requestId: 'q1', prompt: 'Which size?' },
+      }),
     });
     const r = await invoke(p, 'POST', '/', JSON.stringify({ action: 'a', taskId: 't' }));
     const env = JSON.parse(r.body);
@@ -151,11 +167,15 @@ describe('createProvider (async lifecycle outcomes)', () => {
     const p = createProvider({ fulfill: () => ({ status: 'failed', error: 'upstream down' }) });
     const r = await invoke(p, 'POST', '/', JSON.stringify({ action: 'a', taskId: 't' }));
     expect(r.status).toBe(200);
-    expect(JSON.parse(r.body)).toMatchObject({ ok: false, status: 'failed', error: 'upstream down' });
+    expect(JSON.parse(r.body)).toMatchObject({
+      ok: false,
+      status: 'failed',
+      error: 'upstream down',
+    });
   });
 
   it('passes the full job envelope (kind/handle/requestId/input/attachments) to the handler', async () => {
-    const fulfill = vi.fn(() => ({ status: 'completed', data: 'ok' }));
+    const fulfill = vi.fn((_req: FulfillmentRequest) => ({ status: 'completed', data: 'ok' }));
     const p = createProvider({ fulfill });
     await invoke(
       p,
@@ -192,7 +212,12 @@ describe('createProvider (async lifecycle outcomes)', () => {
   it('signs a completed outcome when a signer is supplied', async () => {
     const sign = vi.fn(async (payload: string) => `sig(${payload.length})`);
     const p = createProvider({ fulfill: () => ({ status: 'completed', data: 'x' }), sign });
-    const r = await invoke(p, 'POST', '/', JSON.stringify({ action: 'a', taskId: 't', jobId: 'j1' }));
+    const r = await invoke(
+      p,
+      'POST',
+      '/',
+      JSON.stringify({ action: 'a', taskId: 't', jobId: 'j1' }),
+    );
     expect(sign).toHaveBeenCalledOnce();
     expect(JSON.parse(r.body).signature).toMatch(/^sig\(/);
   });
@@ -214,8 +239,16 @@ describe('provider helpers', () => {
 
   it('fetchAttachment returns verified bytes and rejects a hash mismatch', async () => {
     const bytes = new TextEncoder().encode('payload');
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(bytes)));
-    const good = { url: 'https://x', hash: `sha256:${sha256Hex(bytes)}`, contentType: 'text/plain', size: bytes.byteLength };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(bytes)),
+    );
+    const good = {
+      url: 'https://x',
+      hash: `sha256:${sha256Hex(bytes)}`,
+      contentType: 'text/plain',
+      size: bytes.byteLength,
+    };
     const got = await fetchAttachment(good);
     expect(new TextDecoder().decode(got.bytes)).toBe('payload');
     const bad = { ...good, hash: 'sha256:deadbeef' };
