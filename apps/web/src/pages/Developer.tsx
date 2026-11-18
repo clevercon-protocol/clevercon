@@ -114,15 +114,28 @@ function when(v: string | null): string {
   return Number.isNaN(t) ? v : new Date(t).toLocaleDateString();
 }
 
+// The MCP server already defaults to the live CleverCon API, so a config should NOT
+// pin an API URL unless this app runs against a non-default (self-hosted) API. Setting
+// it needlessly is a common source of confusion.
+const DEFAULT_MCP_API_URL = 'https://cleverconapi-production.up.railway.app';
+
 /** The ready-to-paste MCP client config that points an agent at this rail. */
 function mcpServerConfig(apiUrl: string, apiKey: string): string {
+  const base = (apiUrl || '').replace(/\/+$/, '');
+  const selfHosted = base && base !== DEFAULT_MCP_API_URL;
+  const env: Record<string, string> = {
+    // The agent authenticates with this key; a rule (private key or session) is set
+    // separately per lane, see the docs. Pin the URL only when self-hosting.
+    CLEVERCON_API_KEY: apiKey,
+    ...(selfHosted ? { CLEVERCON_API_URL: base } : {}),
+  };
   return JSON.stringify(
     {
       mcpServers: {
         clevercon: {
           command: 'npx',
           args: ['-y', '@clevercon/mcp'],
-          env: { CLEVERCON_API_URL: apiUrl, CLEVERCON_API_KEY: apiKey },
+          env,
         },
       },
     },
@@ -409,6 +422,12 @@ function ConnectAgent() {
       <div className="mt-3">
         <CopyBlock text={cfg} label="MCP config" />
       </div>
+      <p className="mt-2 text-[12.5px] text-slate-500">
+        This key lets the agent discover, hire, and read. To actually spend it also needs a rule,
+        add your private rule key (CLEVERCON_POLICY_KEY) or a public session per the lanes below. A
+        spend with no rule configured is refused, never run under a throwaway. You never set an API
+        URL; it defaults to the live API.
+      </p>
 
       <div className="mt-5 border-t border-white/[0.06] pt-4">
         <div className="text-sm font-medium text-slate-200">Full setup and reference</div>

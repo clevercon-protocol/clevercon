@@ -440,15 +440,22 @@ export function createSpender(options: SpenderOptions): CleverConClient {
     hire: async (opts) => {
       // Bind the hire to a policy the same way the dapp binds the rule you pick: an
       // explicit opts.policyId wins, else your configured rule (CLEVERCON_POLICY_ID, or
-      // the commitment of CLEVERCON_POLICY_KEY matched to a pinned rule). Only when
-      // nothing is configured does the API derive a tight public policy from the payee.
+      // the commitment of CLEVERCON_POLICY_KEY matched to a pinned rule).
       const policyId = opts.policyId ?? (await resolveHirePolicyId());
+      // Fail closed: a hire must run under a rule you set, never a throwaway. Block when
+      // none is passed or configured, exactly like the dapp refuses to spend with no rule.
+      if (!policyId) {
+        throw new CleverConError(
+          400,
+          'No spending rule configured, so this hire is blocked. Pass policyId, or set CLEVERCON_POLICY_ID (or CLEVERCON_POLICY_KEY for a private rule) to a rule you created in the app.',
+        );
+      }
       return request<Spend>('POST', '/tasks', {
         title: opts.title,
         mode: opts.mode ?? 'DIRECT',
         budget: opts.budget,
         ...(opts.serviceId ? { serviceId: opts.serviceId } : {}),
-        ...(policyId ? { policyId } : {}),
+        policyId,
         ...(opts.input ? { input: opts.input } : {}),
         ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
       });

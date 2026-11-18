@@ -148,7 +148,7 @@ npm run dev -w @clevercon/web        # web app
 
 `apps/web` has a backendless demo mode (`VITE_BACKEND=demo`) for a no-backend preview. See [docs/development.md](docs/development.md) for the full setup.
 
-**From an agent (MCP):** point any MCP client at `@clevercon/mcp` with `CLEVERCON_API_URL` and a scoped `CLEVERCON_API_KEY`. See [packages/mcp/README.md](packages/mcp/README.md).
+**From an agent (MCP):** point any MCP client at `@clevercon/mcp` with a scoped `CLEVERCON_API_KEY` (the API base defaults to the live API; `CLEVERCON_API_URL` is only for self-hosting). See [packages/mcp/README.md](packages/mcp/README.md).
 
 ## Deployments
 

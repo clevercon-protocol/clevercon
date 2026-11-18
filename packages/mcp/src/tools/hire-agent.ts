@@ -34,7 +34,7 @@ export const hireAgentSchema = {
       policyId: {
         type: 'string',
         description:
-          'Spend policy to enforce on-chain. Omit to bind your configured rule (CLEVERCON_POLICY_ID, or the CLEVERCON_POLICY_KEY you copied from the Rules tab), exactly like picking a rule in the app. Only when no rule is configured does the vault derive a tight public policy from the payee + budget.',
+          'Spend policy to enforce on-chain. Omit to bind your configured rule (CLEVERCON_POLICY_ID, or the CLEVERCON_POLICY_KEY you copied from the Rules tab), exactly like picking a rule in the app. A hire with no rule (passed or configured) is blocked, never run under a throwaway.',
       },
       description: { type: 'string', maxLength: 2000 },
       input: {
@@ -67,18 +67,27 @@ export async function hireAgentHandler(
 
     const client = createApiClient(config);
     // Bind the hire to a policy the SAME way the dapp does: an explicit policyId wins,
-    // else your configured rule (CLEVERCON_POLICY_ID / CLEVERCON_POLICY_KEY). Only when
-    // nothing is configured does the API derive a tight public policy from payee + budget.
+    // else your configured rule (CLEVERCON_POLICY_ID / CLEVERCON_POLICY_KEY).
     const boundPolicyId =
       (typeof policyId === 'string' && policyId ? policyId : undefined) ??
       (await resolveConfiguredPolicyId(client));
+    // Fail closed: a spend must run under a rule you set, never a throwaway. If no rule
+    // is configured (and none was passed), block the hire with guidance, exactly like
+    // the dapp refuses to spend with no rule selected.
+    if (!boundPolicyId) {
+      throw new Error(
+        'No spending rule configured, so this hire is blocked. A hire must run under a rule you set. ' +
+          'Set CLEVERCON_POLICY_ID to a rule you created in the app (or CLEVERCON_POLICY_KEY for a private rule), then hire again. ' +
+          'For public, session-based spending use session_pay instead.',
+      );
+    }
     const task = await client.post('/tasks', {
       title: title.trim(),
       mode,
       budget,
       ...(serviceId ? { serviceId } : {}),
       ...(functionKey ? { functionKey } : {}),
-      ...(boundPolicyId ? { policyId: boundPolicyId } : {}),
+      policyId: boundPolicyId,
       ...(description ? { description } : {}),
       ...(input ? { input } : {}),
     });

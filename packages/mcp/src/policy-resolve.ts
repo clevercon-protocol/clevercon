@@ -10,8 +10,8 @@
  *     is computed locally and matched to one of your pinned rules to get the policyId.
  *     (legacy CLEVERCON_POLICY_JSON / CLEVERCON_POLICY_FILE still work.)
  *
- * When nothing is configured this returns undefined and the API derives a tight public
- * policy from the payee + budget (the existing safety net). When a private rule IS
+ * When nothing is configured this returns undefined and the caller fails closed (a hire
+ * is blocked rather than running under a throwaway rule). When a private rule IS
  * configured but is not pinned on-chain, it throws with guidance, so a hire never
  * silently runs under the wrong rule.
  */

@@ -1079,7 +1079,10 @@ const MCP_PRIVATE = `{
     "clevercon": {
       "command": "npx",
       "args": ["-y", "@clevercon/mcp"],
-      "env": { "CLEVERCON_POLICY_KEY": "ccpk1_...from the Rules tab" }
+      "env": {
+        "CLEVERCON_POLICY_KEY": "ccpk1_...from the Rules tab",
+        "CLEVERCON_API_KEY": "cc_...from the Developer console"
+      }
     }
   }
 }`;
@@ -1192,13 +1195,13 @@ function Mcp() {
           Connect a wallet and fund the vault (Vault tab testnet quickstart). The agent spends from
           this balance; see the <A to="/docs/quickstart">Walkthrough</A>.
         </Step>
-        <Step n={2} title="Get the key your lane needs">
-          Private lane: create and pin a private rule (Rules tab), choose Reveal, and copy its
-          policy key (<Code>ccpk1_</Code>). Public local: on the Vault tab under Agent keys,
-          authorize a session and copy its session secret (<Code>S...</Code>). Public server: on the
-          Vault tab enable a Managed Session, then mint an API key in the Developer console (
-          <Code>cc_...</Code>
-          ).
+        <Step n={2} title="Get the key(s) your lane needs">
+          Private lane: create and pin a private rule (Rules tab), choose Reveal, copy its policy key
+          (<Code>ccpk1_</Code>), and mint an API key (<Code>cc_...</Code>) in the Developer console
+          (needed for the keyless relay and for hiring / reads). Public local: on the Vault tab under
+          Agent keys, authorize a session and copy its session secret (<Code>S...</Code>); add an API
+          key only to also hire / read / discover. Public server: on the Vault tab enable a Managed
+          Session and mint an API key. See the lane table below for exactly what each needs.
         </Step>
         <Step n={3} title="Add the config and restart">
           Paste the matching block below into your MCP client (Claude Desktop: Settings, Developer,
@@ -1222,9 +1225,55 @@ function Mcp() {
 
       <H2 id="lanes">The lanes, and their config</H2>
       <P>
-        Provide the keys for the lane you want. The vault and USDC asset default to the live testnet
-        contracts, so most lanes need just one secret.
+        You configure your agent with the rule it spends under, the same way you pick a pinned rule
+        in the app. Pick a lane, set the one or two values it needs, and the vault enforces the rest.
+        You do <B>not</B> set an API URL (it defaults to the live API; <Code>CLEVERCON_API_URL</Code>{' '}
+        is only for self-hosting), and the vault and USDC asset default to the live testnet
+        contracts.
       </P>
+      <Callout kind="warn" title="Every spend runs under a rule you set (fail closed)">
+        A spend is always bound by a rule: your configured private rule, your configured public rule,
+        or the session you authorized. If none is configured, the spend is <B>refused</B>, never run
+        under a throwaway. For a private rule, if a global-private rule is enabled on your account you
+        must also set <Code>CLEVERCON_GLOBAL_KEY</Code>. For public, the global rule is already
+        on-chain, so you never set it.
+      </Callout>
+      <Table
+        head={['Lane', 'Set', 'API key?']}
+        rows={[
+          [
+            <B>Private (keyless)</B>,
+            <>
+              <Code>CLEVERCON_POLICY_KEY</Code> (your rule), plus <Code>CLEVERCON_GLOBAL_KEY</Code> if
+              a global-private rule is enabled
+            </>,
+            'Yes',
+          ],
+          [
+            <B>Public, local</B>,
+            <>
+              <Code>CLEVERCON_SESSION_SECRET</Code> (a session key you hold)
+            </>,
+            'Only to also hire / read / discover',
+          ],
+          [
+            <B>Public, server</B>,
+            <>
+              <Code>CLEVERCON_PUBLIC_MODE=server</Code> + <Code>CLEVERCON_API_KEY</Code> (a Managed
+              Session set up in the app)
+            </>,
+            'Yes',
+          ],
+        ]}
+      />
+      <Callout kind="note" title="When is the API key needed?">
+        The <Code>cc_...</Code> API key authenticates your account to the hosted API, so it is needed
+        for discovery, hiring, reading budget / activity, limits, disputes, the private keyless
+        relay, and a Managed Session. The one case that does <B>not</B> need it is the fully local
+        public session (<Code>session_pay</Code> / <Code>session_scope</Code> with your own session
+        key), which signs and submits to the chain itself. In practice: set the API key unless you
+        only use the local session lane.
+      </Callout>
       <Callout kind="warn" title="Your keys are spend authority">
         The policy key, session secret, and API key can each move funds within your rule. They live
         in your MCP client config (for example <Code>.mcp.json</Code>), so keep that file out of
@@ -1235,26 +1284,23 @@ function Mcp() {
       <H3>Private (self-custody, keyless)</H3>
       <P>
         The policy key packs your rule and its salt; the agent proves locally and relays only the
-        proof. Add <Code>CLEVERCON_GLOBAL_KEY</Code> only if the account has a global-private rule.
-      </P>
-      <P>
-        The same configured rule also bounds your <B>hires</B>: a hire with no explicit policy binds
-        it (matched to your pinned rule on-chain), exactly like picking a rule in the app, instead of
-        a throwaway. Set <Code>CLEVERCON_POLICY_ID</Code> to bind a rule by id directly.
+        proof. The same rule also bounds your <B>hires</B>: a hire binds it (matched to your pinned
+        rule on-chain), exactly like picking a rule in the app, and a hire with no rule configured is
+        refused, never run under a throwaway. Set <Code>CLEVERCON_POLICY_ID</Code> to bind a rule by
+        id directly, or <Code>CLEVERCON_GLOBAL_KEY</Code> when a global-private rule is enabled.
       </P>
       <CodeBlock code={MCP_PRIVATE} title="private" />
       <H3>Public, local (the agent holds a session key)</H3>
       <P>
         The default mode. The agent signs bounded spends with its own session key, no proof per
-        payment.
+        payment, and the session's cap, expiry, and rule (plus the on-chain global public rule) are
+        enforced by the vault. Add <Code>CLEVERCON_API_KEY</Code> to also hire, read, and discover.
       </P>
       <CodeBlock code={MCP_LOCAL} title="public local" />
       <H3>Public, server (Managed Session)</H3>
       <P>
         Set <Code>CLEVERCON_PUBLIC_MODE=server</Code> and <Code>CLEVERCON_API_KEY</Code>; the
-        platform signs within the on-chain scope you set in the app. Add{' '}
-        <Code>CLEVERCON_API_KEY</Code> to any lane to also enable the directory, hire, read, and
-        dispute tools.
+        platform signs within the on-chain scope you set in the app.
       </P>
 
       <H2 id="tools">Tools</H2>
@@ -1479,6 +1525,13 @@ function ConfigKeys() {
           ],
         ]}
       />
+      <Callout kind="note" title="You do not set an API URL">
+        There is no URL to configure: the API base defaults to the live CleverCon API.{' '}
+        <Code>CLEVERCON_API_URL</Code> exists only for self-hosting. The{' '}
+        <Code>CLEVERCON_API_KEY</Code> is needed for everything that talks to the hosted API
+        (discovery, hiring, reads, limits, disputes, the private keyless relay, a Managed Session);
+        the only lane that works without it is the fully local public session.
+      </Callout>
       <Callout kind="warn" title="Keep policy and session secrets private">
         A policy key carries your rule and its salt; a session secret can sign bounded spends. Put
         them in your agent's environment, never in client code or a public repo. They are bounded
