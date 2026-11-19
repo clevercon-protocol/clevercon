@@ -27,6 +27,28 @@ export const searchServicesSchema = {
   },
 };
 
+type Svc = Record<string, unknown>;
+
+/** A lean list projection: enough to pick a service and hire a function, without the
+ *  full input schemas + requirements (those come from get_service). Keeps the payload
+ *  small so a directory scan does not flood the agent's context. */
+function leanService(s: Svc): Svc {
+  const fns = Array.isArray(s.functions) ? (s.functions as Svc[]) : [];
+  return {
+    id: s.id,
+    name: s.name,
+    category: s.category,
+    tier: s.tier,
+    pricePerCall: s.pricePerCall,
+    interaction: s.interaction,
+    paymentModel: s.paymentModel,
+    rating: s.rating ?? s.trust,
+    settlements: s.settlements,
+    healthy: s.healthy,
+    functions: fns.map((f) => ({ key: f.key, label: f.label, pricing: f.pricing })),
+  };
+}
+
 export async function searchServicesHandler(
   args: Record<string, unknown>,
   config: ApiConfig,
@@ -34,7 +56,18 @@ export async function searchServicesHandler(
   try {
     const { q, category, sort, limit } = args;
     const client = createApiClient(config);
-    return toolJson(await client.get('/services', { q, category, sort, limit }));
+    const res = await client.get<{ items?: Svc[]; total?: number }>('/services', {
+      q,
+      category,
+      sort,
+      limit,
+    });
+    const items = Array.isArray(res?.items) ? res.items.map(leanService) : res;
+    return toolJson({
+      items,
+      total: res?.total,
+      note: "Lean list. Call get_service for a service's full input schemas and usage requirements.",
+    });
   } catch (error) {
     return toolError('search_services failed', error);
   }
