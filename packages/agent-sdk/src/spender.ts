@@ -102,6 +102,17 @@ export interface SavedLimit {
   createdAt: string;
 }
 
+/** The outcome of settling a hire: how many steps were paid and the tx hash(es). */
+export interface SettleResult {
+  taskId: string;
+  settled: number;
+  lane?: 'private' | 'public';
+  totalUsdc?: number;
+  txHashes?: string[];
+  /** True when nothing was settled because the job has not been delivered (RELEASED) yet. */
+  pending?: boolean;
+}
+
 /** An API call that failed; carries the HTTP status so callers can branch on it. */
 export class CleverConError extends Error {
   constructor(
@@ -190,6 +201,16 @@ export interface CleverConClient {
    *  (for an async/needs-input step) its progress and pending inputRequest. Poll
    *  this to drive a long-running or needs-input hire to completion. */
   getTask(taskId: string): Promise<unknown>;
+  /**
+   * Pay the provider(s) for a delivered hire under your rule, the SAME rails a direct
+   * spend uses: a private rule releases KEYLESS (prove locally, relay the proof), a
+   * public rule pays via the Managed Session. Settles every step that is RELEASED
+   * (delivered + accepted) and not yet paid; safe to call repeatedly (paid steps are
+   * skipped). A hire pays ONLY after delivery, so call this once getTask shows the
+   * step RELEASED (or after your own wait loop). This is the agent-away equivalent of
+   * the dapp's auto-settle.
+   */
+  settleTask(taskId: string): Promise<SettleResult>;
   /** Answer a step a provider parked as INPUT_REQUIRED (an elicitation), resuming
    *  the job. `response` is validated against the question's schema server-side. */
   answer(
@@ -333,6 +354,145 @@ export function createSpender(options: SpenderOptions): CleverConClient {
     return null;
   }
 
+  // True when a private rule is configured (option or env), so a settlement goes
+  // keyless; otherwise it goes through the Managed Session (public).
+  function hasConfiguredPrivateRule(): boolean {
+    return !!(options.policyBundle || env('CLEVERCON_POLICY_KEY') || env('CLEVERCON_POLICY_JSON'));
+  }
+
+  // The shared pp/2 KEYLESS relay: prove the owner's private rule over payLines (1..4)
+  // and relay only the proof. `hire` meta links the on-chain release to the task step
+  // so a hired provider is marked paid. Used by both disbursePrivate and settleTask.
+  async function relayKeyless(
+    payLines: { payee: string; amount: number }[],
+    hire?: { taskId: string; stepIds: (string | null)[] },
+  ): Promise<{ txHash: string; totalUsdc: number; commitment: string }> {
+    if (payLines.length < 1 || payLines.length > 4) {
+      throw new CleverConError(400, 'keyless release takes 1..4 {payee, amount} per proof');
+    }
+    const bundle = resolveBundle();
+    const globalBundle = resolveGlobalBundle();
+    // Lazily pull in the prover (snarkjs/stellar) + artifact resolver only when actually
+    // proving, so importing createSpender stays dependency-free.
+    const { buildPrivateDisbursement, commitmentForBundle } =
+      await import('./payments/private-disburse.js');
+    const { resolveArtifacts } = await import('./payments/artifacts.js');
+    const resolved = await resolveArtifacts({
+      wasmPath: options.proverArtifacts?.wasmPath,
+      zkeyPath: options.proverArtifacts?.zkeyPath,
+    });
+    const artifacts = { ...resolved, poseidon: options.proverArtifacts?.poseidon };
+    type Accum = { runningSpend: string; priorCount: string; anchorR2: string; anchorR7: string };
+    const readAccum = (c: string) => request<Accum>('GET', `/vault/accumulator/${c}`);
+
+    const commitment = await commitmentForBundle(bundle, artifacts);
+
+    // Fail fast if the rule is not pinned, BEFORE the expensive proof. A read failure
+    // does not block: the vault stays the authoritative check.
+    try {
+      const { commitments } = await request<{ commitments: string[] }>(
+        'GET',
+        '/vault/pinned-commitments',
+      );
+      if (!commitments.map((c) => c.toLowerCase()).includes(commitment.toLowerCase())) {
+        throw new CleverConError(
+          400,
+          'This rule is not pinned on-chain for your account, so it cannot authorize a spend. Pin it on the Rules tab, then try again.',
+        );
+      }
+    } catch (e) {
+      if (e instanceof CleverConError) throw e;
+      // network/read error: proceed and let the vault be authoritative
+    }
+
+    const {
+      request: batchRequest,
+      totalUsdc,
+      commitmentHex,
+    } = await buildPrivateDisbursement(bundle, payLines, artifacts, await readAccum(commitment));
+
+    let global:
+      | {
+          commitment: string;
+          nullifiers: string[];
+          resetR2: boolean;
+          resetR7: boolean;
+          proof: { a: string; b: string; c: string };
+        }
+      | undefined;
+    if (globalBundle) {
+      const gCommitment = await commitmentForBundle(globalBundle, artifacts);
+      const g = await buildPrivateDisbursement(
+        globalBundle,
+        payLines,
+        artifacts,
+        await readAccum(gCommitment),
+        { validAfter: batchRequest.validAfter, validBefore: batchRequest.validBefore },
+      );
+      global = {
+        commitment: g.request.commitment,
+        nullifiers: g.request.nullifiers,
+        resetR2: g.request.resetR2,
+        resetR7: g.request.resetR7,
+        proof: g.request.proof,
+      };
+    }
+
+    const resp = await request<{ txHash: string }>('POST', '/vault/batch-release-keyless', {
+      ...batchRequest,
+      ...(global ? { global } : {}),
+      ...(hire ? { hire } : {}),
+    });
+    return { txHash: resp.txHash, totalUsdc, commitment: commitmentHex };
+  }
+
+  // Delivered-and-unpaid steps of a hire: RELEASED, not yet paid, with a payee + cost.
+  interface SettleStep {
+    id: string;
+    status: string;
+    paid?: boolean;
+    payee?: string | null;
+    estimatedCost: number;
+  }
+  async function settleHire(taskId: string): Promise<SettleResult> {
+    const task = await request<{ status: string; steps: SettleStep[] }>(
+      'GET',
+      `/tasks/${encodeURIComponent(taskId)}`,
+    );
+    const unpaid = (task.steps ?? []).filter(
+      (s) => s.status === 'RELEASED' && !s.paid && !!s.payee && Number(s.estimatedCost) > 0,
+    );
+    if (unpaid.length === 0) {
+      const open = (task.steps ?? []).some((s) =>
+        ['PENDING', 'RUNNING', 'AWAITING_APPROVAL', 'INPUT_REQUIRED'].includes(s.status),
+      );
+      return { taskId, settled: 0, pending: open };
+    }
+    const lane: 'private' | 'public' = hasConfiguredPrivateRule() ? 'private' : 'public';
+    const txHashes: string[] = [];
+    if (lane === 'private') {
+      for (let i = 0; i < unpaid.length; i += 4) {
+        const group = unpaid.slice(i, i + 4);
+        const res = await relayKeyless(
+          group.map((s) => ({ payee: s.payee as string, amount: Number(s.estimatedCost) })),
+          { taskId, stepIds: group.map((s) => s.id) },
+        );
+        txHashes.push(res.txHash);
+      }
+    } else {
+      for (const s of unpaid) {
+        const res = await request<{ txHash: string }>('POST', '/vault/session/pay', {
+          payee: s.payee,
+          amount: Number(s.estimatedCost),
+          hire: { taskId, stepId: s.id },
+        });
+        txHashes.push(res.txHash);
+      }
+    }
+    const totalUsdc = unpaid.reduce((a, s) => a + Number(s.estimatedCost), 0);
+    return { taskId, settled: unpaid.length, lane, totalUsdc, txHashes };
+  }
+
   return {
     // pp/1 (managed server-path) is RETIRED - the verifier only carries the pp/2 batch
     // VK, so server-built binding proofs no longer verify. Fail fast with guidance
@@ -340,98 +500,16 @@ export function createSpender(options: SpenderOptions): CleverConClient {
     pay: async () => retiredServerPath(),
     disburse: async () => retiredServerPath(),
     disbursePrivate: async (lines) => {
-      const bundle = resolveBundle();
-      const globalBundle = resolveGlobalBundle();
-      // Lazily pull in the prover (snarkjs/stellar) + artifact resolver only when
-      // actually proving, so importing createSpender stays dependency-free.
-      const { buildPrivateDisbursement, commitmentForBundle } =
-        await import('./payments/private-disburse.js');
-      const { resolveArtifacts } = await import('./payments/artifacts.js');
-      // Resolve the circuit artifacts: by default they are downloaded once from the
-      // hosted bucket and cached on disk, so a user never has to set a wasm/zkey path.
-      // options.proverArtifacts / CLEVERCON_PP2_WASM+_ZKEY only override that.
-      const resolved = await resolveArtifacts({
-        wasmPath: options.proverArtifacts?.wasmPath,
-        zkeyPath: options.proverArtifacts?.zkeyPath,
-      });
-      const artifacts = { ...resolved, poseidon: options.proverArtifacts?.poseidon };
-      type Accum = {
-        runningSpend: string;
-        priorCount: string;
-        anchorR2: string;
-        anchorR7: string;
-      };
       const payLines = lines.map((l) => ({ payee: l.payee, amount: l.amount }));
-      const readAccum = (c: string) => request<Accum>('GET', `/vault/accumulator/${c}`);
-
-      const commitment = await commitmentForBundle(bundle, artifacts);
-
-      // Fail fast if this rule is not pinned on-chain for the account, BEFORE the
-      // expensive proof. The vault rejects an unpinned commitment anyway, but only
-      // after the proof is built; checking here saves the proving work on the single
-      // most common misconfiguration (a policy key copied before the rule was pinned).
-      // A read failure does not block: the vault stays the authoritative check.
-      try {
-        const { commitments } = await request<{ commitments: string[] }>(
-          'GET',
-          '/vault/pinned-commitments',
-        );
-        if (!commitments.map((c) => c.toLowerCase()).includes(commitment.toLowerCase())) {
-          throw new CleverConError(
-            400,
-            'This rule is not pinned on-chain for your account, so it cannot authorize a spend. Pin it on the Rules tab, then try again.',
-          );
-        }
-      } catch (e) {
-        if (e instanceof CleverConError) throw e;
-        // network/read error: proceed and let the vault be authoritative
-      }
-
-      // Read the vault's per-commitment R2/R7 accumulator so the proof binds to the
-      // window state the vault re-derives at settlement (cumulative across tasks).
-      const {
-        request: batchRequest,
-        totalUsdc,
-        commitmentHex,
-      } = await buildPrivateDisbursement(bundle, payLines, artifacts, await readAccum(commitment));
-
-      // A global-private rule means the vault requires a SECOND proof over the same
-      // payees/amounts against the global commitment (its own window + nullifiers).
-      let global:
-        | {
-            commitment: string;
-            nullifiers: string[];
-            resetR2: boolean;
-            resetR7: boolean;
-            proof: { a: string; b: string; c: string };
-          }
-        | undefined;
-      if (globalBundle) {
-        const gCommitment = await commitmentForBundle(globalBundle, artifacts);
-        const g = await buildPrivateDisbursement(
-          globalBundle,
-          payLines,
-          artifacts,
-          await readAccum(gCommitment),
-          // Share the main release's validity window so the global proof's public
-          // signals match what the vault reconstructs.
-          { validAfter: batchRequest.validAfter, validBefore: batchRequest.validBefore },
-        );
-        global = {
-          commitment: g.request.commitment,
-          nullifiers: g.request.nullifiers,
-          resetR2: g.request.resetR2,
-          resetR7: g.request.resetR7,
-          proof: g.request.proof,
-        };
-      }
-
-      const resp = await request<{ txHash: string }>('POST', '/vault/batch-release-keyless', {
-        ...batchRequest,
-        ...(global ? { global } : {}),
-      });
-      return { txHash: resp.txHash, totalUsdc, legs: lines.length, commitment: commitmentHex };
+      const res = await relayKeyless(payLines);
+      return {
+        txHash: res.txHash,
+        totalUsdc: res.totalUsdc,
+        legs: lines.length,
+        commitment: res.commitment,
+      };
     },
+    settleTask: (taskId) => settleHire(taskId),
     sessionPay: (payee, amount, ruleId) =>
       request<{ txHash: string }>('POST', '/vault/session/pay', {
         payee,

@@ -195,8 +195,16 @@ function main(): void {
         });
         if (step && step.task.status === 'RUNNING') {
           await prisma.task.update({ where: { id: step.taskId }, data: { status: 'FAILED' } });
+          // Record WHY on the step so get_task / the activity feed surface the real
+          // reason instead of a null error an operator cannot diagnose.
+          await prisma.taskStep
+            .update({
+              where: { id: job.data.stepId },
+              data: { error: `settlement failed: ${err.message}` },
+            })
+            .catch(() => {});
           logger.error(
-            { taskId: step.taskId, stepId: job.data.stepId },
+            { taskId: step.taskId, stepId: job.data.stepId, err: err.message },
             'settlement exhausted retries; task marked FAILED',
           );
           emitter

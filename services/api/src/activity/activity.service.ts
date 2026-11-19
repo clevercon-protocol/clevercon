@@ -56,6 +56,9 @@ export class ActivityService {
           asset: true,
           createdAt: true,
           updatedAt: true,
+          // The actual priced work, so the ledger shows the charge (sum of step prices)
+          // rather than the reserved budget cap.
+          steps: { select: { estimatedCost: true } },
         },
       }),
       this.prisma.payment.findMany({
@@ -77,11 +80,14 @@ export class ActivityService {
 
     const items: ActivityItem[] = [];
     for (const t of tasks) {
+      // Show the actual price of the work (the sum of the step prices) when the task
+      // has priced steps; fall back to the budget cap for a task with none yet.
+      const stepTotal = (t.steps ?? []).reduce((sum, s) => sum + Number(s.estimatedCost), 0);
       items.push({
         id: `task-created-${t.id}`,
         kind: 'task_created',
         title: `Job created: ${t.title}`,
-        amount: Number(t.budget),
+        amount: stepTotal > 0 ? stepTotal : Number(t.budget),
         asset: t.asset,
         taskId: t.id,
         at: t.createdAt.toISOString(),
