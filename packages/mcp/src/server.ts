@@ -69,7 +69,7 @@ class CleverConMCPServer {
     this.server = new Server(
       // The version is stamped from package.json at bundle time (esbuild define), so a
       // client can tell which build it is talking to. Falls back for a non-bundled dev run.
-      { name: 'clevercon-mcp-server', version: process.env.MCP_VERSION ?? '0.5.0' },
+      { name: 'clevercon-mcp-server', version: process.env.MCP_VERSION ?? '0.6.0' },
       { capabilities: { tools: {} } },
     );
     this.setupHandlers();
