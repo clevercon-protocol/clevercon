@@ -1,5 +1,9 @@
 import { build } from 'esbuild';
-import { chmodSync } from 'node:fs';
+import { chmodSync, readFileSync } from 'node:fs';
+
+// Stamp the npm version into the bundle so serverInfo.version tells a client exactly
+// which build it is talking to (esbuild replaces the process.env.MCP_VERSION token).
+const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'));
 
 /**
  * Bundle the MCP server into self-contained dist files so `npx -y @clevercon/mcp`
@@ -22,6 +26,7 @@ const common = {
   banner: {
     js: "import { createRequire as __cleverconRequire } from 'module'; const require = __cleverconRequire(import.meta.url);",
   },
+  define: { 'process.env.MCP_VERSION': JSON.stringify(version) },
   logLevel: 'info',
 };
 

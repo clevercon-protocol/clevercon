@@ -13,12 +13,18 @@ import {
   type ToolResult,
 } from '../api-client.js';
 import { resolveConfiguredPolicyId } from '../policy-resolve.js';
+import { settleHireTask, type HireTaskDetail } from '../settle.js';
+
+// How long hire_agent waits for a sync hire to deliver before returning with guidance.
+const DELIVER_WAIT_MS = Number(process.env.CLEVERCON_HIRE_WAIT_MS ?? 25_000);
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export const hireAgentSchema = {
   name: 'hire_agent',
   description:
     'Create a task on CleverCon (hire a service). DIRECT pays a chosen serviceId; SEARCH finds and pays one service; COMPOSE runs a multi-service job. ' +
-    'If the service lists `functions` (see get_service), pass the chosen function key as functionKey, and shape `input` to THAT function’s input schema. Requires an API key.',
+    'If the service lists `functions` (see get_service), pass the chosen function key as functionKey, and shape `input` to THAT function’s input schema. ' +
+    'For a DIRECT hire it waits for delivery and then PAYS the provider under your rule (keyless private / Managed Session public), returning the result + settlement; set wait:false to return immediately and settle later with settle_task. Requires an API key.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -26,6 +32,11 @@ export const hireAgentSchema = {
       mode: { type: 'string', enum: ['DIRECT', 'SEARCH', 'COMPOSE'] },
       budget: { type: 'number', description: 'Max spend in USDC', exclusiveMinimum: 0 },
       serviceId: { type: 'string', description: 'Required for DIRECT mode' },
+      wait: {
+        type: 'boolean',
+        description:
+          'DIRECT only: wait for delivery and auto-pay the provider under your rule (default true). false returns immediately; settle later with settle_task.',
+      },
       functionKey: {
         type: 'string',
         description:
@@ -84,7 +95,7 @@ export async function hireAgentHandler(
           'For public, session-based spending use session_pay instead.',
       );
     }
-    const task = await client.post('/tasks', {
+    const task = (await client.post('/tasks', {
       title: title.trim(),
       mode,
       budget,
@@ -93,8 +104,74 @@ export async function hireAgentHandler(
       policyId: boundPolicyId,
       ...(description ? { description } : {}),
       ...(input ? { input } : {}),
+    })) as { id: string };
+
+    // Fire-and-forget on request, or for SEARCH/COMPOSE (no step yet, planned later).
+    const wait = args.wait !== false && mode === 'DIRECT';
+    if (!wait) {
+      return toolJson({
+        ...task,
+        note: 'Hired. When the step is delivered (RELEASED), call settle_task to pay the provider under your rule.',
+      });
+    }
+
+    // Wait for delivery, then pay the provider under the rule (the "wire" to payment):
+    // a hire pays ONLY after delivery + acceptance, so we never pay up front.
+    const taskId = task.id;
+    const deadline = Date.now() + DELIVER_WAIT_MS;
+    let detail: HireTaskDetail | null = null;
+    while (Date.now() < deadline) {
+      await delay(1500);
+      detail = await client.get<HireTaskDetail>(`/tasks/${encodeURIComponent(taskId)}`);
+      const step = detail.steps?.[0];
+      if (detail.status === 'FAILED' || detail.status === 'COMPLETED') break;
+      if (
+        step &&
+        (step.status === 'RELEASED' ||
+          step.status === 'AWAITING_APPROVAL' ||
+          step.status === 'INPUT_REQUIRED' ||
+          step.status === 'FAILED')
+      )
+        break;
+    }
+
+    const step = detail?.steps?.[0];
+    if (step && step.status === 'RELEASED' && !step.paid) {
+      try {
+        const settlement = await settleHireTask(config, taskId);
+        const fresh = await client.get<HireTaskDetail>(`/tasks/${encodeURIComponent(taskId)}`);
+        return toolJson({
+          task: fresh,
+          delivered: true,
+          settlement,
+          note: 'Hired, delivered, and paid the provider under your rule.',
+        });
+      } catch (settleErr) {
+        return toolJson({
+          task: detail,
+          delivered: true,
+          settled: false,
+          settleError: settleErr instanceof Error ? settleErr.message : String(settleErr),
+          note: 'Delivered but settlement failed; the provider is unpaid. Retry with settle_task.',
+        });
+      }
+    }
+
+    // Not settleable yet: return the current state + what to do next.
+    const st = step?.status ?? detail?.status ?? 'PENDING';
+    const guidance =
+      st === 'AWAITING_APPROVAL'
+        ? 'Held for its dispute window. Call approve_task to accept early, then settle_task.'
+        : st === 'INPUT_REQUIRED'
+          ? 'The provider asked a question. Answer with answer_step, then poll get_task and settle_task.'
+          : detail?.status === 'FAILED' || st === 'FAILED'
+            ? 'The job failed, so no payment is due. See the step error for why.'
+            : 'Still running. Poll get_task, then call settle_task once the step is RELEASED.';
+    return toolJson({
+      task: detail ?? task,
+      delivered: step?.status === 'RELEASED',
+      note: guidance,
     });
-    return toolJson(task);
   } catch (error) {
     return toolError('hire_agent failed', error);
   }

@@ -1326,7 +1326,12 @@ function Mcp() {
               <Code>session_pay</Code>, <Code>session_scope</Code>
             </>,
           ],
-          ['Hire', <Code>hire_agent</Code>],
+          [
+            'Hire',
+            <>
+              <Code>hire_agent</Code>, <Code>settle_task</Code>
+            </>,
+          ],
           [
             'Files',
             <>
@@ -1355,6 +1360,25 @@ function Mcp() {
           ],
         ]}
       />
+
+      <H3>How a hire pays the provider</H3>
+      <P>
+        A hire pays the provider the same way a direct spend does, and only AFTER delivery:{' '}
+        <Code>hire_agent</Code> waits for the service to deliver, then pays under your rule, keyless
+        for a private rule (a local proof relayed to the vault, the same rail as{' '}
+        <Code>disburse_private</Code>) or via your Managed Session for a public rule. It returns the
+        result and the settlement. Set <Code>wait: false</Code> to return immediately, then pay
+        later with <Code>settle_task</Code> (also how you retry a settlement, or pay a long or held
+        job once it is accepted). The provider is never paid up front and never paid for a
+        non-delivery.
+      </P>
+      <Callout kind="note" title="Private spend is keyless by default (no artifacts needed)">
+        <Code>disburse_private</Code> and a private hire release <B>keyless</B>: the vault verifies
+        the proof on-chain, so the default path needs no local wasm/zkey. The circuit and poseidon
+        artifacts (<Code>CLEVERCON_PP2_*</Code>) download automatically only when your rule needs
+        them (an allowlist, deny-list, calendar, or category); you set them only to pin local files.
+        A failed private spend is almost never a missing-artifact problem.
+      </Callout>
 
       <H3>Attaching a file to a hire</H3>
       <P>

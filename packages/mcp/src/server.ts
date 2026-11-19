@@ -25,6 +25,7 @@ config();
 import { searchServicesHandler, searchServicesSchema } from './tools/discovery.js';
 import { getServiceHandler, getServiceSchema } from './tools/discovery.js';
 import { hireAgentHandler, hireAgentSchema } from './tools/hire-agent.js';
+import { settleTaskHandler, settleTaskSchema } from './tools/settle-task.js';
 import { listTasksHandler, listTasksSchema } from './tools/list-tasks.js';
 import { getTaskHandler, getTaskSchema } from './tools/get-task.js';
 import { approveTaskHandler, approveTaskSchema } from './tools/approve-task.js';
@@ -66,7 +67,9 @@ class CleverConMCPServer {
   constructor() {
     this.config = getConfig();
     this.server = new Server(
-      { name: 'clevercon-mcp-server', version: '2.0.0' },
+      // The version is stamped from package.json at bundle time (esbuild define), so a
+      // client can tell which build it is talking to. Falls back for a non-bundled dev run.
+      { name: 'clevercon-mcp-server', version: process.env.MCP_VERSION ?? '0.5.0' },
       { capabilities: { tools: {} } },
     );
     this.setupHandlers();
@@ -84,6 +87,7 @@ class CleverConMCPServer {
         sessionPaySchema,
         sessionScopeSchema,
         hireAgentSchema,
+        settleTaskSchema,
         // limits
         setLimitSchema,
         listLimitsSchema,
@@ -119,6 +123,8 @@ class CleverConMCPServer {
             return await sessionScopeHandler(this.config);
           case 'hire_agent':
             return await hireAgentHandler(args || {}, this.config);
+          case 'settle_task':
+            return await settleTaskHandler(args || {}, this.config);
           case 'set_limit':
             return await setLimitHandler(args || {}, this.config);
           case 'list_limits':
