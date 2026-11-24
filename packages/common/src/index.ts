@@ -7,6 +7,7 @@ export * from './wallet.js';
 export * from './write-json-safe.js';
 export * from './policy-inputs.js';
 export * from './rule-model.js';
+export * from './milestone.js';
 export * from './groth16-soroban.js';
 export * from './spend-policy-prover.js';
 export * from './redis-mutex.js';

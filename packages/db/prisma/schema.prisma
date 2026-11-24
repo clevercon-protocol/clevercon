@@ -424,6 +424,11 @@ model TaskStep {
   error         String?
   qualityRating Float? // advisory LLM-judge score (0-5) of the delivery vs the service rubric
   qualityNote   String? // one-line rationale from the judge (advisory; never gates payment)
+  // Acceptance milestones for a judged (T2/T3) hire: an array of
+  // { id, title, criteria, amountUsdc, status, score?, note? } whose amounts sum to the
+  // step price. The planner proposes them (user-editable), the judge scores each on
+  // delivery, and P2 releases per accepted milestone. Null for T1 / direct spends.
+  milestones    Json?
   artifact      Json? // ArtifactRef {url, hash, contentType, size} when the provider returns a file
   latencyMs     Int?
   // Async / needs-input execution state (marketplace v2). See service-manifest.ts.
