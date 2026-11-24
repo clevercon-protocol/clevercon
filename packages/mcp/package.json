@@ -32,7 +32,6 @@
     "snarkjs": "^0.7.5"
   },
   "devDependencies": {
-    "@clevercon/agent-sdk": "^0.4.2",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/node": "^20.0.0",
     "dotenv": "^16.4.0",
