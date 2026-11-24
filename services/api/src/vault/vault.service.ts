@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { StrKey } from '@stellar/stellar-sdk';
-import { Prisma, PaymentMethod, PaymentStatus, StepStatus } from '@clevercon/db';
+import { Prisma, PaymentMethod, PaymentStatus, StepStatus, TaskStatus } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { VaultContractService, type PublicRuleInput } from './vault-contract.service.js';
 import { DelegateService } from './delegate.service.js';
@@ -515,9 +515,14 @@ export class VaultService {
         locked: 0,
         totalDeposited: 0,
         totalSpent: 0,
+        pendingSettlementUsdc: 0,
         accounts: [],
       };
     }
+
+    // Delivered-but-unsettled hire spend (from the DB), surfaced so an agent reasoning
+    // about `available` does not over-commit money already owed to a provider.
+    const pendingSettlementUsdc = await this.pendingSettlement(userId);
 
     // Authoritative headline: the primary wallet's position read live from the
     // ACTIVE vault. The mirror below is keyed by (address, asset) not by vault id,
@@ -534,6 +539,7 @@ export class VaultService {
             locked: onchain.locked,
             totalDeposited: onchain.totalDeposited,
             totalSpent: onchain.totalSpent,
+            pendingSettlementUsdc,
             accounts: [
               {
                 address: addresses[0],
@@ -553,6 +559,7 @@ export class VaultService {
           locked: 0,
           totalDeposited: 0,
           totalSpent: 0,
+          pendingSettlementUsdc,
           accounts: [],
         };
       } catch {
@@ -588,6 +595,7 @@ export class VaultService {
       locked: n(locked),
       totalDeposited: n(totalDeposited),
       totalSpent: n(totalSpent),
+      pendingSettlementUsdc,
       accounts: rows.map((r) => ({
         address: r.address,
         asset: r.asset,
@@ -597,5 +605,33 @@ export class VaultService {
         activeTasks: r.activeTasks,
       })),
     };
+  }
+
+  /**
+   * Sum of delivered-but-unsettled hire spend for the user: RELEASED, priced steps with
+   * a payee and no CONFIRMED VAULT_RELEASE payment yet. A budget hint (not authoritative;
+   * on-chain is), so an agent subtracts money already owed before committing more.
+   */
+  private async pendingSettlement(userId: string): Promise<number> {
+    try {
+      const steps = await this.prisma.taskStep.findMany({
+        where: {
+          status: StepStatus.RELEASED,
+          estimatedCost: { gt: 0 },
+          task: { buyerId: userId, status: { notIn: [TaskStatus.FAILED, TaskStatus.CANCELLED] } },
+          payments: {
+            none: { method: PaymentMethod.VAULT_RELEASE, status: PaymentStatus.CONFIRMED },
+          },
+        },
+        select: { estimatedCost: true, payee: true, service: { select: { stellarAddress: true } } },
+        take: 500,
+      });
+      return steps.reduce(
+        (sum, s) => (s.payee || s.service?.stellarAddress ? sum + Number(s.estimatedCost) : sum),
+        0,
+      );
+    } catch {
+      return 0;
+    }
   }
 }

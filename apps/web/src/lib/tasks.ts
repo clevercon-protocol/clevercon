@@ -76,6 +76,8 @@ export interface TaskStepView {
   payee?: string | null;
   // Whether a CONFIRMED release already names this step (so the client pays once).
   paid?: boolean;
+  // Settlement state: paid | pending (delivered, not yet settled) | failed | none.
+  settlementStatus?: 'paid' | 'pending' | 'failed' | 'none';
   // Verification tier (T1/T2/T3) and whether a released step was trustlessly verified.
   tier?: string | null;
   verified?: boolean;
@@ -113,6 +115,8 @@ export interface TaskDetail extends Task {
   policyId?: string | null;
   steps: TaskStepView[];
   receipts: Receipt[];
+  // Delivered work awaiting settlement (sum of RELEASED, unpaid, priced steps).
+  pendingSettlementUsdc?: number;
   // True while a T2 step is in its dispute window (buyer can approve early / dispute).
   awaitingApproval?: boolean;
   // True while an async step is asking the buyer a question mid-job.
