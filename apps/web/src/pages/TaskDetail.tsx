@@ -497,7 +497,7 @@ export function TaskDetail() {
                     {s.verified && (
                       <div className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-emerald-300">
                         <ShieldCheck size={12} className="shrink-0" />
-                        Trustlessly verified before payment — the result was re-checked on-chain,
+                        Trustlessly verified before payment: the result was re-checked on-chain,
                         not just accepted.
                       </div>
                     )}
@@ -509,6 +509,49 @@ export function TaskDetail() {
                           {s.qualityNote ? ` · ${s.qualityNote}` : ''}
                           <span className="text-slate-500"> (advisory, not a payment gate)</span>
                         </span>
+                      </div>
+                    )}
+                    {s.milestones && s.milestones.length > 0 && (
+                      <div className="mt-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">
+                        <div className="text-[11px] font-medium text-slate-400">
+                          Acceptance milestones
+                        </div>
+                        <ul className="mt-1 space-y-1">
+                          {s.milestones.map((m) => (
+                            <li
+                              key={m.id}
+                              className="flex items-start justify-between gap-2 text-[11px]"
+                            >
+                              <span className="min-w-0">
+                                <span className="text-slate-300">{m.title}</span>
+                                {m.criteria && (
+                                  <span className="text-slate-500">: {m.criteria}</span>
+                                )}
+                                {typeof m.score === 'number' && (
+                                  <span className="text-sky-300">
+                                    {' '}
+                                    · judged {m.score.toFixed(1)}/5
+                                  </span>
+                                )}
+                                {m.note && <span className="text-slate-500"> ({m.note})</span>}
+                              </span>
+                              <span className="shrink-0 text-right">
+                                <span className="text-slate-400">${m.amountUsdc.toFixed(2)}</span>
+                                <span
+                                  className={`ml-1 ${
+                                    m.status === 'accepted'
+                                      ? 'text-emerald-300'
+                                      : m.status === 'rejected'
+                                        ? 'text-rose-300'
+                                        : 'text-slate-500'
+                                  }`}
+                                >
+                                  {m.status}
+                                </span>
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     )}
                     {s.artifact && (
