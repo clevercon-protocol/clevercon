@@ -1,9 +1,14 @@
 import { build } from 'esbuild';
 import { chmodSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 // Stamp the npm version into the bundle so serverInfo.version tells a client exactly
 // which build it is talking to (esbuild replaces the process.env.MCP_VERSION token).
-const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'));
+// Resolve package.json next to this file (fileURLToPath avoids the URL global that the
+// lint env does not define, and is independent of the working directory).
+const here = dirname(fileURLToPath(import.meta.url));
+const { version } = JSON.parse(readFileSync(join(here, 'package.json'), 'utf-8'));
 
 /**
  * Bundle the MCP server into self-contained dist files so `npx -y @clevercon/mcp`
