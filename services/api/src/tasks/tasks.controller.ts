@@ -25,6 +25,18 @@ const createSchema = z.object({
   // Structured job input for the provider (validated against the service's
   // inputSchema by the worker); may carry an attachment ArtifactRef.
   input: z.record(z.unknown()).optional(),
+  // Proposed acceptance milestones for a judged (T2/T3) hire (planner output, optionally
+  // edited). Normalized server-side to sum to the price; ignored for T1/free.
+  milestones: z
+    .array(
+      z.object({
+        title: z.string().max(200),
+        criteria: z.string().max(1000).optional(),
+        amountUsdc: z.number().nonnegative().optional(),
+      }),
+    )
+    .max(20)
+    .optional(),
   // Also accepted in the body for clients that cannot set a header.
   idempotencyKey: z.string().min(1).max(255).optional(),
 });

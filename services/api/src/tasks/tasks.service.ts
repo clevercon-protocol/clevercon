@@ -18,6 +18,7 @@ import type {
 import { satisfiedKeys, unmetPrerequisites, unmetMessage } from '../services/prerequisites.js';
 import { validateAgainstSchema, type SchemaDoc } from './schema-check.js';
 import { checkEligibility, type EligibilityRules } from '../policies/eligibility.js';
+import { normalizeMilestones, tierUsesMilestones } from './milestones.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueueService } from '../queue/queue.service.js';
 import { VaultContractService } from '../vault/vault-contract.service.js';
@@ -46,6 +47,9 @@ export interface CreateTaskParams {
   description?: string;
   /** Structured job input for the provider (e.g. an attachment ArtifactRef). */
   input?: Record<string, unknown>;
+  /** Proposed acceptance milestones for a judged (T2/T3) hire (planner output, optionally
+   *  edited by the buyer). Normalized server-side to sum to the price; ignored for T1/free. */
+  milestones?: unknown;
   /** Client-supplied Idempotency-Key: a retry with the same key returns the original task. */
   idempotencyKey?: string;
 }
@@ -307,6 +311,17 @@ export class TasksService {
       const cost = fn
         ? new Prisma.Decimal(functionAmount(fn))
         : (service.pricePerCall as Prisma.Decimal);
+      // Acceptance milestones for a judged (T2/T3), priced hire: normalize the proposal
+      // (client-provided, from the planner/editor) against the price, or default to one
+      // milestone = the whole price. T1 / free hires get none (auto-verified).
+      const milestones =
+        tierUsesMilestones(service.tier) && Number(cost) > 0
+          ? normalizeMilestones(
+              params.milestones,
+              Number(cost),
+              fn ? fn.label : (service.name ?? 'Deliver'),
+            )
+          : null;
       data.steps = {
         create: [
           {
@@ -318,6 +333,7 @@ export class TasksService {
             estimatedCost: cost,
             status: StepStatus.PENDING,
             ...(params.input ? { input: params.input as Prisma.InputJsonValue } : {}),
+            ...(milestones ? { milestones: milestones as unknown as Prisma.InputJsonValue } : {}),
           },
         ],
       };
@@ -781,6 +797,9 @@ export class TasksService {
         // Advisory LLM-judge signal for the buyer (0-5 + rationale); never gates pay.
         qualityRating: s.qualityRating,
         qualityNote: s.qualityNote,
+        // Acceptance milestones for a judged hire ({id,title,criteria,amountUsdc,status,
+        // score?,note?}[]); null for T1 / direct spends. Editable until the job runs.
+        milestones: s.milestones,
         // A file the provider delivered: {url, hash, contentType, size} (downloadable + hash-verifiable).
         artifact: s.artifact,
         // Async progress a working step last reported: { pct?, message? }.

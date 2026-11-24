@@ -63,6 +63,17 @@ export interface InputRequestView {
   schema?: Record<string, unknown> | null;
 }
 
+/** One acceptance milestone of a judged hire (its share of the price + judge result). */
+export interface Milestone {
+  id: string;
+  title: string;
+  criteria: string;
+  amountUsdc: number;
+  status: 'pending' | 'accepted' | 'rejected';
+  score?: number;
+  note?: string;
+}
+
 export interface TaskStepView {
   // Step id, needed to answer a needs-input step.
   id?: string;
@@ -78,6 +89,8 @@ export interface TaskStepView {
   paid?: boolean;
   // Settlement state: paid | pending (delivered, not yet settled) | failed | none.
   settlementStatus?: 'paid' | 'pending' | 'failed' | 'none';
+  // Acceptance milestones for a judged hire (null for T1 / direct spends).
+  milestones?: Milestone[] | null;
   // Verification tier (T1/T2/T3) and whether a released step was trustlessly verified.
   tier?: string | null;
   verified?: boolean;
@@ -174,6 +187,8 @@ export interface CreateTaskInput {
   description?: string;
   // Structured job input for the provider (e.g. { attachment: ArtifactRef }).
   input?: Record<string, unknown>;
+  // Proposed/edited acceptance milestones for a judged hire (normalized server-side).
+  milestones?: { title: string; criteria?: string; amountUsdc?: number }[];
 }
 
 /** Create a task (hire). In demo mode this returns a local stand-in. */
