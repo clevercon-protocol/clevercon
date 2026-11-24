@@ -25,6 +25,14 @@ const interpretSchema = z.object({
   result: z.unknown(),
 });
 
+const milestonesSchema = z.object({
+  instruction: z.string().min(1).max(2000),
+  // The chosen service/function label, for context.
+  label: z.string().max(200).optional(),
+  // The hire price, so the caller can show amounts (server still normalizes on hire).
+  price: z.number().nonnegative().optional(),
+});
+
 /**
  * The chat agent's brain: parse a natural-language instruction into a structured
  * spending plan. It only PROPOSES; the human approves and the vault enforces the
@@ -46,5 +54,13 @@ export class AgentController {
   async interpret(@Body() body: unknown) {
     const { instruction, result } = parseBody(interpretSchema, body);
     return { answer: await this.agent.interpret(instruction, result) };
+  }
+
+  /** Propose acceptance milestones for a judged hire (the buyer may edit before hiring). */
+  @Post('milestones')
+  async milestones(@Body() body: unknown) {
+    const { instruction, label, price } = parseBody(milestonesSchema, body);
+    const milestones = await this.agent.extractMilestones(instruction, label ?? '', price ?? 0);
+    return { milestones };
   }
 }

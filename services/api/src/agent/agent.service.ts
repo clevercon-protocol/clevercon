@@ -56,6 +56,15 @@ function functionsBlurb(functions: unknown): string {
 
 const STELLAR_ADDR = /^G[A-Z2-7]{55}$/;
 
+/** Parse the first JSON array found in an LLM reply (tolerates prose/markdown fences). */
+function firstJsonArray(text: string): unknown[] {
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  if (start === -1 || end <= start) return [];
+  const parsed = JSON.parse(text.slice(start, end + 1)) as unknown;
+  return Array.isArray(parsed) ? parsed : [];
+}
+
 // The structured shape the model must return. All fields required + no extras so
 // the tool call is well-formed; the model fills empties where a field is N/A.
 const PLAN_SCHEMA = {
@@ -262,6 +271,45 @@ export class AgentService {
     } catch (err) {
       this.logger.warn(`interpret failed: ${(err as Error).message}`);
       return '';
+    }
+  }
+
+  /**
+   * Propose acceptance milestones for a judged hire: break the task into 1-5 checkpoints,
+   * each with concrete "done" criteria the judge can score. ONE milestone when it is a
+   * single deliverable; several only for genuinely distinct checkpoints. Amounts are left
+   * to the server normalizer (even split) unless the buyer edits them. Fail-safe: returns
+   * a single milestone covering the whole task when no LLM is configured or parsing fails.
+   */
+  async extractMilestones(
+    instruction: string,
+    label: string,
+    priceUsdc: number,
+  ): Promise<{ title: string; criteria: string; amountUsdc?: number }[]> {
+    const single = [
+      { title: (label || 'Deliver').slice(0, 80), criteria: instruction.trim().slice(0, 300) },
+    ];
+    if (this.provider() === 'none' || !instruction.trim()) return single;
+    const system =
+      'You break a hired task into acceptance milestones so delivery quality can be judged. ' +
+      'Return ONLY a JSON array (no prose, no markdown fences) of 1 to 5 objects, each ' +
+      '{"title": string, "criteria": string}. `criteria` states concretely what "done" means ' +
+      'for that milestone (what a reviewer checks). Use ONE milestone when the task is a single ' +
+      'deliverable; use several ONLY when there are genuinely distinct checkpoints. Short titles.';
+    const user = `Task: "${instruction}"\nService/function: ${label}\nPrice: ${priceUsdc} USDC\nReturn the JSON array only.`;
+    try {
+      const arr = firstJsonArray(await this.complete(system, user));
+      const out = arr
+        .map((m) => ({
+          title: String((m as { title?: unknown }).title ?? '').trim(),
+          criteria: String((m as { criteria?: unknown }).criteria ?? '').trim(),
+        }))
+        .filter((m) => m.title.length > 0)
+        .slice(0, 5);
+      return out.length ? out : single;
+    } catch (err) {
+      this.logger.warn(`extractMilestones failed: ${(err as Error).message}`);
+      return single;
     }
   }
 

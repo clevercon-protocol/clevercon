@@ -21,6 +21,14 @@ describe('AgentService (fallback, no API key)', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  it('extractMilestones falls back to one milestone when no LLM is configured', async () => {
+    const svc = makeService(10);
+    const ms = await svc.extractMilestones('write a research report', 'Report service', 0.05);
+    expect(ms).toHaveLength(1);
+    expect(ms[0].title).toBe('Report service');
+    expect(ms[0].criteria).toContain('research report');
+  });
+
   it('parses a direct payment with a valid address', async () => {
     const svc = makeService(10);
     const payee = G();
