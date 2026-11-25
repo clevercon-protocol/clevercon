@@ -128,3 +128,138 @@ export async function judgeDelivery(params: JudgeInput): Promise<JudgeVerdict | 
     return null;
   }
 }
+
+/** One acceptance milestone to score (its id so the verdict maps back, + the rubric). */
+export interface MilestoneJudgeItem {
+  id: string;
+  title: string;
+  criteria?: string;
+}
+
+/** Per-milestone verdict: whether the delivery met it, a 0-5 score, and a rationale. */
+export interface MilestoneVerdict {
+  id: string;
+  met: boolean;
+  score: number;
+  note: string;
+}
+
+export interface MilestoneJudgeInput extends Omit<JudgeInput, 'rubric'> {
+  milestones: MilestoneJudgeItem[];
+}
+
+const MILESTONE_SYSTEM_PROMPT =
+  'You are a strict acceptance auditor for an AI agent marketplace. A buyer hired a ' +
+  'provider and agreed a list of acceptance MILESTONES, each with its own criteria. ' +
+  'Judge the delivered OUTPUT against EACH milestone independently. For each, decide ' +
+  'if it is met (met=true only when the criteria are genuinely satisfied by the ' +
+  'substance of the output), a 0-5 score (0 = not addressed, 3 = partially, 5 = fully ' +
+  'satisfied), and one concise sentence of rationale. Be skeptical: do not reward ' +
+  'verbosity or restating the request. Always call the score_milestones tool and ' +
+  'return exactly one result per milestone, by its index.';
+
+/**
+ * Score each acceptance milestone of a judged hire against the delivery. Advisory in
+ * P1 (surfaced to the buyer, never gates payment yet). Returns null when judging is
+ * disabled (no API key / no milestones) or on any failure; the milestones stay pending.
+ */
+export async function judgeMilestones(
+  params: MilestoneJudgeInput,
+): Promise<MilestoneVerdict[] | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey || params.milestones.length === 0) return null;
+  const model = process.env.LLM_JUDGE_MODEL ?? 'claude-haiku-4-5-20251001';
+  const fetchImpl = params.fetchImpl ?? fetch;
+
+  const list = params.milestones
+    .map((m, i) => `${i}. ${m.title}${m.criteria ? ` - ${m.criteria}` : ''}`)
+    .join('\n');
+  const userContent = [
+    `SERVICE: ${clip(params.description)}`,
+    `ACTION: ${clip(params.action)}`,
+    `REQUEST INPUT:\n${clip(params.input)}`,
+    `DELIVERED OUTPUT:\n${clip(params.output)}`,
+    `MILESTONES (score each by its leading index):\n${list}`,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
+  try {
+    const res = await fetchImpl('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 600,
+        system: MILESTONE_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: userContent }],
+        tools: [
+          {
+            name: 'score_milestones',
+            description: 'Record a met/score/note verdict for every milestone, by index.',
+            input_schema: {
+              type: 'object',
+              properties: {
+                results: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      index: { type: 'number', description: 'The milestone index scored.' },
+                      met: { type: 'boolean', description: 'Whether the output meets it.' },
+                      score: { type: 'number', description: '0 to 5.' },
+                      note: { type: 'string', description: 'One concise sentence.' },
+                    },
+                    required: ['index', 'met', 'score', 'note'],
+                  },
+                },
+              },
+              required: ['results'],
+            },
+          },
+        ],
+        tool_choice: { type: 'tool', name: 'score_milestones' },
+      }),
+      signal: AbortSignal.timeout(JUDGE_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      logger.warn({ status: res.status }, 'llm-milestone-judge call failed');
+      return null;
+    }
+    const body = (await res.json()) as {
+      content?: Array<{ type: string; name?: string; input?: unknown }>;
+    };
+    const block = body.content?.find((b) => b.type === 'tool_use' && b.name === 'score_milestones');
+    const results = (block?.input as { results?: unknown } | undefined)?.results;
+    if (!Array.isArray(results)) return null;
+    // Map each returned verdict back to its milestone by index; unmatched stay absent.
+    const byIndex = new Map<number, { met: boolean; score: number; note: string }>();
+    for (const r of results) {
+      const row = r as { index?: unknown; met?: unknown; score?: unknown; note?: unknown };
+      const i = typeof row.index === 'number' ? row.index : NaN;
+      if (!Number.isInteger(i) || i < 0 || i >= params.milestones.length) continue;
+      const score = typeof row.score === 'number' ? Math.max(0, Math.min(5, row.score)) : 0;
+      byIndex.set(i, {
+        met: row.met === true,
+        score: Math.round(score * 10) / 10,
+        note: typeof row.note === 'string' ? row.note.trim().slice(0, 400) : '',
+      });
+    }
+    const verdicts: MilestoneVerdict[] = [];
+    params.milestones.forEach((m, i) => {
+      const v = byIndex.get(i);
+      if (v) verdicts.push({ id: m.id, ...v });
+    });
+    return verdicts.length ? verdicts : null;
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'llm-milestone-judge errored',
+    );
+    return null;
+  }
+}

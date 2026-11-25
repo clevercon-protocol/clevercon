@@ -14,6 +14,7 @@ import {
   type VerificationSpec,
   type JsonSchema,
   type InputRequest,
+  type Milestone,
 } from '@clevercon/common';
 import {
   enqueueSettlement,
@@ -22,7 +23,18 @@ import {
   enqueueTaskExecution,
 } from './queue.js';
 import { finalizeTaskIfComplete } from './settlement.js';
-import { judgeDelivery, type JudgeInput, type JudgeVerdict } from './judge.js';
+import {
+  judgeDelivery,
+  judgeMilestones,
+  type JudgeInput,
+  type JudgeVerdict,
+  type MilestoneJudgeInput,
+  type MilestoneVerdict,
+} from './judge.js';
+
+/** The judge dependency pair, so the held path scores the delivery + its milestones. */
+type JudgeFn = (args: JudgeInput) => Promise<JudgeVerdict | null>;
+type MilestoneJudgeFn = (args: MilestoneJudgeInput) => Promise<MilestoneVerdict[] | null>;
 
 export interface ExecuteResult {
   // `awaiting` = the task ran but is holding at least one T2 step for its dispute
@@ -44,7 +56,9 @@ export interface ExecuteDeps {
   /** Schedule the next poll of a parked async/needs-input step. */
   scheduleStepPoll?: (stepId: string, delayMs: number) => Promise<void>;
   /** Advisory quality judge for held T2 steps (defaults to the Anthropic judge). */
-  judge?: (args: JudgeInput) => Promise<JudgeVerdict | null>;
+  judge?: JudgeFn;
+  /** Advisory per-milestone judge for a held hire (defaults to the Anthropic judge). */
+  judgeMs?: MilestoneJudgeFn;
 }
 
 type FetchImpl = typeof fetch;
@@ -276,7 +290,8 @@ function buildBaseRequest(
 export interface FinalizeDeps {
   scheduleRelease: (stepId: string, delayMs: number) => Promise<void>;
   enqueueSettle: (stepId: string) => Promise<void>;
-  judge: (args: JudgeInput) => Promise<JudgeVerdict | null>;
+  judge: JudgeFn;
+  judgeMs: MilestoneJudgeFn;
 }
 
 /** Narrow shape of a step row the finalize/park helpers touch. */
@@ -286,6 +301,8 @@ type StepRow = {
   serviceId?: string | null;
   providerJobHandle?: string | null;
   status?: string;
+  // Acceptance milestones JSON (present only for a judged hire); scored on delivery.
+  milestones?: unknown;
   service?: {
     tier?: string | null;
     outputSchema?: unknown;
@@ -293,6 +310,37 @@ type StepRow = {
     description?: string | null;
   } | null;
 };
+
+/**
+ * Score a held hire's acceptance milestones against the delivery and merge the verdicts
+ * (status accepted/rejected + score + note) into the milestone list. Best-effort: returns
+ * null when there are no milestones, judging is disabled, or the judge fails, leaving the
+ * milestones pending. Advisory in this tier (it is surfaced, never gates payment).
+ */
+async function scoreMilestones(
+  raw: unknown,
+  judgeInput: JudgeInput,
+  judgeMs: MilestoneJudgeFn,
+): Promise<Milestone[] | null> {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const milestones = raw as Milestone[];
+  const verdicts = await judgeMs({
+    ...judgeInput,
+    milestones: milestones.map((m) => ({ id: m.id, title: m.title, criteria: m.criteria })),
+  });
+  if (!verdicts) return null;
+  const byId = new Map(verdicts.map((v) => [v.id, v]));
+  return milestones.map((m) => {
+    const v = byId.get(m.id);
+    if (!v) return m;
+    return {
+      ...m,
+      status: v.met ? 'accepted' : 'rejected',
+      score: v.score,
+      ...(v.note ? { note: v.note } : {}),
+    };
+  });
+}
 
 /**
  * Shared acceptance -> hold/release pipeline for a COMPLETED provider delivery,
@@ -348,17 +396,26 @@ async function finalizeDelivery(
     step.status = StepStatus.AWAITING_APPROVAL;
     if (step.serviceId) await recordOutcome(prisma, step.serviceId, true, latencyMs);
     // Advisory quality signal for the buyer during the window: never gates payment.
+    // For a judged hire we also score each acceptance milestone (accepted/rejected
+    // + score/note), surfaced on the Job view; both are best-effort and never gate.
     try {
-      const verdict = await deps.judge({
+      const judgeInput: JudgeInput = {
         description: step.service?.description ?? step.action,
         action: step.action,
         input,
         output: envelope.data,
-      });
-      if (verdict) {
+      };
+      const verdict = await deps.judge(judgeInput);
+      const scored = await scoreMilestones(step.milestones, judgeInput, deps.judgeMs);
+      if (verdict || scored) {
         await prisma.taskStep.update({
           where: { id: step.id },
-          data: { qualityRating: verdict.rating, qualityNote: verdict.note || null },
+          data: {
+            ...(verdict
+              ? { qualityRating: verdict.rating, qualityNote: verdict.note || null }
+              : {}),
+            ...(scored ? { milestones: jsonIn(scored) } : {}),
+          },
         });
       }
     } catch {
@@ -498,6 +555,7 @@ export async function executeTask(
   const enqueueSettle = deps.enqueueSettle ?? enqueueSettlement;
   const scheduleStepPoll = deps.scheduleStepPoll ?? enqueueStepPoll;
   const judge = deps.judge ?? judgeDelivery;
+  const judgeMs = deps.judgeMs ?? judgeMilestones;
   const windowSec = disputeWindowSeconds();
   const task = await prisma.task.findUnique({
     where: { id: taskId },
@@ -622,7 +680,7 @@ export async function executeTask(
         rawText,
         latencyMs,
         windowSec,
-        { scheduleRelease, enqueueSettle, judge },
+        { scheduleRelease, enqueueSettle, judge, judgeMs },
       );
       if (outcome === 'held') anyHeld = true;
       stepsRun += 1;
@@ -676,7 +734,8 @@ export interface PollDeps {
   enqueueSettle?: (stepId: string) => Promise<void>;
   /** Re-run the task so dependents proceed and the task finalizes (defaults to the queue). */
   reEnqueueTask?: (taskId: string) => Promise<void>;
-  judge?: (args: JudgeInput) => Promise<JudgeVerdict | null>;
+  judge?: JudgeFn;
+  judgeMs?: MilestoneJudgeFn;
 }
 
 export interface PollStepResult {
@@ -711,6 +770,7 @@ export async function pollStep(
   const enqueueSettle = deps.enqueueSettle ?? enqueueSettlement;
   const reEnqueueTask = deps.reEnqueueTask ?? enqueueTaskExecution;
   const judge = deps.judge ?? judgeDelivery;
+  const judgeMs = deps.judgeMs ?? judgeMilestones;
 
   const step = await prisma.taskStep.findUnique({
     where: { id: stepId },
@@ -881,7 +941,7 @@ export async function pollStep(
         rawText,
         latencyMs,
         disputeWindowSeconds(),
-        { scheduleRelease, enqueueSettle, judge },
+        { scheduleRelease, enqueueSettle, judge, judgeMs },
       );
       try {
         await reEnqueueTask(task.id);
