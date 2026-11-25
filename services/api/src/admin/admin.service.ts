@@ -4,6 +4,8 @@ import { Prisma, PaymentMethod, PaymentStatus, Role, ServiceStatus } from '@clev
 import type { AppEnv } from '../config/env.validation.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { VaultContractService } from '../vault/vault-contract.service.js';
+import { settlementAmount } from '../tasks/milestones.js';
+import { proposeDisputeSplit, type ArbiterStep } from './arbiter.js';
 
 /** Operator-facing platform data. All methods are ADMIN-gated at the controller. */
 @Injectable()
@@ -295,6 +297,73 @@ export class AdminService {
       },
     });
     return { id: updated.id, status: updated.status, resolvedAt: updated.resolvedAt };
+  }
+
+  /**
+   * AI first-pass arbiter: propose a fair refund/payout split for an open dispute,
+   * with reasoning, for the operator to review and confirm (it moves no money). The
+   * split is of the still-locked remainder (budget - already-spent). Falls back to a
+   * deterministic, accepted-milestone-aware heuristic when no LLM is configured.
+   */
+  async proposeDisputeResolution(disputeId: string) {
+    const dispute = await this.prisma.dispute.findUnique({
+      where: { id: disputeId },
+      include: {
+        task: {
+          select: {
+            budget: true,
+            steps: {
+              select: {
+                action: true,
+                status: true,
+                estimatedCost: true,
+                milestones: true,
+                output: true,
+              },
+            },
+            payments: { select: { amount: true, status: true } },
+          },
+        },
+      },
+    });
+    if (!dispute) throw new NotFoundException('Dispute not found');
+    if (dispute.status !== 'OPEN') throw new BadRequestException('Dispute is already resolved');
+    const task = dispute.task;
+
+    const budgetUsdc = Number(task.budget);
+    const spentUsdc = task.payments
+      .filter((p) => p.status === PaymentStatus.CONFIRMED)
+      .reduce((a, p) => a + Number(p.amount), 0);
+    const remainderUsdc = Math.max(0, Math.round((budgetUsdc - spentUsdc) * 1e7) / 1e7);
+
+    const steps: ArbiterStep[] = task.steps.map((s) => {
+      const price = Number(s.estimatedCost);
+      const ms = Array.isArray(s.milestones)
+        ? (s.milestones as { title?: string; status?: string; amountUsdc?: number }[]).map((m) => ({
+            title: typeof m?.title === 'string' ? m.title : '',
+            status: typeof m?.status === 'string' ? m.status : 'pending',
+            amountUsdc: Number(m?.amountUsdc) || 0,
+          }))
+        : null;
+      return {
+        action: s.action,
+        status: s.status,
+        priceUsdc: price,
+        owedUsdc: settlementAmount(s.milestones, price),
+        milestones: ms && ms.length ? ms : null,
+        outputSnippet: s.output ?? null,
+      };
+    });
+
+    const proposal = await proposeDisputeSplit({
+      reason: dispute.reason,
+      providerResponse: dispute.providerResponse,
+      budgetUsdc,
+      spentUsdc,
+      remainderUsdc,
+      steps,
+    });
+    return { disputeId, remainderUsdc, ...proposal };
   }
 
   /** Paginated user list with roles, wallet, and role-relevant counts. */

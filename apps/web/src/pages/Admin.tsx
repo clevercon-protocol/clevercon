@@ -10,6 +10,7 @@ import {
   Rocket,
   Building2,
   BadgeCheck,
+  Sparkles,
 } from 'lucide-react';
 import {
   getAdminStats,
@@ -24,32 +25,185 @@ import {
   moderateService,
   getDisputes,
   resolveDispute,
+  proposeDisputeResolution,
   getAdminOrgs,
   verifyOrg,
   verifyUser,
+  type AdminDispute,
 } from '../lib/admin';
 import { Loading, ErrorState, controls } from '../components/ui';
 
-function DisputesCard() {
+/**
+ * One dispute in the operator queue. For an open dispute the operator can settle it
+ * fast (full refund / reject), or ask the AI first-pass arbiter to PROPOSE a split of
+ * the still-locked remainder (with reasoning) - then review, edit the amounts, and
+ * confirm the on-chain resolve. The AI moves no money; the human always confirms.
+ */
+function DisputeRow({ dispute: d }: { dispute: AdminDispute }) {
   const qc = useQueryClient();
+  const [split, setSplit] = useState<{ refund: string; payout: string } | null>(null);
+  const [proposal, setProposal] = useState<{
+    reasoning: string;
+    confidence: string;
+    source: string;
+    remainderUsdc: number;
+  } | null>(null);
+
+  const propose = useMutation({
+    mutationFn: () => proposeDisputeResolution(d.id),
+    onSuccess: (p) => {
+      setSplit({ refund: String(p.refundToUser), payout: String(p.payoutToProvider) });
+      setProposal({
+        reasoning: p.reasoning,
+        confidence: p.confidence,
+        source: p.source,
+        remainderUsdc: p.remainderUsdc,
+      });
+    },
+  });
+  const resolve = useMutation({
+    mutationFn: (v: { refund: number; payout: number; upheld: boolean; resolution: string }) =>
+      resolveDispute(d.id, {
+        resolution: v.resolution,
+        upheld: v.upheld,
+        refundToUser: v.refund,
+        payoutToProvider: v.payout,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-disputes'] }),
+  });
+  const busy = propose.isPending || resolve.isPending;
+  const refundNum = Number(split?.refund ?? 0);
+  const payoutNum = Number(split?.payout ?? 0);
+  const splitValid =
+    Number.isFinite(refundNum) && Number.isFinite(payoutNum) && refundNum >= 0 && payoutNum >= 0;
+
+  return (
+    <div className="rounded-xl bg-white/[0.04] p-3 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate font-medium">{d.taskTitle}</div>
+          <div className="truncate text-xs text-slate-500">
+            {d.raisedBy.slice(0, 6)}…{d.raisedBy.slice(-4)}
+            {d.reason ? ` · ${d.reason}` : ''}
+            {d.status !== 'OPEN' && d.resolution ? ` · ${d.resolution}` : ''}
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-slate-300">${d.budget.toFixed(2)}</span>
+          {d.status === 'OPEN' ? (
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                onClick={() => propose.mutate()}
+                disabled={busy}
+                className="inline-flex items-center gap-1 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-xs text-violet-300 hover:bg-violet-500/20 disabled:opacity-50"
+              >
+                <Sparkles size={12} /> {propose.isPending ? 'Thinking…' : 'Suggest split (AI)'}
+              </button>
+              <button
+                onClick={() =>
+                  resolve.mutate({
+                    refund: d.budget,
+                    payout: 0,
+                    upheld: true,
+                    resolution: 'Refunded to buyer',
+                  })
+                }
+                disabled={busy}
+                className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+              >
+                Refund buyer
+              </button>
+              <button
+                onClick={() =>
+                  resolve.mutate({
+                    refund: 0,
+                    payout: d.budget,
+                    upheld: false,
+                    resolution: 'Rejected by operator',
+                  })
+                }
+                disabled={busy}
+                className="rounded-lg bg-white/[0.05] px-2.5 py-1 text-xs text-slate-400 hover:bg-white/10 disabled:opacity-50"
+              >
+                Reject
+              </button>
+            </div>
+          ) : (
+            <span
+              className={`text-xs ${d.status === 'RESOLVED' ? 'text-emerald-300' : 'text-slate-500'}`}
+            >
+              {d.status}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {proposal && split && d.status === 'OPEN' && (
+        <div className="mt-3 rounded-lg border border-violet-500/20 bg-violet-500/[0.05] p-3">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+            <Sparkles size={12} className="text-violet-300" />
+            <span className="font-medium text-slate-300">Proposed split</span>
+            <span className="rounded bg-white/[0.06] px-1.5 py-0.5">
+              {proposal.source === 'llm' ? 'AI' : 'heuristic'} · {proposal.confidence} confidence
+            </span>
+            <span className="text-slate-500">remainder ${proposal.remainderUsdc.toFixed(2)}</span>
+          </div>
+          <p className="mt-1.5 text-xs text-slate-400">{proposal.reasoning}</p>
+          <div className="mt-2 flex flex-wrap items-end gap-2">
+            <label className="text-[11px] text-slate-500">
+              Refund buyer
+              <input
+                value={split.refund}
+                onChange={(e) => setSplit({ ...split, refund: e.target.value })}
+                inputMode="decimal"
+                className="mt-0.5 block w-24 rounded-md bg-black/30 px-2 py-1 text-xs text-slate-200 outline-none focus:border-violet-500/40"
+              />
+            </label>
+            <label className="text-[11px] text-slate-500">
+              Pay provider
+              <input
+                value={split.payout}
+                onChange={(e) => setSplit({ ...split, payout: e.target.value })}
+                inputMode="decimal"
+                className="mt-0.5 block w-24 rounded-md bg-black/30 px-2 py-1 text-xs text-slate-200 outline-none focus:border-violet-500/40"
+              />
+            </label>
+            <button
+              onClick={() =>
+                resolve.mutate({
+                  refund: refundNum,
+                  payout: payoutNum,
+                  upheld: refundNum > 0,
+                  resolution: `AI-assisted split: $${refundNum.toFixed(2)} refund / $${payoutNum.toFixed(2)} payout`,
+                })
+              }
+              disabled={busy || !splitValid}
+              className="rounded-lg border border-violet-500/30 bg-violet-500/15 px-3 py-1.5 text-xs text-violet-200 hover:bg-violet-500/25 disabled:opacity-50"
+            >
+              {resolve.isPending ? 'Settling…' : 'Confirm split'}
+            </button>
+          </div>
+          <p className="mt-1.5 text-[10px] text-slate-600">
+            The AI only proposes. Review the amounts, then confirm to settle on-chain.
+          </p>
+        </div>
+      )}
+
+      {(propose.error || resolve.error) && (
+        <p className="mt-2 text-xs text-amber-300">
+          {((propose.error || resolve.error) as Error).message || 'Could not complete that action.'}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function DisputesCard() {
   const {
     data: disputes = [],
     isLoading,
     error,
   } = useQuery({ queryKey: ['admin-disputes'], queryFn: getDisputes });
-  const act = useMutation({
-    // On-chain settlement: the vault splits the still-locked remainder. "Refund
-    // buyer" upholds the dispute and sends the budget back; "Reject" pays it to
-    // the provider. (For a partial split, extend this to collect two amounts.)
-    mutationFn: (v: { id: string; reject: boolean; budget: number }) =>
-      resolveDispute(v.id, {
-        resolution: v.reject ? 'Rejected by operator' : 'Refunded to buyer',
-        upheld: !v.reject,
-        refundToUser: v.reject ? 0 : v.budget,
-        payoutToProvider: v.reject ? v.budget : 0,
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-disputes'] }),
-  });
   const open = disputes.filter((d) => d.status === 'OPEN');
   return (
     <div className="rounded-2xl bg-white/[0.04] p-6">
@@ -69,54 +223,10 @@ function DisputesCard() {
       )}
       <div className="mt-4 space-y-2">
         {disputes.map((d) => (
-          <div
-            key={d.id}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.04] p-3 text-sm"
-          >
-            <div className="min-w-0">
-              <div className="truncate font-medium">{d.taskTitle}</div>
-              <div className="truncate text-xs text-slate-500">
-                {d.raisedBy.slice(0, 6)}…{d.raisedBy.slice(-4)}
-                {d.reason ? ` · ${d.reason}` : ''}
-                {d.status !== 'OPEN' && d.resolution ? ` · ${d.resolution}` : ''}
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-slate-300">${d.budget.toFixed(2)}</span>
-              {d.status === 'OPEN' ? (
-                <div className="flex gap-1.5">
-                  <button
-                    onClick={() => act.mutate({ id: d.id, reject: false, budget: d.budget })}
-                    disabled={act.isPending}
-                    className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
-                  >
-                    Refund buyer
-                  </button>
-                  <button
-                    onClick={() => act.mutate({ id: d.id, reject: true, budget: d.budget })}
-                    disabled={act.isPending}
-                    className="rounded-lg bg-white/[0.05] px-2.5 py-1 text-xs text-slate-400 hover:bg-white/10 disabled:opacity-50"
-                  >
-                    Reject
-                  </button>
-                </div>
-              ) : (
-                <span
-                  className={`text-xs ${d.status === 'RESOLVED' ? 'text-emerald-300' : 'text-slate-500'}`}
-                >
-                  {d.status}
-                </span>
-              )}
-            </div>
-          </div>
+          <DisputeRow key={d.id} dispute={d} />
         ))}
       </div>
       {open.length > 0 && <p className="mt-3 text-xs text-slate-500">{open.length} open</p>}
-      {act.error && (
-        <p className="mt-3 text-xs text-amber-300">
-          {(act.error as Error).message || 'Could not settle the dispute on-chain.'}
-        </p>
-      )}
     </div>
   );
 }

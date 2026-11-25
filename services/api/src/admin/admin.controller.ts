@@ -113,6 +113,12 @@ export class AdminController {
     return this.admin.listDisputes(status);
   }
 
+  /** AI-proposed refund/payout split for an open dispute (review + confirm; moves nothing). */
+  @Post('disputes/:id/propose')
+  proposeDispute(@Param('id') id: string) {
+    return this.admin.proposeDisputeResolution(id);
+  }
+
   /** Resolve or reject an open dispute. */
   @Post('disputes/:id/resolve')
   resolveDispute(@Param('id') id: string, @Body() body: unknown) {

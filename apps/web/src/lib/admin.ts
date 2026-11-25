@@ -198,6 +198,26 @@ export async function getDisputes(): Promise<AdminDispute[]> {
   return res.items;
 }
 
+/** An AI-proposed refund/payout split for a dispute (the operator reviews + confirms). */
+export interface DisputeProposal {
+  disputeId: string;
+  remainderUsdc: number;
+  refundToUser: number;
+  payoutToProvider: number;
+  reasoning: string;
+  confidence: 'low' | 'medium' | 'high';
+  source: 'llm' | 'fallback';
+}
+
+/**
+ * Ask the AI first-pass arbiter to propose a fair split for an open dispute. It moves
+ * no money: it returns a suggested refund/payout of the still-locked remainder + the
+ * reasoning, which the operator reviews, edits, and confirms via resolveDispute.
+ */
+export async function proposeDisputeResolution(id: string): Promise<DisputeProposal> {
+  return apiPost<DisputeProposal>(`/admin/disputes/${id}/propose`, {});
+}
+
 /**
  * Settle a dispute on-chain: signs resolve_dispute with the platform resolver key
  * and splits the locked remainder (the vault enforces refund + payout == plan_cost
