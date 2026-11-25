@@ -257,6 +257,37 @@ export async function planInstruction(
   });
 }
 
+/** A proposed acceptance milestone before hire (amounts are rescaled server-side). */
+export interface MilestoneDraft {
+  title: string;
+  criteria?: string;
+  amountUsdc?: number;
+}
+
+/**
+ * Ask the agent to propose acceptance milestones for a judged (T2/T3) hire, from the
+ * buyer's instruction. The buyer may edit these before approving; the server rescales
+ * the amounts to sum to the job price on hire. Returns [] when unavailable (non-fatal),
+ * so the caller can fall back to a single whole-price milestone.
+ */
+export async function proposeMilestones(
+  instruction: string,
+  label: string,
+  price: number,
+): Promise<MilestoneDraft[]> {
+  if (isDemo()) return [];
+  try {
+    const { milestones } = await apiPost<{ milestones: MilestoneDraft[] }>('/agent/milestones', {
+      instruction,
+      label,
+      price,
+    });
+    return milestones ?? [];
+  } catch {
+    return [];
+  }
+}
+
 /** Explain a delivered result in plain language, answering the original request.
  *  Returns '' when no LLM is configured (the caller shows the raw result instead). */
 export async function interpretResult(instruction: string, result: unknown): Promise<string> {

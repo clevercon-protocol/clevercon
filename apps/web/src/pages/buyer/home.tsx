@@ -44,8 +44,10 @@ import {
   answerStep,
   createTask,
   planInstruction,
+  proposeMilestones,
   interpretResult,
   type HireMode,
+  type MilestoneDraft,
   type TaskStepView,
   type TaskDetail,
 } from '../../lib/tasks';
@@ -129,6 +131,9 @@ type Plan = {
   attachments?: ArtifactRef[];
   // Structured params the planner extracted for the chosen service (e.g. width/format).
   input?: Record<string, unknown>;
+  // Acceptance milestones proposed for a judged (T2/T3) hire; the buyer may edit them
+  // before approving. The server rescales the amounts to the job budget on hire.
+  milestones?: MilestoneDraft[];
 };
 type Msg =
   | { id: number; role: 'user'; text: string }
@@ -571,6 +576,7 @@ export function CommandChat() {
       budget: number;
       policyId?: string;
       input?: Record<string, unknown>;
+      milestones?: MilestoneDraft[];
     }) =>
       createTask({
         title: p.title,
@@ -580,6 +586,7 @@ export function CommandChat() {
         functionKey: p.functionKey,
         policyId: p.policyId,
         input: p.input,
+        milestones: p.milestones,
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
   });
@@ -678,6 +685,18 @@ export function CommandChat() {
         return;
       }
       setFile(null);
+      // For a judged (T2/T3) hire, propose acceptance milestones from the instruction
+      // so the buyer sees - and can edit - what the delivery is judged against before
+      // approving. Non-fatal: a T1 service or any failure just skips milestones.
+      let milestones: MilestoneDraft[] | undefined;
+      if (svc?.tier === 'T2' || svc?.tier === 'T3') {
+        const proposed = await proposeMilestones(
+          instruction,
+          result.functionLabel ?? result.service.name,
+          result.budget,
+        );
+        if (proposed.length) milestones = proposed;
+      }
       push({
         id: nextId(),
         role: 'plan',
@@ -695,6 +714,7 @@ export function CommandChat() {
           ...(result.functionKey ? { functionKey: result.functionKey } : {}),
           ...(attachments ? { attachments } : {}),
           ...(result.input ? { input: result.input } : {}),
+          ...(milestones ? { milestones } : {}),
         },
       });
     } else if ((result.kind === 'pay' || result.kind === 'disburse') && result.lines.length) {
@@ -867,6 +887,18 @@ export function CommandChat() {
     );
   }
 
+  // Replace a pending hire plan's editable milestones (title/criteria/amount). The
+  // server rescales the amounts to the job budget on hire, so edits need not sum exactly.
+  function editMilestones(msgId: number, milestones: MilestoneDraft[]) {
+    setMessages((m) =>
+      m.map((x) =>
+        x.role === 'plan' && x.id === msgId && x.plan.kind === 'hire'
+          ? { ...x, plan: { ...x.plan, milestones } }
+          : x,
+      ),
+    );
+  }
+
   async function approve(id: number, plan: Plan) {
     setPlanStatus(id, 'approved');
     if (plan.kind === 'hire' && plan.serviceId) {
@@ -874,6 +906,10 @@ export function CommandChat() {
         const policyId = plan.bind.policyId;
         const jobInput: Record<string, unknown> = { ...(plan.input ?? {}) };
         if (plan.attachments?.length) jobInput.attachments = plan.attachments;
+        // Keep only milestones the buyer left with a title; drop blank rows.
+        const milestones = plan.milestones
+          ?.map((m) => ({ ...m, title: m.title.trim() }))
+          .filter((m) => m.title.length > 0);
         const task = await hire.mutateAsync({
           title: `Hire ${plan.serviceName}`,
           serviceId: plan.serviceId,
@@ -881,6 +917,7 @@ export function CommandChat() {
           budget: plan.lines[0].amount,
           policyId,
           input: Object.keys(jobInput).length ? jobInput : undefined,
+          milestones: milestones?.length ? milestones : undefined,
         });
         // Drop a LIVE job card into the chat: it polls the task and shows progress,
         // any question it needs answered, and the result/download inline.
@@ -1000,6 +1037,7 @@ export function CommandChat() {
                 onCancel={(id) => setPlanStatus(id, 'cancelled')}
                 services={services}
                 onPickService={pickService}
+                onEditMilestones={editMilestones}
               />
             ))}
           </div>
@@ -1656,18 +1694,120 @@ function JobCard({
   );
 }
 
+/**
+ * The acceptance milestones of a judged hire, shown in the plan card. Editable while
+ * the plan is pending (the buyer tunes what the delivery is judged against and how the
+ * price splits), read-only once the plan is approved or cancelled. The server rescales
+ * the amounts to the job budget on hire, so edits need not sum exactly.
+ */
+function PlanMilestones({
+  milestones,
+  editable,
+  onChange,
+}: {
+  milestones: MilestoneDraft[];
+  editable: boolean;
+  onChange: (ms: MilestoneDraft[]) => void;
+}) {
+  const set = (i: number, patch: Partial<MilestoneDraft>) =>
+    onChange(milestones.map((m, j) => (j === i ? { ...m, ...patch } : m)));
+  const remove = (i: number) => onChange(milestones.filter((_, j) => j !== i));
+  const add = () => onChange([...milestones, { title: '', criteria: '' }]);
+
+  if (!editable) {
+    return (
+      <div className="mt-2 rounded-lg border border-white/10 bg-black/20 p-2">
+        <div className="mb-1 text-[11px] font-medium text-slate-400">Acceptance milestones</div>
+        <ul className="space-y-1 text-[11px] text-slate-400">
+          {milestones.map((m, i) => (
+            <li key={i} className="flex items-start gap-1.5">
+              <span className="mt-[5px] h-1 w-1 shrink-0 rounded-full bg-slate-600" />
+              <span>
+                <span className="text-slate-300">{m.title}</span>
+                {m.criteria ? `: ${m.criteria}` : ''}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded-lg border border-violet-500/20 bg-black/20 p-2">
+      <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[11px] font-medium text-slate-400">
+        <ListChecks size={12} className="text-violet-300" /> Acceptance milestones
+        <span className="font-normal text-slate-600">(what the delivery is judged against)</span>
+      </div>
+      <div className="space-y-1.5">
+        {milestones.map((m, i) => (
+          <div key={i} className="flex items-start gap-1.5">
+            <div className="flex-1 space-y-1">
+              <input
+                value={m.title}
+                onChange={(e) => set(i, { title: e.target.value })}
+                placeholder="Milestone"
+                className="w-full rounded-md bg-black/30 px-2 py-1 text-xs text-slate-200 outline-none focus:border-violet-500/40"
+              />
+              <input
+                value={m.criteria ?? ''}
+                onChange={(e) => set(i, { criteria: e.target.value })}
+                placeholder="How it is judged (optional)"
+                className="w-full rounded-md bg-black/30 px-2 py-1 text-[11px] text-slate-400 outline-none focus:border-violet-500/40"
+              />
+            </div>
+            <input
+              value={m.amountUsdc ?? ''}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                set(i, {
+                  amountUsdc: e.target.value === '' || !Number.isFinite(n) ? undefined : n,
+                });
+              }}
+              inputMode="decimal"
+              placeholder="$"
+              aria-label="Milestone amount (USDC)"
+              className="w-14 rounded-md bg-black/30 px-2 py-1 text-right text-xs text-slate-300 outline-none focus:border-violet-500/40"
+            />
+            {milestones.length > 1 && (
+              <button
+                onClick={() => remove(i)}
+                className="mt-1 text-slate-500 hover:text-rose-300"
+                title="Remove milestone"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+      <button
+        onClick={add}
+        className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-violet-300 hover:text-violet-200"
+      >
+        <Plus size={12} /> Add milestone
+      </button>
+      <p className="mt-1 text-[10px] text-slate-600">
+        Amounts are rescaled to the job budget when you approve.
+      </p>
+    </div>
+  );
+}
+
 function ChatBubble({
   msg,
   onApprove,
   onCancel,
   services,
   onPickService,
+  onEditMilestones,
 }: {
   msg: Msg;
   onApprove: (id: number, plan: Plan) => void;
   onCancel: (id: number) => void;
   services: { id: string; name: string; pricePerCall: number }[];
   onPickService: (msgId: number, serviceId: string) => void;
+  onEditMilestones: (msgId: number, milestones: MilestoneDraft[]) => void;
 }) {
   if (msg.role === 'user') {
     return (
@@ -1742,6 +1882,13 @@ function ChatBubble({
             </div>
           ))}
         </div>
+        {plan.kind === 'hire' && plan.milestones && plan.milestones.length > 0 && (
+          <PlanMilestones
+            milestones={plan.milestones}
+            editable={msg.status === 'pending'}
+            onChange={(ms) => onEditMilestones(msg.id, ms)}
+          />
+        )}
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
           <span>total {usd(total)}</span>
           <span className="inline-flex items-center gap-1 text-violet-300">
