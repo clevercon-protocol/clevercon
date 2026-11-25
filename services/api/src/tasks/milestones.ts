@@ -68,3 +68,23 @@ export function normalizeMilestones(
 export function tierUsesMilestones(tier: string | null | undefined): boolean {
   return tier === 'T2' || tier === 'T3';
 }
+
+/**
+ * The amount a delivered step actually owes the provider (the escrow-feel release).
+ * With no milestones, or milestones the judge has not scored yet (all still pending),
+ * the full step price is owed. Once the milestones are DECIDED (at least one accepted
+ * or rejected), only the accepted milestones' amounts are owed, so the buyer pays only
+ * for accepted work and the rejected portion is simply never released. KEEP IN SYNC
+ * with the acceptedTotal logic in packages/common/src/milestone.ts.
+ */
+export function settlementAmount(milestonesRaw: unknown, estimatedCost: number): number {
+  const full = round7(Math.max(0, Number(estimatedCost) || 0));
+  if (!Array.isArray(milestonesRaw) || milestonesRaw.length === 0) return full;
+  const ms = milestonesRaw as { status?: string; amountUsdc?: unknown }[];
+  const decided = ms.some((m) => m?.status === 'accepted' || m?.status === 'rejected');
+  if (!decided) return full;
+  const accepted = ms
+    .filter((m) => m?.status === 'accepted')
+    .reduce((a, m) => a + Math.max(0, Number(m?.amountUsdc) || 0), 0);
+  return round7(accepted);
+}

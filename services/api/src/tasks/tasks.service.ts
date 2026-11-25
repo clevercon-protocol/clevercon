@@ -18,7 +18,7 @@ import type {
 import { satisfiedKeys, unmetPrerequisites, unmetMessage } from '../services/prerequisites.js';
 import { validateAgainstSchema, type SchemaDoc } from './schema-check.js';
 import { checkEligibility, type EligibilityRules } from '../policies/eligibility.js';
-import { normalizeMilestones, tierUsesMilestones } from './milestones.js';
+import { normalizeMilestones, tierUsesMilestones, settlementAmount } from './milestones.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueueService } from '../queue/queue.service.js';
 import { VaultContractService } from '../vault/vault-contract.service.js';
@@ -718,17 +718,16 @@ export class TasksService {
     // Delivered-but-not-yet-paid: a RELEASED step with a payee and a price that no
     // CONFIRMED release names yet. Surfaced so spend is never silently understated
     // between delivery and settlement (the reviewer's "paid:false, spent:0" gap).
-    const pendingSettlementUsdc = Number(
-      t.steps
-        .filter(
-          (s) =>
-            s.status === StepStatus.RELEASED &&
-            !paidStepIds.has(s.id) &&
-            !!(s.payee ?? s.service?.stellarAddress) &&
-            Number(s.estimatedCost) > 0,
-        )
-        .reduce((acc, s) => acc.add(s.estimatedCost), new Prisma.Decimal(0)),
-    );
+    const pendingSettlementUsdc = t.steps
+      .filter(
+        (s) =>
+          s.status === StepStatus.RELEASED &&
+          !paidStepIds.has(s.id) &&
+          !!(s.payee ?? s.service?.stellarAddress),
+      )
+      // Owe only the accepted-milestone total (full price until judged); a fully
+      // rejected step owes nothing and drops out, so pending never overstates.
+      .reduce((acc, s) => acc + settlementAmount(s.milestones, Number(s.estimatedCost)), 0);
     return {
       id: t.id,
       title: t.title,
@@ -754,65 +753,72 @@ export class TasksService {
       awaitingInput: t.steps.some((s) => s.status === StepStatus.INPUT_REQUIRED),
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
-      steps: t.steps.map((s) => ({
-        // The step id, so the dapp/agent can answer a needs-input step.
-        id: s.id,
-        index: s.index,
-        action: s.action,
-        status: s.status,
-        estimatedCost: Number(s.estimatedCost),
-        service: s.service?.name ?? null,
-        // The address this step pays: a hire pays its service's payout address, a
-        // pay/disburse step names its own payee. The client needs it to settle.
-        payee: s.payee ?? s.service?.stellarAddress ?? null,
-        // Whether this step has already been paid (a CONFIRMED release names it), so
-        // the client settles a delivered-but-unpaid step exactly once.
-        paid: paidStepIds.has(s.id),
-        // Settlement state an operator/agent can read: paid | pending (delivered, not
-        // yet settled) | failed (settlement errored) | none (nothing to settle yet).
-        settlementStatus: (() => {
-          if (paidStepIds.has(s.id)) return 'paid';
-          const payee = s.payee ?? s.service?.stellarAddress ?? null;
-          if (s.status === StepStatus.RELEASED && payee && Number(s.estimatedCost) > 0)
-            return 'pending';
-          if (s.status === StepStatus.FAILED && s.error) return 'failed';
-          return 'none';
-        })(),
-        // Verification tier (T1 trustless / T2 attestable / T3 human) + whether this
-        // released step was TRUSTLESSLY verified (a T1 check the worker re-ran and
-        // passed, not merely accepted), so the Job view can badge a verified delivery.
-        tier: s.service?.tier ?? null,
-        verified: (() => {
-          const method = (s.service?.verification as { method?: string } | null)?.method;
-          return (
-            s.status === StepStatus.RELEASED &&
-            s.service?.tier === 'T1' &&
-            !!method &&
-            method !== 'attest' &&
-            method !== 'manual'
-          );
-        })(),
-        latencyMs: s.latencyMs,
-        error: s.error,
-        // Advisory LLM-judge signal for the buyer (0-5 + rationale); never gates pay.
-        qualityRating: s.qualityRating,
-        qualityNote: s.qualityNote,
-        // Acceptance milestones for a judged hire ({id,title,criteria,amountUsdc,status,
-        // score?,note?}[]); null for T1 / direct spends. Editable until the job runs.
-        milestones: s.milestones,
-        // A file the provider delivered: {url, hash, contentType, size} (downloadable + hash-verifiable).
-        artifact: s.artifact,
-        // Async progress a working step last reported: { pct?, message? }.
-        progress: s.progress,
-        // The question a provider asked mid-job (set while status is INPUT_REQUIRED):
-        // { requestId, prompt, schema? }. The buyer answers it to resume the job.
-        inputRequest: s.inputRequest,
-        // When held, the moment it auto-releases if left undisputed (the countdown).
-        releaseAt: s.releaseAt,
-        // The provider's returned result for this step, so the buyer sees what
-        // they paid for (truncated to 2000 chars at execution time).
-        output: s.output,
-      })),
+      steps: t.steps.map((s) => {
+        // The escrow-feel release amount actually owed: the full price until the
+        // milestones are judged, then only the accepted milestones' total. The client
+        // settles THIS amount (not estimatedCost) so a hire pays only for accepted work.
+        const settlementUsdc = settlementAmount(s.milestones, Number(s.estimatedCost));
+        return {
+          // The step id, so the dapp/agent can answer a needs-input step.
+          id: s.id,
+          index: s.index,
+          action: s.action,
+          status: s.status,
+          estimatedCost: Number(s.estimatedCost),
+          // The amount owed on release (accepted-milestone aware); clients pay this.
+          settlementUsdc,
+          service: s.service?.name ?? null,
+          // The address this step pays: a hire pays its service's payout address, a
+          // pay/disburse step names its own payee. The client needs it to settle.
+          payee: s.payee ?? s.service?.stellarAddress ?? null,
+          // Whether this step has already been paid (a CONFIRMED release names it), so
+          // the client settles a delivered-but-unpaid step exactly once.
+          paid: paidStepIds.has(s.id),
+          // Settlement state an operator/agent can read: paid | pending (delivered, not
+          // yet settled) | failed (settlement errored) | none (nothing to settle yet).
+          settlementStatus: (() => {
+            if (paidStepIds.has(s.id)) return 'paid';
+            const payee = s.payee ?? s.service?.stellarAddress ?? null;
+            if (s.status === StepStatus.RELEASED && payee && settlementUsdc > 0) return 'pending';
+            if (s.status === StepStatus.FAILED && s.error) return 'failed';
+            return 'none';
+          })(),
+          // Verification tier (T1 trustless / T2 attestable / T3 human) + whether this
+          // released step was TRUSTLESSLY verified (a T1 check the worker re-ran and
+          // passed, not merely accepted), so the Job view can badge a verified delivery.
+          tier: s.service?.tier ?? null,
+          verified: (() => {
+            const method = (s.service?.verification as { method?: string } | null)?.method;
+            return (
+              s.status === StepStatus.RELEASED &&
+              s.service?.tier === 'T1' &&
+              !!method &&
+              method !== 'attest' &&
+              method !== 'manual'
+            );
+          })(),
+          latencyMs: s.latencyMs,
+          error: s.error,
+          // Advisory LLM-judge signal for the buyer (0-5 + rationale); never gates pay.
+          qualityRating: s.qualityRating,
+          qualityNote: s.qualityNote,
+          // Acceptance milestones for a judged hire ({id,title,criteria,amountUsdc,status,
+          // score?,note?}[]); null for T1 / direct spends. Editable until the job runs.
+          milestones: s.milestones,
+          // A file the provider delivered: {url, hash, contentType, size} (downloadable + hash-verifiable).
+          artifact: s.artifact,
+          // Async progress a working step last reported: { pct?, message? }.
+          progress: s.progress,
+          // The question a provider asked mid-job (set while status is INPUT_REQUIRED):
+          // { requestId, prompt, schema? }. The buyer answers it to resume the job.
+          inputRequest: s.inputRequest,
+          // When held, the moment it auto-releases if left undisputed (the countdown).
+          releaseAt: s.releaseAt,
+          // The provider's returned result for this step, so the buyer sees what
+          // they paid for (truncated to 2000 chars at execution time).
+          output: s.output,
+        };
+      }),
       receipts: t.payments.map((p) => ({
         id: p.id,
         amount: Number(p.amount),

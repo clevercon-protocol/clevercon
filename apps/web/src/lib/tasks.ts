@@ -81,6 +81,9 @@ export interface TaskStepView {
   action: string;
   status: string;
   estimatedCost: number;
+  // The amount actually owed on release (accepted-milestone aware): equals estimatedCost
+  // until the milestones are judged, then only the accepted total. Clients settle THIS.
+  settlementUsdc?: number;
   service: string | null;
   // The address this step pays (a hire's provider payout address), so the client can
   // settle a delivered hire under the task's rule.

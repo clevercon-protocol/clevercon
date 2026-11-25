@@ -453,14 +453,18 @@ export function createSpender(options: SpenderOptions): CleverConClient {
     paid?: boolean;
     payee?: string | null;
     estimatedCost: number;
+    // Accepted-milestone total the server computed; settle THIS (full price until judged).
+    settlementUsdc?: number;
   }
+  // The provider payout owed for a delivered step (accepted-milestone aware).
+  const owed = (s: SettleStep): number => Number(s.settlementUsdc ?? s.estimatedCost);
   async function settleHire(taskId: string): Promise<SettleResult> {
     const task = await request<{ status: string; steps: SettleStep[] }>(
       'GET',
       `/tasks/${encodeURIComponent(taskId)}`,
     );
     const unpaid = (task.steps ?? []).filter(
-      (s) => s.status === 'RELEASED' && !s.paid && !!s.payee && Number(s.estimatedCost) > 0,
+      (s) => s.status === 'RELEASED' && !s.paid && !!s.payee && owed(s) > 0,
     );
     if (unpaid.length === 0) {
       const open = (task.steps ?? []).some((s) =>
@@ -474,7 +478,7 @@ export function createSpender(options: SpenderOptions): CleverConClient {
       for (let i = 0; i < unpaid.length; i += 4) {
         const group = unpaid.slice(i, i + 4);
         const res = await relayKeyless(
-          group.map((s) => ({ payee: s.payee as string, amount: Number(s.estimatedCost) })),
+          group.map((s) => ({ payee: s.payee as string, amount: owed(s) })),
           { taskId, stepIds: group.map((s) => s.id) },
         );
         txHashes.push(res.txHash);
@@ -483,13 +487,13 @@ export function createSpender(options: SpenderOptions): CleverConClient {
       for (const s of unpaid) {
         const res = await request<{ txHash: string }>('POST', '/vault/session/pay', {
           payee: s.payee,
-          amount: Number(s.estimatedCost),
+          amount: owed(s),
           hire: { taskId, stepId: s.id },
         });
         txHashes.push(res.txHash);
       }
     }
-    const totalUsdc = unpaid.reduce((a, s) => a + Number(s.estimatedCost), 0);
+    const totalUsdc = unpaid.reduce((a, s) => a + owed(s), 0);
     return { taskId, settled: unpaid.length, lane, totalUsdc, txHashes };
   }
 

@@ -4,6 +4,7 @@ import { Prisma, PaymentMethod, PaymentStatus, StepStatus, TaskStatus } from '@c
 import { PrismaService } from '../prisma/prisma.service.js';
 import { VaultContractService, type PublicRuleInput } from './vault-contract.service.js';
 import { DelegateService } from './delegate.service.js';
+import { settlementAmount } from '../tasks/milestones.js';
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -292,6 +293,9 @@ export class VaultService {
         if (!step || step.status !== StepStatus.RELEASED) continue;
         const expected = step.payee ?? step.service?.stellarAddress ?? null;
         if (!expected || expected !== payees[i]) continue;
+        // Record what was actually released: the accepted-milestone total (the escrow-
+        // feel amount), not the full step price, so earnings match the on-chain money.
+        const amount = settlementAmount(step.milestones, Number(step.estimatedCost));
         await this.prisma.payment.create({
           data: {
             taskId,
@@ -299,7 +303,7 @@ export class VaultService {
             fromAddress: this.contract.contractAddress || 'vault',
             toAddress: payees[i],
             asset: step.task?.asset ?? this.contract.usdcAsset,
-            amount: step.estimatedCost,
+            amount: new Prisma.Decimal(amount),
             method: PaymentMethod.VAULT_RELEASE,
             status: PaymentStatus.CONFIRMED,
             txHash,
@@ -623,11 +627,21 @@ export class VaultService {
             none: { method: PaymentMethod.VAULT_RELEASE, status: PaymentStatus.CONFIRMED },
           },
         },
-        select: { estimatedCost: true, payee: true, service: { select: { stellarAddress: true } } },
+        select: {
+          estimatedCost: true,
+          milestones: true,
+          payee: true,
+          service: { select: { stellarAddress: true } },
+        },
         take: 500,
       });
+      // Owe only the accepted-milestone total (full price until judged); a fully
+      // rejected step owes nothing, matching what the client actually releases.
       return steps.reduce(
-        (sum, s) => (s.payee || s.service?.stellarAddress ? sum + Number(s.estimatedCost) : sum),
+        (sum, s) =>
+          s.payee || s.service?.stellarAddress
+            ? sum + settlementAmount(s.milestones, Number(s.estimatedCost))
+            : sum,
         0,
       );
     } catch {

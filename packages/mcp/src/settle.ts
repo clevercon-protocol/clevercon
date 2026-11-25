@@ -19,6 +19,9 @@ interface Step {
   paid?: boolean;
   payee?: string | null;
   estimatedCost: number;
+  // The amount actually owed on release (accepted-milestone aware): the server sets
+  // this to the accepted total once a judged hire's milestones are decided. Settle this.
+  settlementUsdc?: number;
 }
 interface TaskDetail {
   id: string;
@@ -27,6 +30,12 @@ interface TaskDetail {
 }
 
 const NON_TERMINAL = new Set(['PENDING', 'RUNNING', 'AWAITING_APPROVAL', 'INPUT_REQUIRED']);
+
+/** The provider payout owed for a delivered step: the accepted-milestone total the
+ *  server computed, falling back to the full price for a plain (un-milestoned) step. */
+function owedUsdc(s: Step): number {
+  return Number(s.settlementUsdc ?? s.estimatedCost);
+}
 
 export interface SettleSummary {
   taskId: string;
@@ -38,10 +47,11 @@ export interface SettleSummary {
   note: string;
 }
 
-/** Steps that are delivered-and-unpaid: RELEASED, not yet paid, with a payee to pay. */
+/** Steps that are delivered-and-unpaid: RELEASED, not yet paid, with a payee and a
+ *  non-zero owed amount (a fully-rejected step owes nothing and is already settled). */
 function unpaidReleased(task: TaskDetail): Step[] {
   return task.steps.filter(
-    (s) => s.status === 'RELEASED' && !s.paid && !!s.payee && Number(s.estimatedCost) > 0,
+    (s) => s.status === 'RELEASED' && !s.paid && !!s.payee && owedUsdc(s) > 0,
   );
 }
 
@@ -77,7 +87,7 @@ export async function settleHireTask(config: ApiConfig, taskId: string): Promise
       const group = unpaid.slice(i, i + 4);
       const lines: KeylessLine[] = group.map((s) => ({
         payee: s.payee as string,
-        amount: Number(s.estimatedCost),
+        amount: owedUsdc(s),
       }));
       const res = await relayKeylessDisbursement(client, lines, {
         taskId,
@@ -91,19 +101,19 @@ export async function settleHireTask(config: ApiConfig, taskId: string): Promise
     for (const s of unpaid) {
       const res = await client.post('/vault/session/pay', {
         payee: s.payee,
-        amount: Number(s.estimatedCost),
+        amount: owedUsdc(s),
         hire: { taskId, stepId: s.id },
       });
       results.push({
         stepId: s.id,
         payee: s.payee,
-        amountUsdc: Number(s.estimatedCost),
+        amountUsdc: owedUsdc(s),
         result: res,
       });
     }
   }
 
-  const totalUsdc = unpaid.reduce((a, s) => a + Number(s.estimatedCost), 0);
+  const totalUsdc = unpaid.reduce((a, s) => a + owedUsdc(s), 0);
   return {
     taskId,
     settled: unpaid.length,

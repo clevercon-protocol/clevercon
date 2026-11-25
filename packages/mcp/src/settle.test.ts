@@ -11,6 +11,7 @@ function task(steps: Partial<HireTaskDetail['steps'][number]>[]): HireTaskDetail
       paid: s.paid,
       payee: 'payee' in s ? (s.payee as string | null) : 'GPROVIDER',
       estimatedCost: 'estimatedCost' in s ? (s.estimatedCost as number) : 0.02,
+      ...('settlementUsdc' in s ? { settlementUsdc: s.settlementUsdc } : {}),
     })),
   };
 }
@@ -38,6 +39,20 @@ describe('unpaidReleased', () => {
     expect(
       unpaidReleased(task([{ status: 'RELEASED', paid: false, estimatedCost: 0 }])),
     ).toHaveLength(0);
+  });
+
+  it('skips a released step that owes nothing (every milestone rejected: settlementUsdc 0)', () => {
+    expect(
+      unpaidReleased(task([{ status: 'RELEASED', paid: false, settlementUsdc: 0 }])),
+    ).toHaveLength(0);
+  });
+
+  it('keeps a released step that owes an accepted-milestone total below its price', () => {
+    const out = unpaidReleased(
+      task([{ status: 'RELEASED', paid: false, estimatedCost: 0.05, settlementUsdc: 0.03 }]),
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].settlementUsdc).toBe(0.03);
   });
 
   it('selects only the unpaid released steps from a mix', () => {

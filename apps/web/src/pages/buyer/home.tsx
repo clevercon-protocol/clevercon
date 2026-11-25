@@ -1466,11 +1466,20 @@ async function settleUnderRule(opts: {
   return { total: result.total, legs: result.legs };
 }
 
+/** The amount a delivered step owes the provider: the accepted-milestone total the
+ *  server computed (settlementUsdc), falling back to the full price for a plain step. */
+function owedUsdc(s: TaskStepView): number {
+  return s.settlementUsdc ?? s.estimatedCost;
+}
+
 // A step that has been delivered + accepted (RELEASED) but not yet paid: the job card
 // settles it with settleUnderRule under the rule the buyer picked at hire time, so a
 // hire pays the provider ONLY after delivery, through the SAME path a disburse uses.
+// A step that owes nothing (every milestone rejected) is already settled: skip it.
 function unpaidReleased(task: TaskDetail | undefined) {
-  return (task?.steps ?? []).filter((s) => s.status === 'RELEASED' && !s.paid && !!s.payee);
+  return (task?.steps ?? []).filter(
+    (s) => s.status === 'RELEASED' && !s.paid && !!s.payee && owedUsdc(s) > 0,
+  );
 }
 
 function JobCard({
@@ -1525,7 +1534,7 @@ function JobCard({
         publicRuleId: propPublicRuleId,
         recipients: unpaid.map((s) => ({
           payee: s.payee as string,
-          amount: s.estimatedCost,
+          amount: owedUsdc(s),
           stepId: s.id,
         })),
         policies,
@@ -1552,7 +1561,7 @@ function JobCard({
 
   const paidTotal = (task?.steps ?? [])
     .filter((s) => s.paid)
-    .reduce((acc, s) => acc + s.estimatedCost, 0);
+    .reduce((acc, s) => acc + owedUsdc(s), 0);
   const status = task?.status ?? 'RUNNING';
   const inputStep = task?.steps.find((s) => s.status === 'INPUT_REQUIRED');
   const failed = status === 'FAILED';
