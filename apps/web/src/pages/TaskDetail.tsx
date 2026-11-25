@@ -497,8 +497,8 @@ export function TaskDetail() {
                     {s.verified && (
                       <div className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-emerald-300">
                         <ShieldCheck size={12} className="shrink-0" />
-                        Trustlessly verified before payment: the result was re-checked on-chain,
-                        not just accepted.
+                        Trustlessly verified before payment: the result was re-checked on-chain, not
+                        just accepted.
                       </div>
                     )}
                     {s.qualityRating != null && (
