@@ -768,6 +768,8 @@ export class TasksService {
           // The amount owed on release (accepted-milestone aware); clients pay this.
           settlementUsdc,
           service: s.service?.name ?? null,
+          // The hired service's id, so the buyer can review it after a settled hire.
+          serviceId: s.serviceId ?? null,
           // The address this step pays: a hire pays its service's payout address, a
           // pay/disburse step names its own payee. The client needs it to settle.
           payee: s.payee ?? s.service?.stellarAddress ?? null,

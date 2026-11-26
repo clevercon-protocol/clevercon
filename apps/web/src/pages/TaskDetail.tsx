@@ -27,6 +27,7 @@ import {
 } from '../lib/tasks';
 import { getDelegate } from '../lib/vault';
 import { PrivacyReveal } from '../components/PrivacyReveal';
+import { LeaveReview } from '../components/Reviews';
 import { config } from '../config';
 
 const NON_TERMINAL = (status: string) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(status);
@@ -632,6 +633,37 @@ export function TaskDetail() {
               </div>
             )}
           </div>
+
+          {task.status === 'COMPLETED' &&
+            (() => {
+              // One review per distinct hired service on this settled task. The API is
+              // the authority on whether it is reviewable (settled + one per hire).
+              const seen = new Set<string>();
+              const services = task.steps.filter((s) => {
+                if (!s.serviceId || seen.has(s.serviceId)) return false;
+                seen.add(s.serviceId);
+                return true;
+              });
+              if (services.length === 0) return null;
+              return (
+                <div className="rounded-2xl bg-white/[0.04] p-6">
+                  <div className="flex items-center gap-2 text-slate-300">
+                    <Sparkles size={18} className="text-violet-300" />
+                    <h2 className="font-semibold">Rate your hire</h2>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {services.map((s) => (
+                      <LeaveReview
+                        key={s.serviceId}
+                        taskId={task.id}
+                        serviceId={s.serviceId as string}
+                        serviceName={s.service}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
         </>
       )}
     </section>

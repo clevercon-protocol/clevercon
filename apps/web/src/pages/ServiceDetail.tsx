@@ -43,6 +43,7 @@ import { createTask } from '../lib/tasks';
 import { getGithubOAuthStatus, getGithubAuthorizeUrl } from '../lib/oauth';
 import { getDelegate } from '../lib/vault';
 import { uploadFile, validateAttachment } from '../lib/uploads';
+import { ServiceReviews } from '../components/Reviews';
 
 /** Turn an input-schema key into a readable label: "walletAddress" -> "Wallet address". */
 function humanizeField(k: string): string {
@@ -750,9 +751,12 @@ export function ServiceDetail() {
                   <BadgeCheck size={15} /> Verified
                 </span>
               )}
-              <span className="inline-flex items-center gap-1 text-sm text-amber-300">
-                <Star size={14} /> {service.rating.toFixed(1)}
-              </span>
+              {service.reviewCount && service.reviewCount > 0 ? (
+                <span className="inline-flex items-center gap-1.5 text-sm text-amber-300">
+                  <Star size={14} fill="currentColor" /> {(service.avgRating ?? 0).toFixed(1)}
+                  <span className="text-slate-500">({service.reviewCount})</span>
+                </span>
+              ) : null}
               {service.trust === 'trusted' && (
                 <span className="inline-flex items-center gap-1 text-sm text-emerald-300">
                   <Award size={14} /> Trusted · {service.settlements} settled
@@ -944,6 +948,10 @@ export function ServiceDetail() {
                 fn={chosenFn}
               />
             )}
+
+            <div className="rounded-2xl bg-white/[0.04] p-6 lg:col-span-2">
+              <ServiceReviews serviceId={service.id} owner={service.owner} />
+            </div>
           </div>
         </>
       )}

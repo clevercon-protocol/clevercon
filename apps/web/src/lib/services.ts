@@ -103,6 +103,9 @@ export interface Service {
   trust: TrustTier;
   /** Count of real settled jobs behind the trust tier. */
   settlements: number;
+  /** Average buyer rating (1-5) from settled-hire reviews, and how many back it. */
+  avgRating?: number;
+  reviewCount?: number;
   /** Curated: a service we vouch for. */
   verified: boolean;
   /** How the service charges: x402 one-shot or MPP metered. */
@@ -138,6 +141,8 @@ interface ApiService {
   pricingModel: string;
   trust?: TrustTier;
   settlements?: number;
+  avgRating?: number;
+  reviewCount?: number;
   verified?: boolean;
   tier?: Tier;
   verification?: Verification | null;
@@ -246,6 +251,8 @@ function mapApiService(s: ApiService): Service {
     category: s.category,
     pricePerCall: s.pricePerCall,
     rating: s.reputation?.score ?? 0,
+    avgRating: s.avgRating ?? 0,
+    reviewCount: s.reviewCount ?? 0,
     provider: s.pricingModel === 'MPP' ? 'streaming' : 'per-call',
     trust: s.trust ?? 'new',
     settlements: s.settlements ?? 0,
@@ -392,6 +399,8 @@ export async function getService(id: string): Promise<ServiceDetail> {
     category: s.category,
     pricePerCall: s.pricePerCall,
     rating: s.reputation?.score ?? 0,
+    avgRating: s.avgRating ?? 0,
+    reviewCount: s.reviewCount ?? 0,
     provider: s.pricingModel === 'MPP' ? 'streaming' : 'per-call',
     trust: s.trust ?? 'new',
     settlements: s.settlements ?? 0,

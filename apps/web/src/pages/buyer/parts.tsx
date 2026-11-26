@@ -1311,9 +1311,12 @@ export function Marketplace() {
                     </span>
                   )}
                 </span>
-                <Badge className="shrink-0 border-amber-500/25 bg-amber-500/10 text-amber-300">
-                  <Star size={11} /> {s.rating.toFixed(1)}
-                </Badge>
+                {s.reviewCount && s.reviewCount > 0 ? (
+                  <Badge className="shrink-0 border-amber-500/25 bg-amber-500/10 text-amber-300">
+                    <Star size={11} fill="currentColor" /> {(s.avgRating ?? 0).toFixed(1)} ·{' '}
+                    {s.reviewCount}
+                  </Badge>
+                ) : null}
               </div>
               <p className="mt-1 line-clamp-2 text-sm text-slate-400">{s.description}</p>
               {s.owner && (

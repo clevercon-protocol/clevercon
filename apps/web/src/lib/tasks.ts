@@ -85,6 +85,8 @@ export interface TaskStepView {
   // until the milestones are judged, then only the accepted total. Clients settle THIS.
   settlementUsdc?: number;
   service: string | null;
+  // The hired service's id, so the buyer can review it after a settled hire.
+  serviceId?: string | null;
   // The address this step pays (a hire's provider payout address), so the client can
   // settle a delivered hire under the task's rule.
   payee?: string | null;
