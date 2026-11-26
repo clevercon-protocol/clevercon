@@ -15,6 +15,7 @@ import { OAuthModule } from './oauth/oauth.module.js';
 import { PoliciesModule } from './policies/policies.module.js';
 import { ActivityModule } from './activity/activity.module.js';
 import { DisputesModule } from './disputes/disputes.module.js';
+import { ReviewsModule } from './reviews/reviews.module.js';
 import { AgentModule } from './agent/agent.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { WebhooksModule } from './webhooks/webhooks.module.js';
@@ -50,6 +51,7 @@ import { AppLoggerModule } from './logging/logger.module.js';
     PoliciesModule,
     ActivityModule,
     DisputesModule,
+    ReviewsModule,
     AgentModule,
     AdminModule,
     WebhooksModule,

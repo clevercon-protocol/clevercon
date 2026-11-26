@@ -43,10 +43,24 @@ function trustTier(
   uniquePayers: number,
   disputesUpheld: number,
   totalJobs: number,
+  avgRating: number,
+  reviewCount: number,
 ): TrustTier {
   const disputeRate = totalJobs > 0 ? disputesUpheld / totalJobs : 0;
+  // Enough reviews to be meaningful: poor buyer reviews sink a service like disputes do,
+  // and `trusted` additionally requires the reviews to be good (not just reliable).
+  const rated = reviewCount >= 3;
   if (disputeRate > 0.2) return 'new'; // a high upheld-dispute rate sinks any service
-  if (settlements >= 10 && score >= 4 && uniquePayers >= 2 && disputeRate < 0.05) return 'trusted';
+  if (rated && avgRating < 2.5) return 'new'; // consistently poor reviews sink it too
+  if (
+    settlements >= 10 &&
+    score >= 4 &&
+    uniquePayers >= 2 &&
+    disputeRate < 0.05 &&
+    (!rated || avgRating >= 4)
+  ) {
+    return 'trusted';
+  }
   if (settlements >= 1) return 'active';
   return 'new';
 }
@@ -77,7 +91,12 @@ const SORT_ORDER: Record<ServiceSort, Prisma.ServiceOrderByWithRelationInput[]> 
     { registeredAt: 'desc' },
   ],
   recent: [{ registeredAt: 'desc' }],
-  rating: [{ reputation: { score: 'desc' } }],
+  // Best-reviewed first: buyer rating, then how many reviews back it, then reliability.
+  rating: [
+    { reputation: { avgRating: 'desc' } },
+    { reputation: { reviewCount: 'desc' } },
+    { reputation: { score: 'desc' } },
+  ],
   price_asc: [{ pricePerCall: 'asc' }],
   price_desc: [{ pricePerCall: 'desc' }],
 };
@@ -88,6 +107,8 @@ function serialize(s: ServiceWithRep, verified: Set<string>, stat?: PayerStat) {
   const uniquePayers = stat?.payers ?? 0;
   const disputesUpheld = s.reputation?.disputesUpheld ?? 0;
   const totalJobs = s.reputation?.totalJobs ?? 0;
+  const avgRating = s.reputation?.avgRating ?? 0;
+  const reviewCount = s.reputation?.reviewCount ?? 0;
   return {
     id: s.id,
     agentId: s.agentId,
@@ -127,8 +148,20 @@ function serialize(s: ServiceWithRep, verified: Set<string>, stat?: PayerStat) {
     healthy: s.healthy,
     // Settlement-gated trust, surfaced for the marketplace: the trust level, the
     // count of real settled jobs, and whether we've curated/vouched for it.
-    trust: trustTier(settlements, score, uniquePayers, disputesUpheld, totalJobs),
+    trust: trustTier(
+      settlements,
+      score,
+      uniquePayers,
+      disputesUpheld,
+      totalJobs,
+      avgRating,
+      reviewCount,
+    ),
     settlements,
+    // Buyer reviews (P3): average rating (1-5) + how many settled-hire reviews back it,
+    // so a card/detail can show stars and the directory can sort by rating.
+    avgRating,
+    reviewCount,
     // Distinct paying counterparties (anti-self-dealing) + recency, from real
     // confirmed settlements. Computed read-side for now; move to an incremented
     // column if the directory volume grows.

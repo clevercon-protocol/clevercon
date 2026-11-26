@@ -43,6 +43,7 @@ model User {
   agentWallet    AgentWallet?
   orgsCreated    Organization[]       @relation("OrgCreator")
   orgMemberships OrganizationMember[] @relation("OrgMemberships")
+  reviews        Review[]             @relation("AuthoredReviews")
 
   @@map("users")
 }
@@ -284,6 +285,7 @@ model Service {
   reputation ServiceReputation?
   steps      TaskStep[]
   bonds      ServiceBond[]
+  reviews    Review[]
 
   @@index([providerId])
   @@index([ownerOrgId])
@@ -323,11 +325,40 @@ model ServiceReputation {
   lastSettled    DateTime?
   disputes       Int       @default(0)
   disputesUpheld Int       @default(0)
+  // Buyer reviews (P3): denormalized average (1-5) + count, recomputed on each review
+  // write, so the directory can sort/surface rating without aggregating every read.
+  avgRating      Float     @default(0)
+  reviewCount    Int       @default(0)
   lastUpdated    DateTime  @updatedAt
 
   service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
   @@map("service_reputation")
+}
+
+// A buyer's review of a service after a SETTLED hire (P3). Sybil-resistant: one review
+// per task (@@unique taskId), creatable only by the task's buyer once the hire settled.
+// The provider may post a single `response`; abuse is `flagged` for the operator.
+model Review {
+  id          String    @id @default(cuid())
+  serviceId   String
+  taskId      String    @unique // one review per hire
+  authorId    String // the buyer who hired
+  rating      Int // 1..5
+  text        String?
+  response    String? // the provider's single reply
+  respondedAt DateTime?
+  flagged     Boolean   @default(false)
+  flagReason  String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  author  User    @relation("AuthoredReviews", fields: [authorId], references: [id])
+
+  @@index([serviceId])
+  @@index([authorId])
+  @@map("reviews")
 }
 
 // A provider's optional slashable stake (phased, P3). Unused until bonds ship;
