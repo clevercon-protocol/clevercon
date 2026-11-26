@@ -4,12 +4,14 @@ import { ApiKeysModule } from '../api-keys/api-keys.module.js';
 import { ApiAuthGuard } from '../auth/api-auth.guard.js';
 import { EventsModule } from '../events/events.module.js';
 import { WebhooksModule } from '../webhooks/webhooks.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 import { ReviewsService } from './reviews.service.js';
 import { ReviewsController, ServiceReviewsController } from './reviews.controller.js';
 
 @Module({
-  // Events/Webhooks power the two-channel review notifications (socket + webhook).
-  imports: [AuthModule, ApiKeysModule, EventsModule, WebhooksModule],
+  // Events/Webhooks power the two-channel review notifications (socket + webhook);
+  // NotificationsModule adds the in-app feed entry.
+  imports: [AuthModule, ApiKeysModule, EventsModule, WebhooksModule, NotificationsModule],
   controllers: [ReviewsController, ServiceReviewsController],
   providers: [ReviewsService, ApiAuthGuard],
 })

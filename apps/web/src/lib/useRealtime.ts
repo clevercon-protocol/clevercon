@@ -77,17 +77,24 @@ export function useRealtime(): void {
         body: p?.upheld === true ? 'Refunded to the buyer.' : 'Settled to the provider.',
       });
     };
+    // A feed notification was raised (any channel): refresh the bell's count + list.
+    const onNotification = () => {
+      qc.invalidateQueries({ queryKey: ['notifications'] });
+      qc.invalidateQueries({ queryKey: ['notifications-unread'] });
+    };
     socket.on('task.updated', onTask);
     socket.on('proof.updated', refreshProofs);
     socket.on('job.paid', onPaid);
     socket.on('dispute.opened', onDisputeOpened);
     socket.on('dispute.resolved', onDisputeResolved);
+    socket.on('notification', onNotification);
     return () => {
       socket.off('task.updated', onTask);
       socket.off('proof.updated', refreshProofs);
       socket.off('job.paid', onPaid);
       socket.off('dispute.opened', onDisputeOpened);
       socket.off('dispute.resolved', onDisputeResolved);
+      socket.off('notification', onNotification);
       socket.disconnect();
     };
   }, [token, qc]);

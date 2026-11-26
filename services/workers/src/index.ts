@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { Worker } from 'bullmq';
 import { Emitter } from '@socket.io/redis-emitter';
 import { Redis } from 'ioredis';
-import { PrismaClient } from '@clevercon/db';
+import { PrismaClient, recordNotification } from '@clevercon/db';
 import {
   TASK_QUEUE,
   PROOF_QUEUE,
@@ -69,6 +69,20 @@ function main(): void {
             status: result.status,
             stepsRun: result.stepsRun,
           });
+          // In-app feed entry (the socket already nudged the bell via task.updated).
+          await recordNotification(prisma, {
+            userId: result.buyerId,
+            type: `task.${result.status}`,
+            title: result.status === 'completed' ? 'Your hire is complete' : 'Your hire failed',
+            body:
+              result.status === 'completed'
+                ? 'The delivery is ready. Review it and leave a rating.'
+                : 'The job could not be completed; any locked funds are released.',
+            data: { taskId: job.data.taskId },
+          });
+          emitter
+            .to(`user:${result.buyerId}`)
+            .emit('notification', { type: `task.${result.status}` });
         }
       }
       return result;
@@ -132,6 +146,14 @@ function main(): void {
         };
         emitter.to(`user:${result.providerId}`).emit('job.paid', paid);
         await deliverWebhooks(prisma, result.providerId, 'job.paid', paid);
+        await recordNotification(prisma, {
+          userId: result.providerId,
+          type: 'job.paid',
+          title: `You got paid $${(result.amountUsdc ?? 0).toFixed(2)}`,
+          body: result.serviceName ? `For ${result.serviceName}.` : 'A hire you delivered settled.',
+          data: { taskId: result.taskId ?? undefined, amount: result.amountUsdc },
+        });
+        emitter.to(`user:${result.providerId}`).emit('notification', { type: 'job.paid' });
       }
       // A transient failure (RPC blip, timeout, sequence contention) should retry
       // with backoff: throw so BullMQ re-runs the job (settleStep is idempotent,

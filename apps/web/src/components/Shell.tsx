@@ -22,6 +22,7 @@ import { useSession, type Role } from '../store/session';
 import { useWalletAuth } from '../auth/useWalletAuth';
 import { DemoBanner } from './DemoBanner';
 import { Toaster } from './Toaster';
+import { NotificationBell } from './NotificationBell';
 import { config } from '../config';
 
 type Icon = ComponentType<{ size?: number; className?: string }>;
@@ -285,14 +286,17 @@ export function Shell({ children }: { children: ReactNode }) {
           className={`mb-6 flex items-center ${collapsed ? 'flex-col gap-3' : 'justify-between'}`}
         >
           <Brand collapsed={collapsed} />
-          <button
-            onClick={toggleCollapsed}
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            className="flex items-center justify-center rounded-lg border border-line-strong bg-white/[0.05] p-1.5 text-slate-300 transition-colors hover:border-violet-500/40 hover:bg-violet-500/[0.12] hover:text-white"
-          >
-            {collapsed ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
-          </button>
+          <div className={`flex items-center gap-2 ${collapsed ? 'flex-col' : ''}`}>
+            <NotificationBell />
+            <button
+              onClick={toggleCollapsed}
+              title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              className="flex items-center justify-center rounded-lg border border-line-strong bg-white/[0.05] p-1.5 text-slate-300 transition-colors hover:border-violet-500/40 hover:bg-violet-500/[0.12] hover:text-white"
+            >
+              {collapsed ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
+            </button>
+          </div>
         </div>
         <NavRail collapsed={collapsed} />
       </aside>
@@ -301,6 +305,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <header className="sticky top-0 z-40 flex items-center justify-between border-b border-line bg-black/50 px-4 py-3 backdrop-blur-xl lg:hidden">
         <Brand />
         <div className="flex items-center gap-3">
+          <NotificationBell />
           <WalletButton />
           <button
             onClick={() => setMobileOpen((o) => !o)}

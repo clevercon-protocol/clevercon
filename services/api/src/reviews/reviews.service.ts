@@ -9,6 +9,7 @@ import { PaymentStatus, TaskStatus } from '@clevercon/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { EventsGateway } from '../events/events.gateway.js';
 import { WebhooksService } from '../webhooks/webhooks.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 
 /**
  * Buyer reviews of a service, tied to a SETTLED hire (P3). Sybil-resistant: a review
@@ -23,6 +24,7 @@ export class ReviewsService {
     private readonly prisma: PrismaService,
     @Optional() private readonly events?: EventsGateway,
     @Optional() private readonly webhooks?: WebhooksService,
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   /** Recompute a service's avg rating + count from its non-flagged reviews. */
@@ -119,11 +121,20 @@ export class ReviewsService {
       include: { author: { select: { displayName: true, handle: true } } },
     });
     await this.recomputeReputation(serviceId);
-    await this.notify(await this.providerIdsForService(serviceId), 'review.received', {
+    const providerIds = await this.providerIdsForService(serviceId);
+    await this.notify(providerIds, 'review.received', {
       reviewId: review.id,
       serviceId,
       taskId,
       rating,
+    });
+    await this.notifications?.createMany(providerIds, {
+      type: 'review.received',
+      title: `New ${rating}-star review`,
+      body: params.text?.trim()
+        ? params.text.trim().slice(0, 140)
+        : 'A buyer reviewed your service.',
+      data: { serviceId, reviewId: review.id, taskId },
     });
     return serialize(review, true);
   }
@@ -178,6 +189,13 @@ export class ReviewsService {
     await this.notify([review.authorId], 'review.responded', {
       reviewId: id,
       serviceId: review.serviceId,
+    });
+    await this.notifications?.create({
+      userId: review.authorId,
+      type: 'review.responded',
+      title: 'The provider responded to your review',
+      body: response.trim().slice(0, 140),
+      data: { serviceId: review.serviceId, reviewId: id },
     });
     return serialize(updated, false);
   }

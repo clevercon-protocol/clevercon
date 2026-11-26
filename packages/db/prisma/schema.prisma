@@ -44,6 +44,13 @@ model User {
   orgsCreated    Organization[]       @relation("OrgCreator")
   orgMemberships OrganizationMember[] @relation("OrgMemberships")
   reviews        Review[]             @relation("AuthoredReviews")
+  notifications  Notification[]
+
+  // Optional email for transactional notifications (Resend). The app is wallet-first,
+  // so this is opt-in; no email = in-app notifications only. Verified before use.
+  email           String?
+  emailVerified   Boolean   @default(false)
+  emailVerifiedAt DateTime?
 
   @@map("users")
 }
@@ -359,6 +366,38 @@ model Review {
   @@index([serviceId])
   @@index([authorId])
   @@map("reviews")
+}
+
+// An in-app notification in a user's feed (P4). Created by the API (reviews, disputes)
+// and the worker (job delivered/paid/failed) via the shared recordNotification helper,
+// and surfaced in the bell. `data` carries deep-link ids { taskId?, serviceId?, ... }.
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String // event key, e.g. job.paid | dispute.opened | review.received
+  title     String
+  body      String?
+  data      Json?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+// A user's per-event delivery preference (P4). Absent = the event's defaults apply
+// (in-app on; email on only for high-signal events when an email is verified).
+model NotificationPreference {
+  userId String
+  type   String // event key, or '*' for the global default
+  inApp  Boolean @default(true)
+  email  Boolean @default(false)
+
+  @@id([userId, type])
+  @@map("notification_preferences")
 }
 
 // A provider's optional slashable stake (phased, P3). Unused until bonds ship;

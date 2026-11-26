@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { VaultContractService } from '../vault/vault-contract.service.js';
 import { EventsGateway } from '../events/events.gateway.js';
 import { WebhooksService, type WebhookEvent } from '../webhooks/webhooks.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 
 /**
  * Buyer-facing disputes. Opening a dispute records it and returns the unsigned
@@ -26,6 +27,7 @@ export class DisputesService {
     private readonly contract: VaultContractService,
     @Optional() private readonly events?: EventsGateway,
     @Optional() private readonly webhooks?: WebhooksService,
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   /** The distinct provider (service owner) ids on a task's steps. */
@@ -80,6 +82,14 @@ export class DisputesService {
       disputeId: dispute.id,
       taskId,
       reason: reason ?? null,
+    });
+    await this.notifications?.createMany(providerIds, {
+      type: 'dispute.opened',
+      title: 'A hire you fulfilled was disputed',
+      body: reason
+        ? reason.slice(0, 140)
+        : 'The buyer opened a dispute; funds are frozen pending resolution.',
+      data: { disputeId: dispute.id, taskId },
     });
     // The buyer signs this and submits it (POST /vault/submit) to freeze the task.
     const xdr = await this.contract.buildRaiseDisputeXdr(wallet.address, BigInt(task.vaultTaskId));
@@ -203,6 +213,12 @@ export class DisputesService {
       refundToUser: params.refundToUser,
       payoutToProvider: params.payoutToProvider,
       txHash,
+    });
+    await this.notifications?.createMany([d.task.buyerId, ...providerIds], {
+      type: 'dispute.resolved',
+      title: 'A dispute was resolved',
+      body: `Refund $${params.refundToUser.toFixed(2)} to buyer, $${params.payoutToProvider.toFixed(2)} to provider.`,
+      data: { disputeId: id, taskId: d.taskId },
     });
     return { ok: true, txHash };
   }
