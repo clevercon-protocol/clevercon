@@ -47,10 +47,13 @@ model User {
   notifications  Notification[]
 
   // Optional email for transactional notifications (Resend). The app is wallet-first,
-  // so this is opt-in; no email = in-app notifications only. Verified before use.
-  email           String?
-  emailVerified   Boolean   @default(false)
-  emailVerifiedAt DateTime?
+  // so this is opt-in; no email = in-app notifications only. Verified (via a short code)
+  // before any email is sent, so a typo'd or unowned address never receives mail.
+  email              String?
+  emailVerified      Boolean   @default(false)
+  emailVerifiedAt    DateTime?
+  emailVerifyCode    String? // hashed 6-digit code sent to a pending email
+  emailVerifyExpires DateTime?
 
   @@map("users")
 }

@@ -101,6 +101,11 @@ export const envSchema = z.object({
   // Where to send the user back after connecting (the dapp). Falls back to the first
   // CORS origin, then clevercon.xyz.
   APP_PUBLIC_URL: z.string().url().optional(),
+  // Resend transactional email (P4). All optional: email notifications are simply
+  // disabled (in-app only) until RESEND_API_KEY is set. RESEND_FROM must be a verified
+  // Resend sender/domain. The app never blocks on email; sends are best-effort.
+  RESEND_API_KEY: z.string().optional(),
+  RESEND_FROM: z.string().default('CleverCon <notifications@clevercon.xyz>'),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

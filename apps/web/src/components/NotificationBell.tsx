@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, CheckCheck } from 'lucide-react';
+import { Bell, CheckCheck, Settings } from 'lucide-react';
 import {
   getNotifications,
   getUnreadCount,
@@ -10,6 +10,7 @@ import {
   notificationHref,
   type Notification,
 } from '../lib/notifications';
+import { NotificationSettings } from './NotificationSettings';
 import { useSession } from '../store/session';
 
 function timeAgo(iso: string): string {
@@ -53,6 +54,7 @@ function Row({ n, onOpen }: { n: Notification; onOpen: (n: Notification) => void
 export function NotificationBell() {
   const session = useSession((s) => s.session);
   const [open, setOpen] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const qc = useQueryClient();
   const { data: unread = 0 } = useQuery({
     queryKey: ['notifications-unread'],
@@ -99,26 +101,45 @@ export function NotificationBell() {
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
           <div className="absolute left-0 top-11 z-50 w-80 max-w-[90vw] rounded-2xl border border-line bg-[#0c0e16] p-2 shadow-2xl shadow-black/50">
             <div className="flex items-center justify-between px-2 py-1.5">
-              <span className="text-sm font-semibold text-slate-200">Notifications</span>
-              {unread > 0 && (
+              <span className="text-sm font-semibold text-slate-200">
+                {showSettings ? 'Notification settings' : 'Notifications'}
+              </span>
+              <div className="flex items-center gap-2">
+                {!showSettings && unread > 0 && (
+                  <button
+                    onClick={() => readAll.mutate()}
+                    disabled={readAll.isPending}
+                    className="inline-flex items-center gap-1 text-[11px] text-violet-300 hover:text-violet-200 disabled:opacity-50"
+                  >
+                    <CheckCheck size={12} /> Mark all read
+                  </button>
+                )}
                 <button
-                  onClick={() => readAll.mutate()}
-                  disabled={readAll.isPending}
-                  className="inline-flex items-center gap-1 text-[11px] text-violet-300 hover:text-violet-200 disabled:opacity-50"
+                  onClick={() => setShowSettings((s) => !s)}
+                  aria-label={showSettings ? 'Back to notifications' : 'Notification settings'}
+                  className={`rounded-md p-1 transition-colors hover:bg-white/[0.06] ${
+                    showSettings ? 'text-violet-300' : 'text-slate-500 hover:text-slate-300'
+                  }`}
                 >
-                  <CheckCheck size={12} /> Mark all read
+                  <Settings size={13} />
                 </button>
-              )}
+              </div>
             </div>
-            <div className="max-h-96 space-y-0.5 overflow-y-auto">
-              {(data?.items ?? []).length === 0 ? (
-                <p className="px-2.5 py-6 text-center text-xs text-slate-500">
-                  Nothing yet. Updates on your hires, payouts, disputes, and reviews show here.
-                </p>
-              ) : (
-                data?.items.map((n) => <Row key={n.id} n={n} onOpen={onOpen} />)
-              )}
-            </div>
+            {showSettings ? (
+              <div className="max-h-96 overflow-y-auto">
+                <NotificationSettings />
+              </div>
+            ) : (
+              <div className="max-h-96 space-y-0.5 overflow-y-auto">
+                {(data?.items ?? []).length === 0 ? (
+                  <p className="px-2.5 py-6 text-center text-xs text-slate-500">
+                    Nothing yet. Updates on your hires, payouts, disputes, and reviews show here.
+                  </p>
+                ) : (
+                  data?.items.map((n) => <Row key={n.id} n={n} onOpen={onOpen} />)
+                )}
+              </div>
+            )}
           </div>
         </>
       )}
